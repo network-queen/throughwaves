@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Host, Stream, StreamConfig};
 use crossbeam_channel::Receiver;
@@ -45,27 +47,33 @@ impl AudioBackend {
     }
 
     pub fn start(&mut self, audio_rx: Receiver<Vec<f32>>) -> Result<(), String> {
-        // Pre-allocate a ring buffer large enough for smooth playback
-        let mut buffer: Vec<f32> = Vec::with_capacity(65536);
+        // Use a VecDeque as a ring buffer — bounded to ~0.5s of audio
+        // to prevent unbounded growth.
+        let max_buffer = self.config.sample_rate.0 as usize * self.config.channels as usize / 2;
+        let mut buffer: VecDeque<f32> = VecDeque::with_capacity(max_buffer);
 
         let stream = self
             .device
             .build_output_stream(
                 &self.config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    // Drain all available blocks into our local buffer
-                    while let Ok(chunk) = audio_rx.try_recv() {
-                        buffer.extend_from_slice(&chunk);
+                    // Only receive enough blocks to fill the hardware buffer.
+                    // Don't drain the entire channel — that would let the engine
+                    // race ahead and desync position from actual playback.
+                    while buffer.len() < data.len() {
+                        match audio_rx.try_recv() {
+                            Ok(chunk) => {
+                                for &s in &chunk {
+                                    buffer.push_back(s);
+                                }
+                            }
+                            Err(_) => break, // no more data available
+                        }
                     }
 
-                    let to_copy = data.len().min(buffer.len());
-                    if to_copy > 0 {
-                        data[..to_copy].copy_from_slice(&buffer[..to_copy]);
-                        buffer.drain(..to_copy);
-                    }
-                    // Fill remaining with silence (buffer underrun)
-                    for sample in data[to_copy..].iter_mut() {
-                        *sample = 0.0;
+                    // Copy to hardware output
+                    for sample in data.iter_mut() {
+                        *sample = buffer.pop_front().unwrap_or(0.0);
                     }
                 },
                 |err| {

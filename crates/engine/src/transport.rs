@@ -23,7 +23,6 @@ pub enum EngineCommand {
 pub struct EngineHandle {
     cmd_tx: Sender<EngineCommand>,
     pub state: Arc<RwLock<EngineState>>,
-    // CRITICAL: keep the backend alive so the audio output stream isn't dropped
     _backend: AudioBackend,
 }
 
@@ -40,7 +39,10 @@ impl EngineHandle {
         let channels = backend.channels();
 
         let (cmd_tx, cmd_rx) = bounded::<EngineCommand>(256);
-        let (audio_tx, audio_rx) = bounded::<Vec<f32>>(128);
+        // Small channel buffer (4 blocks) — backpressure paces engine to real-time.
+        // The audio callback consumes one block at a time, so the engine can only
+        // get ~4 blocks ahead of actual playback.
+        let (audio_tx, audio_rx) = bounded::<Vec<f32>>(4);
 
         backend.start(audio_rx)?;
 
@@ -119,6 +121,7 @@ fn engine_loop(
         }
 
         if transport == TransportState::Playing {
+            // Render a block at current position
             let mut block = mixer.render_block(&project, position, block_size, &audio_buffers);
 
             metronome.render(
@@ -131,13 +134,21 @@ fn engine_loop(
                 project.time_signature.numerator,
             );
 
-            position += block_size as u64;
-
-            // Blocking send with timeout — backpressure naturally paces to real-time.
-            match audio_tx.send_timeout(block, Duration::from_millis(100)) {
-                Ok(()) => {}
+            // BLOCKING send — this is what paces the engine to real-time.
+            // The channel has only 4 slots. The audio callback consumes one
+            // block each time the hardware needs more samples (~5ms at 48kHz).
+            // When the channel is full, we block here until the callback
+            // consumes a block, naturally syncing to the audio clock.
+            //
+            // Only advance position on SUCCESSFUL send — if we can't deliver
+            // the audio, we shouldn't pretend time has passed.
+            match audio_tx.send(block) {
+                Ok(()) => {
+                    position += block_size as u64;
+                }
                 Err(_) => {
-                    thread::sleep(Duration::from_millis(1));
+                    // Channel disconnected — audio backend is gone
+                    break;
                 }
             }
         } else {
