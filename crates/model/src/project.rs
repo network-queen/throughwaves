@@ -40,6 +40,7 @@ impl Project {
             color: random_track_color(),
             effects: Vec::new(),
             lanes_expanded: false,
+            custom_height: 0.0,
             automation: Vec::new(),
         });
         id
@@ -63,6 +64,9 @@ pub struct Track {
     /// Whether take lanes are expanded (showing all takes) or collapsed (showing only active)
     #[serde(default)]
     pub lanes_expanded: bool,
+    /// Custom track height set by user dragging the bottom edge (0.0 = auto)
+    #[serde(default)]
+    pub custom_height: f32,
     /// Automation lanes for this track
     #[serde(default)]
     pub automation: Vec<AutomationLane>,

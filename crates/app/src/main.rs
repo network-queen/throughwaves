@@ -67,6 +67,7 @@ pub struct DawApp {
     pub show_piano_roll: bool,
     pub show_about: bool,
     input_monitor: InputMonitor,
+    pub resizing_track: Option<usize>,
 }
 
 pub struct ClipDragState {
@@ -134,6 +135,7 @@ impl DawApp {
             show_piano_roll: false,
             show_about: false,
             input_monitor: InputMonitor::new(),
+            resizing_track: None,
         }
     }
 

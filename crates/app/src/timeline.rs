@@ -3,14 +3,21 @@ use jamhub_model::{ClipSource, TrackKind};
 
 use crate::DawApp;
 
+const MIN_TRACK_HEIGHT: f32 = 40.0;
 const BASE_LANE_HEIGHT: f32 = 60.0;
 const TAKE_LANE_HEIGHT: f32 = 40.0;
 const HEADER_WIDTH: f32 = 180.0;
 const RULER_HEIGHT: f32 = 24.0;
 const PIXELS_PER_SECOND_BASE: f32 = 100.0;
+const RESIZE_HANDLE_PX: f32 = 5.0;
 
-/// Compute the height of a track based on how many take lanes it needs.
+/// Compute the height of a track.
+/// If user has dragged a custom height, use that.
+/// Otherwise auto-compute from take lanes.
 fn track_height(track: &jamhub_model::Track) -> f32 {
+    if track.custom_height > 0.0 {
+        return track.custom_height.max(MIN_TRACK_HEIGHT);
+    }
     if !track.lanes_expanded {
         return BASE_LANE_HEIGHT;
     }
@@ -19,14 +26,8 @@ fn track_height(track: &jamhub_model::Track) -> f32 {
     if max_lane == 0 {
         BASE_LANE_HEIGHT
     } else {
-        // Each lane gets TAKE_LANE_HEIGHT, minimum BASE_LANE_HEIGHT
         ((max_lane + 1) as f32 * TAKE_LANE_HEIGHT).max(BASE_LANE_HEIGHT)
     }
-}
-
-fn has_multiple_lanes(track: &jamhub_model::Track) -> bool {
-    let lanes = compute_take_lanes(track);
-    lanes.iter().map(|&(_, l)| l).max().unwrap_or(0) > 0
 }
 
 /// Compute the Y offset of each track (cumulative heights).
@@ -213,9 +214,48 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         });
                     });
 
-                    // Separator between tracks
-                    let sep_rect = ui.allocate_space(egui::vec2(HEADER_WIDTH, 1.0));
-                    ui.painter().rect_filled(sep_rect.1, 0.0, egui::Color32::from_rgb(55, 55, 60));
+                    // Drag handle at bottom edge for resizing (Reaper-style)
+                    let (handle_id, handle_rect) = ui.allocate_space(egui::vec2(HEADER_WIDTH, RESIZE_HANDLE_PX));
+                    let handle_response = ui.interact(
+                        handle_rect,
+                        ui.id().with("resize").with(i),
+                        egui::Sense::drag(),
+                    );
+
+                    // Visual: thin line, highlighted on hover
+                    let handle_color = if handle_response.hovered() || handle_response.dragged() {
+                        egui::Color32::from_rgb(100, 180, 255)
+                    } else {
+                        egui::Color32::from_rgb(55, 55, 60)
+                    };
+                    ui.painter().rect_filled(handle_rect, 0.0, handle_color);
+
+                    // Change cursor on hover
+                    if handle_response.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                    }
+
+                    // Drag to resize
+                    if handle_response.dragged() {
+                        let delta = handle_response.drag_delta().y;
+                        let current = track_height(&app.project.tracks[i]);
+                        let new_h = (current + delta).max(MIN_TRACK_HEIGHT).min(400.0);
+                        track_actions.push(TrackAction::SetHeight(i, new_h));
+
+                        // Auto-expand lanes when dragging larger
+                        if new_h > BASE_LANE_HEIGHT && !app.project.tracks[i].lanes_expanded {
+                            track_actions.push(TrackAction::ToggleLanes(i));
+                        }
+                        // Auto-collapse when dragging smaller
+                        if new_h <= MIN_TRACK_HEIGHT + 5.0 && app.project.tracks[i].lanes_expanded {
+                            track_actions.push(TrackAction::ToggleLanes(i));
+                        }
+                    }
+
+                    // Double-click handle to reset to auto height
+                    if handle_response.double_clicked() {
+                        track_actions.push(TrackAction::SetHeight(i, 0.0)); // 0 = auto
+                    }
                 });
             }
 
@@ -277,6 +317,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     TrackAction::ToggleLanes(i) => {
                         app.project.tracks[i].lanes_expanded =
                             !app.project.tracks[i].lanes_expanded;
+                        // Reset custom height when toggling so auto-height takes over
+                        app.project.tracks[i].custom_height = 0.0;
+                    }
+                    TrackAction::SetHeight(i, h) => {
+                        app.project.tracks[i].custom_height = h;
                     }
                 }
             }
@@ -923,4 +968,5 @@ enum TrackAction {
     StartRename(usize),
     FinishRename(usize, String),
     ToggleLanes(usize),
+    SetHeight(usize, f32),
 }
