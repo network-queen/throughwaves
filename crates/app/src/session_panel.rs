@@ -71,8 +71,11 @@ impl SessionPanel {
                         .push(("System".into(), format!("{} joined", peer.name)));
                 }
                 SessionMessage::PeerLeft { peer_id } => {
+                    let name = self.client.as_ref()
+                        .and_then(|c| c.state.read().peers.iter().find(|p| p.id == *peer_id).map(|p| p.name.clone()))
+                        .unwrap_or_else(|| format!("{}", &peer_id.to_string()[..8]));
                     self.chat_messages
-                        .push(("System".into(), format!("Peer left")));
+                        .push(("System".into(), format!("{name} left the session")));
                 }
                 _ => {}
             }

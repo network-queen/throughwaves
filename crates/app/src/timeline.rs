@@ -172,7 +172,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 ui.label(num_text);
 
                                 // Color dot — click to cycle through colors
-                                let (dot_id, dot_rect) = ui.allocate_space(egui::vec2(10.0, 10.0));
+                                let (_dot_id, dot_rect) = ui.allocate_space(egui::vec2(10.0, 10.0));
                                 let dot_response = ui.interact(dot_rect, ui.id().with("cdot").with(i), egui::Sense::click());
                                 ui.painter().circle_filled(dot_rect.center(), 5.0, color);
                                 if dot_response.hovered() {

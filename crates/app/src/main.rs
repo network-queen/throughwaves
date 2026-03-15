@@ -862,7 +862,6 @@ impl DawApp {
         let pos = self.position_samples();
 
         for (clip, buf) in &self.clipboard_clips {
-            let new_id = Uuid::new_v4();
             let mut new_clip = clip.clone();
             new_clip.id = Uuid::new_v4();
             new_clip.start_sample = pos;
@@ -1059,7 +1058,7 @@ impl eframe::App for DawApp {
         }
 
         // Keyboard shortcuts — skip when a text field has focus
-        let text_has_focus = ctx.memory(|m| m.focused().is_some())
+        let _text_has_focus = ctx.memory(|m| m.focused().is_some())
             && ctx.input(|i| !i.raw.events.is_empty());
         // More reliable: check if any text edit is active
         let any_text_edit = self.renaming_track.is_some()

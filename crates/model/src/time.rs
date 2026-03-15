@@ -124,7 +124,7 @@ impl TempoMap {
         }
 
         let mut remaining_beats = beat;
-        let mut sample_pos = 0u64;
+        let _sample_pos = 0u64;
         let mut prev_sample = 0u64;
         let mut current_bpm = default_bpm;
 
