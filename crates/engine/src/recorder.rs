@@ -103,6 +103,18 @@ impl Recorder {
     pub fn is_recording(&self) -> bool {
         self.is_recording
     }
+
+    /// Get a snapshot of the current recording buffer for live waveform display.
+    /// Returns (samples_clone, sample_rate). Cheap if buffer is small.
+    pub fn peek_buffer(&self) -> (Vec<f32>, u32) {
+        let buf = self.recording_buffer.lock();
+        (buf.clone(), self.input_sample_rate)
+    }
+
+    /// Get current recorded sample count without cloning.
+    pub fn current_sample_count(&self) -> usize {
+        self.recording_buffer.lock().len()
+    }
 }
 
 /// Simple linear resampling from one rate to another.

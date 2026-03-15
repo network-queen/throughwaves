@@ -81,6 +81,9 @@ pub struct DawApp {
     pub automation_param: jamhub_model::AutomationParam,
     // Clip trim state
     pub trimming_clip: Option<ClipTrimState>,
+    // Live recording waveform
+    live_rec_buffer_id: Option<uuid::Uuid>,
+    live_rec_last_update: std::time::Instant,
 }
 
 pub struct ClipTrimState {
@@ -179,7 +182,7 @@ impl DawApp {
             project_path: None,
             session: SessionPanel::default(),
             metronome_enabled: false,
-            snap_mode: SnapMode::Beat,
+            snap_mode: SnapMode::Off,
             dragging_clip: None,
             show_effects: false,
             loop_enabled: false,
@@ -199,6 +202,8 @@ impl DawApp {
             show_automation: false,
             automation_param: jamhub_model::AutomationParam::Volume,
             trimming_clip: None,
+            live_rec_buffer_id: None,
+            live_rec_last_update: std::time::Instant::now(),
         }
     }
 
@@ -317,8 +322,23 @@ impl DawApp {
             // 2. Stop the engine AFTER getting recording data
             self.send_command(EngineCommand::Stop);
 
-            // Unmute the track we muted during recording, disarm it
+            // 3. Remove the live recording placeholder clip
             let track_idx = self.selected_track.unwrap_or(0);
+            if let Some(live_id) = self.live_rec_buffer_id.take() {
+                if track_idx < self.project.tracks.len() {
+                    self.project.tracks[track_idx]
+                        .clips
+                        .retain(|c| {
+                            if let ClipSource::AudioBuffer { buffer_id } = &c.source {
+                                *buffer_id != live_id
+                            } else {
+                                true
+                            }
+                        });
+                }
+            }
+
+            // Unmute the track we muted during recording, disarm it
             if track_idx < self.project.tracks.len() {
                 self.project.tracks[track_idx].muted = false;
                 self.project.tracks[track_idx].armed = false;
@@ -444,7 +464,21 @@ impl DawApp {
                 Ok(()) => {
                     self.is_recording = true;
                     self.send_command(EngineCommand::Play);
-                    self.set_status("Recording... (track muted for monitoring)");
+
+                    // Create a live placeholder clip for waveform display
+                    let live_id = Uuid::new_v4();
+                    self.live_rec_buffer_id = Some(live_id);
+                    let live_clip = Clip {
+                        id: Uuid::new_v4(),
+                        name: "Recording...".into(),
+                        start_sample: self.recording_start_pos,
+                        duration_samples: 1, // will grow
+                        source: ClipSource::AudioBuffer { buffer_id: live_id },
+                        muted: false,
+                    };
+                    self.project.tracks[track_idx].clips.push(live_clip);
+
+                    self.set_status("Recording...");
                 }
                 Err(e) => {
                     // Undo mute on failure
@@ -738,6 +772,38 @@ impl eframe::App for DawApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.transport_state() == TransportState::Playing || self.is_recording {
             ctx.request_repaint();
+        }
+
+        // Live waveform update during recording (every 100ms)
+        if self.is_recording && self.live_rec_last_update.elapsed().as_millis() > 100 {
+            self.live_rec_last_update = std::time::Instant::now();
+            if let Some(live_id) = self.live_rec_buffer_id {
+                let (samples, rec_sr) = self.recorder.peek_buffer();
+                if !samples.is_empty() {
+                    // Resample if needed
+                    let engine_sr = self.sample_rate();
+                    let display_samples = if rec_sr != engine_sr {
+                        jamhub_engine::resample(&samples, rec_sr, engine_sr)
+                    } else {
+                        samples
+                    };
+
+                    let duration = display_samples.len() as u64;
+                    self.waveform_cache.insert(live_id, &display_samples);
+
+                    // Update the live clip's duration
+                    let track_idx = self.selected_track.unwrap_or(0);
+                    if track_idx < self.project.tracks.len() {
+                        for clip in &mut self.project.tracks[track_idx].clips {
+                            if let ClipSource::AudioBuffer { buffer_id } = &clip.source {
+                                if *buffer_id == live_id {
+                                    clip.duration_samples = duration;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Handle dropped files
