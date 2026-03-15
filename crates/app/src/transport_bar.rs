@@ -14,19 +14,19 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         // === TRANSPORT CONTROLS (grouped) ===
         ui.visuals_mut().widgets.inactive.bg_fill = egui::Color32::from_rgb(50, 50, 58);
 
-        if ui.add_sized(btn_size, egui::Button::new("⏮")).on_hover_text("Rewind [Home]").clicked() {
+        if ui.add_sized(btn_size, egui::Button::new("⏮")).on_hover_text("Rewind to start of project [Home]").clicked() {
             app.send_command(EngineCommand::SetPosition(0));
         }
 
         let stop_bg = if state == TransportState::Stopped { egui::Color32::from_rgb(70, 70, 80) } else { egui::Color32::from_rgb(50, 50, 58) };
         if ui.add_sized(btn_size, egui::Button::new(egui::RichText::new("⏹").color(egui::Color32::WHITE)).fill(stop_bg))
-            .on_hover_text("Stop").clicked() {
+            .on_hover_text("Stop playback and stay at current position").clicked() {
             app.send_command(EngineCommand::Stop);
         }
 
         let play_bg = if state == TransportState::Playing { egui::Color32::from_rgb(30, 120, 30) } else { egui::Color32::from_rgb(50, 50, 58) };
         if ui.add_sized(btn_size, egui::Button::new(egui::RichText::new("▶").color(egui::Color32::WHITE)).fill(play_bg))
-            .on_hover_text("Play [Space]").clicked() {
+            .on_hover_text("Start playback from current position [Space]").clicked() {
             app.send_command(EngineCommand::Play);
         }
 
@@ -34,7 +34,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         if ui.add_sized(btn_size, egui::Button::new(egui::RichText::new("⏺").color(
             if app.is_recording { egui::Color32::WHITE } else { egui::Color32::from_rgb(200, 80, 80) }
         )).fill(rec_bg))
-            .on_hover_text("Record [R]").clicked() {
+            .on_hover_text("Record audio from microphone onto selected track [R]\nTrack is muted during recording to avoid feedback").clicked() {
             app.toggle_recording();
         }
 
@@ -45,14 +45,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         let met_bg = if app.metronome_enabled { egui::Color32::from_rgb(140, 120, 20) } else { egui::Color32::from_rgb(45, 45, 50) };
         if ui.add_sized(toggle_size, egui::Button::new(egui::RichText::new("M").small().color(egui::Color32::WHITE)).fill(met_bg))
-            .on_hover_text("Metronome [M]").clicked() {
+            .on_hover_text("Metronome — click track for keeping time [M]\nAccent on beat 1, lighter on other beats").clicked() {
             app.metronome_enabled = !app.metronome_enabled;
             app.send_command(EngineCommand::SetMetronome(app.metronome_enabled));
         }
 
         let loop_bg = if app.loop_enabled { egui::Color32::from_rgb(40, 70, 150) } else { egui::Color32::from_rgb(45, 45, 50) };
         if ui.add_sized(toggle_size, egui::Button::new(egui::RichText::new("L").small().color(egui::Color32::WHITE)).fill(loop_bg))
-            .on_hover_text("Loop [L]").clicked() {
+            .on_hover_text("Loop mode — repeat playback between loop markers [L]\nBlue region shown on timeline").clicked() {
             app.loop_enabled = !app.loop_enabled;
             if app.loop_enabled && app.loop_end == 0 {
                 let sr = app.sample_rate() as f64;
@@ -67,7 +67,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         let mon_bg = if app.input_monitor.is_enabled() { egui::Color32::from_rgb(150, 90, 20) } else { egui::Color32::from_rgb(45, 45, 50) };
         if ui.add_sized(toggle_size, egui::Button::new(egui::RichText::new("I").small().color(egui::Color32::WHITE)).fill(mon_bg))
-            .on_hover_text("Input Monitor [I]").clicked() {
+            .on_hover_text("Input monitoring — hear your microphone in real-time [I]\nUseful for monitoring while recording").clicked() {
             app.toggle_input_monitor();
         }
 
@@ -107,7 +107,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             egui::Color32::from_rgb(45, 45, 50)
         };
         if ui.add(egui::Button::new(egui::RichText::new(&snap_label).small().color(egui::Color32::WHITE)).fill(snap_bg))
-            .on_hover_text("Click to cycle snap mode [G]").clicked() {
+            .on_hover_text("Snap mode — controls positioning precision [G]\nFree: sample-accurate\n1/2 Beat: eighth notes\nBeat: quarter notes\nBar: bar boundaries").clicked() {
             app.snap_mode = app.snap_mode.next();
         }
 

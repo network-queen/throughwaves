@@ -186,15 +186,30 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                                 let m_bg = if track.muted { egui::Color32::from_rgb(180, 140, 20) } else { egui::Color32::from_rgb(50, 50, 55) };
                                 if ui.add_sized(btn, egui::Button::new(egui::RichText::new("M").small().color(egui::Color32::WHITE)).fill(m_bg))
-                                    .on_hover_text("Mute").clicked() { track_actions.push(TrackAction::ToggleMute(i)); }
+                                    .on_hover_text("Mute — silence this track during playback").clicked() { track_actions.push(TrackAction::ToggleMute(i)); }
 
                                 let s_bg = if track.solo { egui::Color32::from_rgb(30, 130, 30) } else { egui::Color32::from_rgb(50, 50, 55) };
                                 if ui.add_sized(btn, egui::Button::new(egui::RichText::new("S").small().color(egui::Color32::WHITE)).fill(s_bg))
-                                    .on_hover_text("Solo").clicked() { track_actions.push(TrackAction::ToggleSolo(i)); }
+                                    .on_hover_text("Solo — play only this track, mute all others").clicked() { track_actions.push(TrackAction::ToggleSolo(i)); }
 
                                 let r_bg = if track.armed { egui::Color32::from_rgb(160, 30, 30) } else { egui::Color32::from_rgb(50, 50, 55) };
                                 if ui.add_sized(btn, egui::Button::new(egui::RichText::new("R").small().color(egui::Color32::WHITE)).fill(r_bg))
-                                    .on_hover_text("Arm for recording").clicked() { track_actions.push(TrackAction::ToggleArm(i)); }
+                                    .on_hover_text("Arm track for recording — when armed, pressing Record will capture audio on this track").clicked() { track_actions.push(TrackAction::ToggleArm(i)); }
+
+                                // FX button — shows count, click to open effects panel
+                                let fx_count = track.effects.len();
+                                let fx_bg = if fx_count > 0 { egui::Color32::from_rgb(80, 50, 120) } else { egui::Color32::from_rgb(50, 50, 55) };
+                                let fx_label = if fx_count > 0 { format!("FX{fx_count}") } else { "FX".into() };
+                                if ui.add_sized(egui::vec2(28.0, 16.0), egui::Button::new(egui::RichText::new(fx_label).small().color(egui::Color32::WHITE)).fill(fx_bg))
+                                    .on_hover_text(if fx_count > 0 {
+                                        format!("{fx_count} effect(s) on this track — click to open Effects panel (Cmd+E)")
+                                    } else {
+                                        "No effects — click to open Effects panel and add effects (Cmd+E)".into()
+                                    })
+                                    .clicked() {
+                                    track_actions.push(TrackAction::Select(i));
+                                    track_actions.push(TrackAction::OpenFx);
+                                }
 
                                 // Takes indicator (click to toggle, or double-click header)
                                 if num_lanes > 1 {
@@ -282,6 +297,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             app.sync_project();
                         }
                         app.renaming_track = None;
+                    }
+                    TrackAction::OpenFx => {
+                        app.show_effects = true;
                     }
                     TrackAction::ToggleLanes(i) => {
                         app.project.tracks[i].lanes_expanded =
@@ -987,4 +1005,5 @@ enum TrackAction {
     StartRename(usize),
     FinishRename(usize, String),
     ToggleLanes(usize),
+    OpenFx,
 }
