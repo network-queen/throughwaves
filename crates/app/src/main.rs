@@ -526,8 +526,7 @@ impl DawApp {
 
         self.push_undo("Split clips");
 
-        // Process in reverse order so indices stay valid
-        let mut new_clips: Vec<Clip> = Vec::new();
+        // Process in reverse order so indices stay valid when inserting
 
         for &ci in to_split.iter().rev() {
             let clip_start = self.project.tracks[track_idx].clips[ci].start_sample;
@@ -572,12 +571,12 @@ impl DawApp {
             }
 
             self.project.tracks[track_idx].clips[ci].duration_samples = split_offset;
-            new_clips.push(right_clip);
-        }
 
-        // Add all right halves — preserve everything, change nothing about selection
-        for clip in new_clips {
-            self.project.tracks[track_idx].clips.push(clip);
+            // Insert right half immediately after left half to preserve take ordering
+            self.project.tracks[track_idx].clips.insert(ci + 1, right_clip);
+
+            // Adjust indices in to_split since we inserted a clip
+            // (we're iterating in reverse, so earlier indices are unaffected)
         }
 
         // Don't change selection — user's current state stays as-is
