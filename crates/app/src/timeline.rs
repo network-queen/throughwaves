@@ -3,10 +3,10 @@ use jamhub_model::{ClipSource, TrackKind};
 
 use crate::DawApp;
 
-const BASE_LANE_HEIGHT: f32 = 60.0;
-const TAKE_LANE_HEIGHT: f32 = 40.0;
-const HEADER_WIDTH: f32 = 180.0;
-const RULER_HEIGHT: f32 = 24.0;
+const BASE_LANE_HEIGHT: f32 = 68.0;
+const TAKE_LANE_HEIGHT: f32 = 42.0;
+const HEADER_WIDTH: f32 = 190.0;
+const RULER_HEIGHT: f32 = 26.0;
 const PIXELS_PER_SECOND_BASE: f32 = 100.0;
 
 /// Compute the height of a track.
@@ -145,22 +145,37 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             if ui.button("Delete").clicked() { track_actions.push(TrackAction::Delete(i)); ui.close_menu(); }
                         });
 
-                        // Background
-                        let bg = if is_selected { egui::Color32::from_rgb(42, 42, 52) } else { egui::Color32::from_rgb(35, 35, 40) };
+                        // Background — subtle gradient feel
+                        let bg = if is_selected {
+                            egui::Color32::from_rgb(36, 38, 50)
+                        } else {
+                            egui::Color32::from_rgb(28, 28, 33)
+                        };
                         ui.painter().rect_filled(header_rect, 0.0, bg);
 
-                        // Selected indicator — colored left border
-                        if is_selected {
-                            let bar = egui::Rect::from_min_size(header_rect.min, egui::vec2(3.0, header_rect.height()));
-                            ui.painter().rect_filled(bar, 0.0, color);
-                        }
+                        // Colored left accent bar (always visible, brighter when selected)
+                        let bar_w = if is_selected { 3.0 } else { 2.0 };
+                        let bar_color = if is_selected { color } else { color.gamma_multiply(0.5) };
+                        let bar_rect = egui::Rect::from_min_size(header_rect.min, egui::vec2(bar_w, header_rect.height()));
+                        ui.painter().rect_filled(bar_rect, 0.0, bar_color);
 
+                        ui.add_space(2.0);
                         ui.vertical(|ui| {
-                            // Row 1: Track number + name + armed
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(format!("{}", i + 1)).small().color(egui::Color32::from_rgb(100, 100, 110)));
-                                ui.colored_label(color, "■");
+                            ui.spacing_mut().item_spacing.y = 2.0;
 
+                            // Row 1: Track number + name
+                            ui.horizontal(|ui| {
+                                // Number badge
+                                let num_text = egui::RichText::new(format!("{}", i + 1))
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(90, 90, 100));
+                                ui.label(num_text);
+
+                                // Color dot
+                                let (_, dot_rect) = ui.allocate_space(egui::vec2(8.0, 8.0));
+                                ui.painter().circle_filled(dot_rect.center(), 4.0, color);
+
+                                // Name (or rename field)
                                 if let Some((rename_idx, ref rename_buf)) = app.renaming_track {
                                     if rename_idx == i {
                                         let mut buf = rename_buf.clone();
@@ -168,71 +183,83 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         if r.lost_focus() { track_actions.push(TrackAction::FinishRename(i, buf)); }
                                         else { app.renaming_track = Some((i, buf)); }
                                     } else {
-                                        ui.strong(&track.name);
+                                        ui.label(egui::RichText::new(&track.name).strong().color(egui::Color32::from_rgb(220, 220, 225)));
                                     }
                                 } else {
-                                    ui.strong(&track.name);
+                                    ui.label(egui::RichText::new(&track.name).strong().color(egui::Color32::from_rgb(220, 220, 225)));
                                 }
 
                                 if track.armed {
-                                    ui.label(egui::RichText::new("REC").small().color(egui::Color32::RED));
+                                    ui.label(egui::RichText::new("●").size(10.0).color(egui::Color32::from_rgb(220, 50, 50)));
                                 }
                             });
 
-                            // Row 2: M S R buttons + takes indicator
+                            // Row 2: Control buttons — consistent sizing
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 2.0;
-                                let btn = egui::vec2(20.0, 16.0);
+                                let btn = egui::vec2(22.0, 17.0);
+                                let btn_text_size = 10.0;
 
-                                let m_bg = if track.muted { egui::Color32::from_rgb(180, 140, 20) } else { egui::Color32::from_rgb(50, 50, 55) };
-                                if ui.add_sized(btn, egui::Button::new(egui::RichText::new("M").small().color(egui::Color32::WHITE)).fill(m_bg))
-                                    .on_hover_text("Mute — silence this track during playback").clicked() { track_actions.push(TrackAction::ToggleMute(i)); }
+                                let make_btn = |label: &str, active: bool, active_color: egui::Color32| -> (egui::RichText, egui::Color32) {
+                                    let bg = if active { active_color } else { egui::Color32::from_rgb(42, 42, 48) };
+                                    let tc = if active { egui::Color32::WHITE } else { egui::Color32::from_rgb(140, 140, 148) };
+                                    (egui::RichText::new(label).size(btn_text_size).color(tc), bg)
+                                };
 
-                                let s_bg = if track.solo { egui::Color32::from_rgb(30, 130, 30) } else { egui::Color32::from_rgb(50, 50, 55) };
-                                if ui.add_sized(btn, egui::Button::new(egui::RichText::new("S").small().color(egui::Color32::WHITE)).fill(s_bg))
-                                    .on_hover_text("Solo — play only this track, mute all others").clicked() { track_actions.push(TrackAction::ToggleSolo(i)); }
+                                let (t, bg) = make_btn("M", track.muted, egui::Color32::from_rgb(170, 130, 20));
+                                if ui.add_sized(btn, egui::Button::new(t).fill(bg))
+                                    .on_hover_text("Mute — silence this track").clicked() { track_actions.push(TrackAction::ToggleMute(i)); }
 
-                                let r_bg = if track.armed { egui::Color32::from_rgb(160, 30, 30) } else { egui::Color32::from_rgb(50, 50, 55) };
-                                if ui.add_sized(btn, egui::Button::new(egui::RichText::new("R").small().color(egui::Color32::WHITE)).fill(r_bg))
-                                    .on_hover_text("Arm track for recording — when armed, pressing Record will capture audio on this track").clicked() { track_actions.push(TrackAction::ToggleArm(i)); }
+                                let (t, bg) = make_btn("S", track.solo, egui::Color32::from_rgb(30, 120, 30));
+                                if ui.add_sized(btn, egui::Button::new(t).fill(bg))
+                                    .on_hover_text("Solo — hear only this track").clicked() { track_actions.push(TrackAction::ToggleSolo(i)); }
 
-                                // FX button — shows count, click to open effects panel
+                                let (t, bg) = make_btn("R", track.armed, egui::Color32::from_rgb(170, 30, 30));
+                                if ui.add_sized(btn, egui::Button::new(t).fill(bg))
+                                    .on_hover_text("Arm for recording [R to record]").clicked() { track_actions.push(TrackAction::ToggleArm(i)); }
+
                                 let fx_count = track.effects.len();
-                                let fx_bg = if fx_count > 0 { egui::Color32::from_rgb(80, 50, 120) } else { egui::Color32::from_rgb(50, 50, 55) };
-                                let fx_label = if fx_count > 0 { format!("FX{fx_count}") } else { "FX".into() };
-                                if ui.add_sized(egui::vec2(28.0, 16.0), egui::Button::new(egui::RichText::new(fx_label).small().color(egui::Color32::WHITE)).fill(fx_bg))
-                                    .on_hover_text(if fx_count > 0 {
-                                        format!("{fx_count} effect(s) on this track — click to open Effects panel (Cmd+E)")
-                                    } else {
-                                        "No effects — click to open Effects panel and add effects (Cmd+E)".into()
-                                    })
-                                    .clicked() {
+                                let (t, bg) = make_btn(
+                                    &if fx_count > 0 { format!("FX{fx_count}") } else { "FX".into() },
+                                    fx_count > 0,
+                                    egui::Color32::from_rgb(80, 50, 130),
+                                );
+                                if ui.add_sized(egui::vec2(30.0, 17.0), egui::Button::new(t).fill(bg))
+                                    .on_hover_text("Effects chain [Cmd+E]").clicked() {
                                     track_actions.push(TrackAction::Select(i));
                                     track_actions.push(TrackAction::OpenFx);
                                 }
 
-                                // Takes indicator (click to toggle, or double-click header)
                                 if num_lanes > 1 {
-                                    ui.add_space(4.0);
+                                    ui.add_space(2.0);
                                     let arrow = if track.lanes_expanded { "▼" } else { "▶" };
-                                    let takes_text = format!("{arrow} {num_lanes} takes");
-                                    if ui.add_sized(egui::vec2(52.0, 16.0),
-                                        egui::Button::new(egui::RichText::new(takes_text).small().color(egui::Color32::from_rgb(200, 180, 100)))
-                                            .fill(egui::Color32::from_rgb(55, 50, 40)))
-                                        .on_hover_text("Toggle take lanes (or double-click track header)")
-                                        .clicked() {
+                                    let (t, bg) = make_btn(
+                                        &format!("{arrow}{num_lanes}"),
+                                        track.lanes_expanded,
+                                        egui::Color32::from_rgb(100, 80, 30),
+                                    );
+                                    if ui.add_sized(egui::vec2(28.0, 17.0), egui::Button::new(t).fill(bg))
+                                        .on_hover_text("Toggle take lanes [T]").clicked() {
                                         track_actions.push(TrackAction::ToggleLanes(i));
                                     }
                                 }
                             });
 
-                            // Row 3: Volume slider
+                            // Row 3: Volume
                             ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
                                 let mut vol = track.volume;
-                                if ui.add(egui::Slider::new(&mut vol, 0.0..=1.5).show_value(false)).changed() {
+                                if ui.add(egui::Slider::new(&mut vol, 0.0..=1.5)
+                                    .show_value(false)
+                                    .trailing_fill(true))
+                                    .on_hover_text("Track volume").changed() {
                                     track_actions.push(TrackAction::SetVolume(i, vol));
                                 }
-                                ui.label(egui::RichText::new(format!("{:.0}%", vol * 100.0)).small().color(egui::Color32::GRAY));
+                                ui.label(
+                                    egui::RichText::new(format!("{:.0}%", vol * 100.0))
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(120, 120, 130)),
+                                );
                             });
                         });
                     });
@@ -810,12 +837,12 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         let painter = ui.painter();
 
         // Background
-        painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(30, 30, 35));
+        painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(22, 22, 26));
 
         // Ruler
         let ruler_rect =
             egui::Rect::from_min_size(rect.min, egui::vec2(available.x, RULER_HEIGHT));
-        painter.rect_filled(ruler_rect, 0.0, egui::Color32::from_rgb(40, 40, 48));
+        painter.rect_filled(ruler_rect, 0.0, egui::Color32::from_rgb(32, 32, 38));
 
         // Beat/bar grid
         let bpm = app.project.tempo.bpm;

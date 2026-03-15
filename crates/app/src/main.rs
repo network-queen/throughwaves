@@ -21,6 +21,67 @@ use uuid::Uuid;
 use session_panel::SessionPanel;
 use undo::UndoManager;
 
+fn setup_theme(ctx: &egui::Context) {
+    let mut visuals = egui::Visuals::dark();
+
+    // Modern dark theme — inspired by Ableton/Bitwig
+    let bg = egui::Color32::from_rgb(24, 24, 28);
+    let panel_bg = egui::Color32::from_rgb(30, 30, 35);
+    let widget_bg = egui::Color32::from_rgb(42, 42, 48);
+    let widget_hover = egui::Color32::from_rgb(55, 55, 65);
+    let widget_active = egui::Color32::from_rgb(65, 65, 78);
+    let accent = egui::Color32::from_rgb(90, 160, 255);
+    let text = egui::Color32::from_rgb(210, 210, 215);
+    let text_dim = egui::Color32::from_rgb(140, 140, 148);
+
+    visuals.panel_fill = panel_bg;
+    visuals.window_fill = egui::Color32::from_rgb(32, 32, 38);
+    visuals.extreme_bg_color = bg;
+    visuals.faint_bg_color = egui::Color32::from_rgb(35, 35, 40);
+
+    // Widget styles
+    visuals.widgets.noninteractive.bg_fill = panel_bg;
+    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_dim);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(4);
+
+    visuals.widgets.inactive.bg_fill = widget_bg;
+    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(4);
+    visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+
+    visuals.widgets.hovered.bg_fill = widget_hover;
+    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(4);
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent);
+
+    visuals.widgets.active.bg_fill = widget_active;
+    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(4);
+
+    visuals.widgets.open.bg_fill = widget_hover;
+    visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+
+    visuals.selection.bg_fill = accent.gamma_multiply(0.3);
+    visuals.selection.stroke = egui::Stroke::new(1.0, accent);
+
+    visuals.window_shadow = egui::epaint::Shadow {
+        offset: [0, 4],
+        blur: 12,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(80),
+    };
+    visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 58));
+
+    ctx.set_visuals(visuals);
+
+    // Fonts — slightly larger default for readability
+    let mut style = (*ctx.style()).clone();
+    style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+    style.spacing.button_padding = egui::vec2(6.0, 3.0);
+    style.spacing.window_margin = egui::Margin::same(10);
+    ctx.set_style(style);
+}
+
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -33,7 +94,7 @@ fn main() -> eframe::Result<()> {
         "JamHub",
         options,
         Box::new(|cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            setup_theme(&cc.egui_ctx);
             Ok(Box::new(DawApp::new()))
         }),
     )
@@ -1361,27 +1422,38 @@ impl eframe::App for DawApp {
         });
 
         // Status bar
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+        egui::TopBottomPanel::bottom("status_bar")
+            .frame(egui::Frame::default().fill(egui::Color32::from_rgb(22, 22, 26)).inner_margin(egui::Margin::symmetric(8, 2)))
+            .show(ctx, |ui| {
             ui.horizontal(|ui| {
+                // Status message with subtle styling
                 if let Some((msg, time)) = &self.status_message {
                     if time.elapsed().as_secs() < 6 {
-                        ui.label(egui::RichText::new(msg).small());
+                        ui.label(egui::RichText::new(msg).size(11.0).color(egui::Color32::from_rgb(180, 180, 190)));
                     }
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let dim = egui::Color32::from_rgb(80, 80, 90);
+                    let sep = egui::Color32::from_rgb(45, 45, 52);
+
                     let sr = self.sample_rate();
-                    ui.label(egui::RichText::new(format!("{:.1}kHz", sr as f64 / 1000.0))
-                        .small().color(egui::Color32::from_rgb(90, 90, 100)));
-                    ui.label(egui::RichText::new("|").small().color(egui::Color32::from_rgb(50, 50, 60)));
+                    ui.label(egui::RichText::new(format!("{:.1}kHz", sr as f64 / 1000.0)).size(10.0).color(dim));
+                    ui.label(egui::RichText::new("·").size(10.0).color(sep));
+
+                    ui.label(egui::RichText::new(format!("{} tracks", self.project.tracks.len())).size(10.0).color(dim));
+                    ui.label(egui::RichText::new("·").size(10.0).color(sep));
 
                     if self.snap_mode != SnapMode::Off {
-                        ui.label(egui::RichText::new(format!("SNAP: {}", self.snap_mode.label()))
-                            .small().color(egui::Color32::from_rgb(100, 160, 220)));
-                        ui.label(egui::RichText::new("|").small().color(egui::Color32::from_rgb(50, 50, 60)));
+                        ui.label(egui::RichText::new(self.snap_mode.label()).size(10.0).color(egui::Color32::from_rgb(90, 140, 200)));
+                        ui.label(egui::RichText::new("·").size(10.0).color(sep));
                     }
 
-                    ui.label(egui::RichText::new("? Help > Shortcuts").small().color(egui::Color32::from_rgb(80, 80, 90)));
+                    if self.show_automation {
+                        ui.label(egui::RichText::new("AUTO").size(10.0).color(egui::Color32::from_rgb(200, 170, 60)));
+                        ui.label(egui::RichText::new("·").size(10.0).color(sep));
+                    }
                 });
             });
         });

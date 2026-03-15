@@ -6,53 +6,52 @@ use crate::DawApp;
 
 pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-
+        ui.spacing_mut().item_spacing.x = 3.0;
         let state = app.transport_state();
-        let btn_size = egui::vec2(28.0, 20.0);
 
-        // === TRANSPORT CONTROLS (grouped) ===
-        ui.visuals_mut().widgets.inactive.bg_fill = egui::Color32::from_rgb(50, 50, 58);
+        // === TRANSPORT BUTTONS ===
+        let tb = egui::vec2(30.0, 22.0);
 
-        if ui.add_sized(btn_size, egui::Button::new("⏮")).on_hover_text("Rewind to start of project [Home]").clicked() {
+        transport_btn(ui, "⏮", tb, false, "Rewind to start [Home]", || {
             app.send_command(EngineCommand::SetPosition(0));
-        }
+        });
 
-        let stop_bg = if state == TransportState::Stopped { egui::Color32::from_rgb(70, 70, 80) } else { egui::Color32::from_rgb(50, 50, 58) };
-        if ui.add_sized(btn_size, egui::Button::new(egui::RichText::new("⏹").color(egui::Color32::WHITE)).fill(stop_bg))
-            .on_hover_text("Stop playback and stay at current position").clicked() {
+        transport_btn(ui, "⏹", tb, state == TransportState::Stopped,
+            "Stop playback", || {
             app.send_command(EngineCommand::Stop);
-        }
+        });
 
-        let play_bg = if state == TransportState::Playing { egui::Color32::from_rgb(30, 120, 30) } else { egui::Color32::from_rgb(50, 50, 58) };
-        if ui.add_sized(btn_size, egui::Button::new(egui::RichText::new("▶").color(egui::Color32::WHITE)).fill(play_bg))
-            .on_hover_text("Start playback from current position [Space]").clicked() {
+        let playing = state == TransportState::Playing;
+        if ui.add_sized(tb, egui::Button::new(
+            egui::RichText::new("▶").size(14.0).color(egui::Color32::WHITE))
+            .fill(if playing { egui::Color32::from_rgb(40, 140, 40) } else { egui::Color32::from_rgb(48, 48, 55) }))
+            .on_hover_text("Play [Space]").clicked() {
             app.send_command(EngineCommand::Play);
         }
 
-        let rec_bg = if app.is_recording { egui::Color32::from_rgb(180, 30, 30) } else { egui::Color32::from_rgb(50, 50, 58) };
-        if ui.add_sized(btn_size, egui::Button::new(egui::RichText::new("⏺").color(
-            if app.is_recording { egui::Color32::WHITE } else { egui::Color32::from_rgb(200, 80, 80) }
-        )).fill(rec_bg))
-            .on_hover_text("Record audio from microphone onto selected track [R]\nTrack is muted during recording to avoid feedback").clicked() {
+        if ui.add_sized(tb, egui::Button::new(
+            egui::RichText::new("⏺").size(14.0).color(
+                if app.is_recording { egui::Color32::WHITE } else { egui::Color32::from_rgb(220, 70, 70) }))
+            .fill(if app.is_recording { egui::Color32::from_rgb(200, 35, 35) } else { egui::Color32::from_rgb(48, 48, 55) }))
+            .on_hover_text("Record [R]\nRecords onto the selected track").clicked() {
             app.toggle_recording();
         }
 
-        ui.add_space(4.0);
+        ui.add_space(6.0);
 
-        // === TOGGLE BUTTONS (metronome, loop, monitor) ===
-        let toggle_size = egui::vec2(24.0, 20.0);
+        // === TOGGLE STRIP ===
+        let ts = egui::vec2(26.0, 22.0);
 
-        let met_bg = if app.metronome_enabled { egui::Color32::from_rgb(140, 120, 20) } else { egui::Color32::from_rgb(45, 45, 50) };
-        if ui.add_sized(toggle_size, egui::Button::new(egui::RichText::new("M").small().color(egui::Color32::WHITE)).fill(met_bg))
-            .on_hover_text("Metronome — click track for keeping time [M]\nAccent on beat 1, lighter on other beats").clicked() {
+        toggle_btn(ui, "M", ts, app.metronome_enabled,
+            egui::Color32::from_rgb(160, 130, 20),
+            "Metronome [M]", || {
             app.metronome_enabled = !app.metronome_enabled;
             app.send_command(EngineCommand::SetMetronome(app.metronome_enabled));
-        }
+        });
 
-        let loop_bg = if app.loop_enabled { egui::Color32::from_rgb(40, 70, 150) } else { egui::Color32::from_rgb(45, 45, 50) };
-        if ui.add_sized(toggle_size, egui::Button::new(egui::RichText::new("L").small().color(egui::Color32::WHITE)).fill(loop_bg))
-            .on_hover_text("Loop mode — repeat playback between loop markers [L]\nBlue region shown on timeline").clicked() {
+        toggle_btn(ui, "L", ts, app.loop_enabled,
+            egui::Color32::from_rgb(50, 90, 180),
+            "Loop [L]", || {
             app.loop_enabled = !app.loop_enabled;
             if app.loop_enabled && app.loop_end == 0 {
                 let sr = app.sample_rate() as f64;
@@ -63,101 +62,156 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             app.send_command(EngineCommand::SetLoop {
                 enabled: app.loop_enabled, start: app.loop_start, end: app.loop_end,
             });
-        }
+        });
 
-        let mon_bg = if app.input_monitor.is_enabled() { egui::Color32::from_rgb(150, 90, 20) } else { egui::Color32::from_rgb(45, 45, 50) };
-        if ui.add_sized(toggle_size, egui::Button::new(egui::RichText::new("I").small().color(egui::Color32::WHITE)).fill(mon_bg))
-            .on_hover_text("Input monitoring — hear your microphone in real-time [I]\nUseful for monitoring while recording").clicked() {
+        toggle_btn(ui, "I", ts, app.input_monitor.is_enabled(),
+            egui::Color32::from_rgb(170, 100, 20),
+            "Input monitor [I]\nHear mic in real-time", || {
             app.toggle_input_monitor();
-        }
+        });
 
-        ui.separator();
-
-        // Automation toggle
-        let auto_bg = if app.show_automation { egui::Color32::from_rgb(140, 100, 20) } else { egui::Color32::from_rgb(45, 45, 50) };
-        if ui.add_sized(toggle_size, egui::Button::new(egui::RichText::new("A").small().color(egui::Color32::WHITE)).fill(auto_bg))
-            .on_hover_text("Show automation lanes [A]\nClick on timeline to add control points\nAutomate volume, pan, or mute over time").clicked() {
+        toggle_btn(ui, "A", ts, app.show_automation,
+            egui::Color32::from_rgb(160, 120, 20),
+            "Automation [A]\nClick timeline to add points", || {
             app.show_automation = !app.show_automation;
-        }
+        });
 
         ui.separator();
 
-        // === TIME DISPLAY (big, readable) ===
+        // === TIME DISPLAY ===
         let pos = app.position_samples();
         let sr = app.sample_rate();
         let seconds = pos as f64 / sr as f64;
         let minutes = (seconds / 60.0) as u32;
         let secs = seconds % 60.0;
-
         let beat = app.project.tempo.beat_at_sample(pos, sr as f64);
         let bar = (beat / app.project.time_signature.numerator as f64).floor() as u32 + 1;
         let beat_in_bar = (beat % app.project.time_signature.numerator as f64).floor() as u32 + 1;
 
-        // Time in a dark box
         egui::Frame::default()
-            .fill(egui::Color32::from_rgb(20, 20, 25))
-            .inner_margin(egui::Margin::symmetric(8, 2))
-            .corner_radius(3.0)
+            .fill(egui::Color32::from_rgb(18, 18, 22))
+            .inner_margin(egui::Margin::symmetric(10, 3))
+            .corner_radius(5.0)
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 40, 48)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.monospace(egui::RichText::new(format!("{minutes:02}:{secs:05.2}")).size(14.0).color(egui::Color32::from_rgb(120, 220, 120)));
-                    ui.label(egui::RichText::new("|").color(egui::Color32::from_rgb(60, 60, 70)));
-                    ui.monospace(egui::RichText::new(format!("{bar}.{beat_in_bar}")).size(14.0).color(egui::Color32::from_rgb(200, 180, 100)));
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    ui.monospace(
+                        egui::RichText::new(format!("{minutes:02}:{secs:05.2}"))
+                            .size(15.0)
+                            .color(egui::Color32::from_rgb(100, 220, 130)),
+                    );
+                    ui.monospace(
+                        egui::RichText::new(format!("Bar {bar}.{beat_in_bar}"))
+                            .size(15.0)
+                            .color(egui::Color32::from_rgb(220, 190, 100)),
+                    );
                 });
             });
 
         ui.separator();
 
-        // === SNAP MODE ===
-        let snap_label = format!("Snap: {}", app.snap_mode.label());
-        let snap_bg = if app.snap_mode != crate::SnapMode::Off {
-            egui::Color32::from_rgb(40, 60, 100)
-        } else {
-            egui::Color32::from_rgb(45, 45, 50)
-        };
-        if ui.add(egui::Button::new(egui::RichText::new(&snap_label).small().color(egui::Color32::WHITE)).fill(snap_bg))
-            .on_hover_text("Snap mode — controls positioning precision [G]\nFree: sample-accurate\n1/2 Beat: eighth notes\nBeat: quarter notes\nBar: bar boundaries").clicked() {
-            app.snap_mode = app.snap_mode.next();
-        }
+        // === TEMPO / SIG / SNAP / MASTER ===
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 1.0;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let mut bpm = app.project.tempo.bpm;
+                if ui.add(egui::DragValue::new(&mut bpm).range(20.0..=300.0).speed(0.5).suffix(" bpm"))
+                    .on_hover_text("Project tempo").changed() {
+                    app.project.tempo.bpm = bpm;
+                    app.sync_project();
+                }
 
-        ui.separator();
+                let mut num = app.project.time_signature.numerator as i32;
+                let mut den = app.project.time_signature.denominator as i32;
+                ui.add(egui::DragValue::new(&mut num).range(1..=16).speed(0.1));
+                ui.label(egui::RichText::new("/").color(egui::Color32::from_rgb(100, 100, 110)));
+                ui.add(egui::DragValue::new(&mut den).range(1..=16).speed(0.1));
+                if num != app.project.time_signature.numerator as i32 || den != app.project.time_signature.denominator as i32 {
+                    app.project.time_signature.numerator = num as u8;
+                    app.project.time_signature.denominator = den as u8;
+                    app.sync_project();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
 
-        // === TEMPO & TIME SIG (compact) ===
-        let mut bpm = app.project.tempo.bpm;
-        if ui.add(egui::DragValue::new(&mut bpm).range(20.0..=300.0).speed(0.5).suffix(" bpm")).changed() {
-            app.project.tempo.bpm = bpm;
-            app.sync_project();
-        }
+                // Snap mode
+                let snap_label = app.snap_mode.label();
+                let snap_bg = if app.snap_mode != crate::SnapMode::Off {
+                    egui::Color32::from_rgb(45, 60, 90)
+                } else {
+                    egui::Color32::from_rgb(42, 42, 48)
+                };
+                if ui.add(egui::Button::new(
+                    egui::RichText::new(format!("Snap: {snap_label}")).small().color(egui::Color32::from_rgb(180, 190, 210)))
+                    .fill(snap_bg))
+                    .on_hover_text("Snap mode [G]\nFree / 1/2 Beat / Beat / Bar").clicked() {
+                    app.snap_mode = app.snap_mode.next();
+                }
 
-        let mut num = app.project.time_signature.numerator as i32;
-        let mut den = app.project.time_signature.denominator as i32;
-        ui.add(egui::DragValue::new(&mut num).range(1..=16).speed(0.1));
-        ui.label("/");
-        ui.add(egui::DragValue::new(&mut den).range(1..=16).speed(0.1));
-        if num != app.project.time_signature.numerator as i32 || den != app.project.time_signature.denominator as i32 {
-            app.project.time_signature.numerator = num as u8;
-            app.project.time_signature.denominator = den as u8;
-            app.sync_project();
-        }
+                // Master vol
+                let mut mv = app.master_volume;
+                if ui.add(egui::DragValue::new(&mut mv).range(0.0..=1.5).speed(0.01)
+                    .custom_formatter(|v, _| format!("Vol {:.0}%", v * 100.0)))
+                    .on_hover_text("Master volume").changed() {
+                    app.master_volume = mv;
+                    app.send_command(EngineCommand::SetMasterVolume(mv));
+                }
+            });
+        });
 
-        ui.separator();
-
-        // === MASTER VOL (with icon) ===
-        ui.label(egui::RichText::new("Vol").small().color(egui::Color32::GRAY));
-        let mut mv = app.master_volume;
-        if ui.add(egui::DragValue::new(&mut mv).range(0.0..=1.5).speed(0.01)
-            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))).changed() {
-            app.master_volume = mv;
-            app.send_command(EngineCommand::SetMasterVolume(mv));
-        }
-
-        // === RIGHT SIDE ===
+        // === RIGHT SIDE — logo + session ===
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if app.session.is_connected() {
                 ui.colored_label(egui::Color32::from_rgb(80, 200, 80), "● Online");
                 ui.separator();
             }
-            ui.label(egui::RichText::new("JamHub").strong().color(egui::Color32::from_rgb(100, 180, 255)));
+            ui.label(
+                egui::RichText::new("JamHub")
+                    .size(16.0)
+                    .strong()
+                    .color(egui::Color32::from_rgb(90, 160, 255)),
+            );
         });
     });
+}
+
+fn transport_btn(
+    ui: &mut egui::Ui,
+    icon: &str,
+    size: egui::Vec2,
+    active: bool,
+    tooltip: &str,
+    mut on_click: impl FnMut(),
+) {
+    let bg = if active {
+        egui::Color32::from_rgb(60, 60, 70)
+    } else {
+        egui::Color32::from_rgb(48, 48, 55)
+    };
+    if ui.add_sized(size, egui::Button::new(
+        egui::RichText::new(icon).size(14.0).color(egui::Color32::WHITE)).fill(bg))
+        .on_hover_text(tooltip).clicked() {
+        on_click();
+    }
+}
+
+fn toggle_btn(
+    ui: &mut egui::Ui,
+    label: &str,
+    size: egui::Vec2,
+    active: bool,
+    active_color: egui::Color32,
+    tooltip: &str,
+    mut on_click: impl FnMut(),
+) {
+    let bg = if active { active_color } else { egui::Color32::from_rgb(38, 38, 44) };
+    let text_color = if active { egui::Color32::WHITE } else { egui::Color32::from_rgb(140, 140, 148) };
+    if ui.add_sized(size, egui::Button::new(
+        egui::RichText::new(label).size(11.0).color(text_color)).fill(bg))
+        .on_hover_text(tooltip).clicked() {
+        on_click();
+    }
 }
