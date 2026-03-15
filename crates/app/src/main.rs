@@ -147,6 +147,12 @@ pub struct DawApp {
     live_rec_buffer_id: Option<uuid::Uuid>,
     live_rec_last_update: std::time::Instant,
     pub show_undo_history: bool,
+    // Clipboard
+    clipboard_clips: Vec<(jamhub_model::Clip, Option<Vec<f32>>)>,
+    // Project dirty flag
+    pub dirty: bool,
+    // Color picker
+    pub color_picker_track: Option<usize>,
 }
 
 pub struct ClipTrimState {
@@ -268,6 +274,9 @@ impl DawApp {
             live_rec_buffer_id: None,
             live_rec_last_update: std::time::Instant::now(),
             show_undo_history: false,
+            clipboard_clips: Vec::new(),
+            dirty: false,
+            color_picker_track: None,
         }
     }
 
@@ -312,6 +321,7 @@ impl DawApp {
 
     pub fn push_undo(&mut self, label: &str) {
         self.undo_manager.push(label, &self.project);
+        self.dirty = true;
     }
 
     pub fn undo(&mut self) {
@@ -822,6 +832,83 @@ impl DawApp {
         });
     }
 
+    pub fn copy_selected_clip(&mut self) {
+        if let Some((ti, ci)) = self.selected_clip {
+            if ti < self.project.tracks.len() && ci < self.project.tracks[ti].clips.len() {
+                let clip = self.project.tracks[ti].clips[ci].clone();
+                let buf = if let ClipSource::AudioBuffer { buffer_id } = &clip.source {
+                    self.audio_buffers.get(buffer_id).cloned()
+                } else {
+                    None
+                };
+                self.clipboard_clips = vec![(clip, buf)];
+                self.set_status("Clip copied");
+            }
+        }
+    }
+
+    pub fn paste_clip(&mut self) {
+        if self.clipboard_clips.is_empty() {
+            self.set_status("Nothing to paste");
+            return;
+        }
+        let ti = self.selected_track.unwrap_or(0);
+        if ti >= self.project.tracks.len() { return; }
+
+        self.push_undo("Paste clip");
+        let pos = self.position_samples();
+
+        for (clip, buf) in &self.clipboard_clips {
+            let new_id = Uuid::new_v4();
+            let mut new_clip = clip.clone();
+            new_clip.id = Uuid::new_v4();
+            new_clip.start_sample = pos;
+
+            if let Some(samples) = buf {
+                let buffer_id = Uuid::new_v4();
+                new_clip.source = ClipSource::AudioBuffer { buffer_id };
+                self.waveform_cache.insert(buffer_id, samples);
+                self.send_command(EngineCommand::LoadAudioBuffer {
+                    id: buffer_id,
+                    samples: samples.clone(),
+                });
+                self.audio_buffers.insert(buffer_id, samples.clone());
+            }
+
+            self.project.tracks[ti].clips.push(new_clip);
+        }
+        self.sync_project();
+        self.set_status("Clip pasted");
+    }
+
+    pub fn zoom_to_fit(&mut self) {
+        // Find the end of the last clip across all tracks
+        let end_sample = self.project.tracks.iter()
+            .flat_map(|t| t.clips.iter())
+            .map(|c| c.start_sample + c.duration_samples)
+            .max()
+            .unwrap_or(0);
+
+        if end_sample == 0 { return; }
+
+        let sr = self.sample_rate() as f64;
+        let end_sec = end_sample as f64 / sr;
+        // Assume ~1000px visible width, calculate zoom to fit
+        let target_zoom = 800.0 / (end_sec as f32 * 100.0);
+        self.zoom = target_zoom.clamp(0.1, 10.0);
+        self.scroll_x = 0.0;
+    }
+
+    pub fn focus_playhead(&mut self) {
+        let pos = self.position_samples();
+        let sr = self.sample_rate() as f64;
+        let pos_sec = pos as f64 / sr;
+        let pps = 100.0 * self.zoom;
+        let playhead_px = pos_sec as f32 * pps;
+        // Center playhead in view (assume ~800px visible)
+        self.scroll_x = (playhead_px - 400.0).max(0.0);
+    }
+
     pub fn open_import_dialog(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Audio Files", &["wav", "wave", "mp3", "ogg", "flac"])
@@ -849,7 +936,10 @@ impl DawApp {
 
         let sr = self.sample_rate();
         match jamhub_engine::save_project(&dir, &self.project, &self.audio_buffers, sr) {
-            Ok(()) => self.set_status(&format!("Saved to {}", dir.display())),
+            Ok(()) => {
+                self.dirty = false;
+                self.set_status(&format!("Saved to {}", dir.display()));
+            }
             Err(e) => self.set_status(&format!("Save failed: {e}")),
         }
     }
@@ -906,6 +996,11 @@ impl DawApp {
 
 impl eframe::App for DawApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Update window title with project name and dirty indicator
+        let dirty_mark = if self.dirty { " *" } else { "" };
+        let title = format!("{}{dirty_mark} — JamHub", self.project.name);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+
         if self.transport_state() == TransportState::Playing || self.is_recording {
             ctx.request_repaint();
         }
@@ -1044,12 +1139,27 @@ impl eframe::App for DawApp {
             if i.modifiers.command && i.key_pressed(egui::Key::B) {
                 actions.push("bounce".into());
             }
+            // Cmd+C copy, Cmd+V paste
+            if i.modifiers.command && i.key_pressed(egui::Key::C) {
+                actions.push("copy".into());
+            }
+            if i.modifiers.command && i.key_pressed(egui::Key::V) {
+                actions.push("paste".into());
+            }
+            // Z zoom to fit, F focus playhead
+            if i.key_pressed(egui::Key::Z) && !i.modifiers.command {
+                actions.push("zoom_fit".into());
+            }
+            if i.key_pressed(egui::Key::F) && !i.modifiers.command {
+                // F was FX browser, repurpose: Cmd+F for FX browser, F for focus
+                actions.push("focus_playhead".into());
+            }
             // Cmd+M for add marker
             if i.modifiers.command && i.key_pressed(egui::Key::M) {
                 actions.push("add_marker".into());
             }
-            // F for FX browser
-            if i.key_pressed(egui::Key::F) && !i.modifiers.command {
+            // Cmd+F for FX browser
+            if i.modifiers.command && i.key_pressed(egui::Key::F) {
                 actions.push("fx_browser".into());
             }
             // A for automation toggle
@@ -1165,6 +1275,18 @@ impl eframe::App for DawApp {
                 }
                 "fx_browser" => {
                     self.fx_browser.show = !self.fx_browser.show;
+                }
+                "copy" => {
+                    self.copy_selected_clip();
+                }
+                "paste" => {
+                    self.paste_clip();
+                }
+                "zoom_fit" => {
+                    self.zoom_to_fit();
+                }
+                "focus_playhead" => {
+                    self.focus_playhead();
                 }
                 "toggle_automation" => {
                     self.show_automation = !self.show_automation;
