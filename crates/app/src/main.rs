@@ -1058,124 +1058,64 @@ impl eframe::App for DawApp {
             self.import_audio_file(path);
         }
 
-        // Keyboard shortcuts
+        // Keyboard shortcuts — skip when a text field has focus
+        let text_has_focus = ctx.memory(|m| m.focused().is_some())
+            && ctx.input(|i| !i.raw.events.is_empty());
+        // More reliable: check if any text edit is active
+        let any_text_edit = self.renaming_track.is_some()
+            || self.session.chat_input.len() > 0 && self.session.show_panel;
+
         let mut actions: Vec<String> = Vec::new();
         ctx.input(|i| {
-            if i.key_pressed(egui::Key::Space) {
-                actions.push("toggle_play".into());
+            // Always allow Cmd shortcuts (they don't conflict with typing)
+            // But skip single-key shortcuts when typing in a text field
+            let typing = any_text_edit || ctx.wants_keyboard_input();
+
+            // --- Single-key shortcuts (blocked when typing in text fields) ---
+            if !typing {
+                if i.key_pressed(egui::Key::Space) { actions.push("toggle_play".into()); }
+                if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) { actions.push("delete".into()); }
+                if i.key_pressed(egui::Key::Home) { actions.push("rewind".into()); }
+                if i.key_pressed(egui::Key::R) && !i.modifiers.command { actions.push("record".into()); }
+                if i.key_pressed(egui::Key::M) && !i.modifiers.command { actions.push("metronome".into()); }
+                if i.key_pressed(egui::Key::L) && !i.modifiers.command { actions.push("toggle_loop".into()); }
+                if i.key_pressed(egui::Key::T) && !i.modifiers.command { actions.push("toggle_takes".into()); }
+                if i.key_pressed(egui::Key::G) && !i.modifiers.command { actions.push("cycle_snap".into()); }
+                if i.key_pressed(egui::Key::S) && !i.modifiers.command { actions.push("split".into()); }
+                if i.key_pressed(egui::Key::I) && !i.modifiers.command { actions.push("input_monitor".into()); }
+                if i.key_pressed(egui::Key::A) && !i.modifiers.command { actions.push("toggle_automation".into()); }
+                if i.key_pressed(egui::Key::Z) && !i.modifiers.command { actions.push("zoom_fit".into()); }
+                if i.key_pressed(egui::Key::F) && !i.modifiers.command { actions.push("focus_playhead".into()); }
+                if i.key_pressed(egui::Key::ArrowUp) && !i.modifiers.command { actions.push("track_up".into()); }
+                if i.key_pressed(egui::Key::ArrowDown) && !i.modifiers.command { actions.push("track_down".into()); }
+                if i.modifiers.alt && i.key_pressed(egui::Key::ArrowLeft) { actions.push("nudge_left".into()); }
+                if i.modifiers.alt && i.key_pressed(egui::Key::ArrowRight) { actions.push("nudge_right".into()); }
+                for (idx, key) in [
+                    egui::Key::Num1, egui::Key::Num2, egui::Key::Num3,
+                    egui::Key::Num4, egui::Key::Num5, egui::Key::Num6,
+                    egui::Key::Num7, egui::Key::Num8, egui::Key::Num9,
+                ].iter().enumerate() {
+                    if i.key_pressed(*key) && !i.modifiers.command {
+                        actions.push(format!("select_track_{}", idx));
+                    }
+                }
             }
+
+            // --- Cmd+ shortcuts (always active, even when typing) ---
             if i.modifiers.command && i.key_pressed(egui::Key::Z) {
-                if i.modifiers.shift {
-                    actions.push("redo".into());
-                } else {
-                    actions.push("undo".into());
-                }
+                if i.modifiers.shift { actions.push("redo".into()); }
+                else { actions.push("undo".into()); }
             }
-            if i.modifiers.command && i.key_pressed(egui::Key::S) {
-                actions.push("save".into());
-            }
-            if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
-                actions.push("delete".into());
-            }
-            if i.key_pressed(egui::Key::Home) {
-                actions.push("rewind".into());
-            }
-            if i.key_pressed(egui::Key::R) && !i.modifiers.command {
-                actions.push("record".into());
-            }
-            if i.key_pressed(egui::Key::M) && !i.modifiers.command {
-                actions.push("metronome".into());
-            }
-            if i.modifiers.command && i.key_pressed(egui::Key::D) {
-                actions.push("duplicate_track".into());
-            }
-            // Track switching: Up/Down arrows
-            if i.key_pressed(egui::Key::ArrowUp) && !i.modifiers.command {
-                actions.push("track_up".into());
-            }
-            if i.key_pressed(egui::Key::ArrowDown) && !i.modifiers.command {
-                actions.push("track_down".into());
-            }
-            // Number keys 1-9 to select track
-            for (idx, key) in [
-                egui::Key::Num1, egui::Key::Num2, egui::Key::Num3,
-                egui::Key::Num4, egui::Key::Num5, egui::Key::Num6,
-                egui::Key::Num7, egui::Key::Num8, egui::Key::Num9,
-            ].iter().enumerate() {
-                if i.key_pressed(*key) && !i.modifiers.command {
-                    actions.push(format!("select_track_{}", idx));
-                }
-            }
-            // L key for loop toggle
-            if i.key_pressed(egui::Key::L) && !i.modifiers.command {
-                actions.push("toggle_loop".into());
-            }
-            // Cmd+E for effects
-            if i.modifiers.command && i.key_pressed(egui::Key::E) {
-                actions.push("effects".into());
-            }
-            // Cmd+I for import
-            if i.modifiers.command && i.key_pressed(egui::Key::I) {
-                actions.push("import".into());
-            }
-            // Cmd+P for piano roll
-            if i.modifiers.command && i.key_pressed(egui::Key::P) {
-                actions.push("piano_roll".into());
-            }
-            // T for toggle take lanes on selected track
-            if i.key_pressed(egui::Key::T) && !i.modifiers.command {
-                actions.push("toggle_takes".into());
-            }
-            // G for snap mode cycle
-            if i.key_pressed(egui::Key::G) && !i.modifiers.command {
-                actions.push("cycle_snap".into());
-            }
-            // S for split clip
-            if i.key_pressed(egui::Key::S) && !i.modifiers.command {
-                actions.push("split".into());
-            }
-            // I (no Cmd) for input monitor
-            if i.key_pressed(egui::Key::I) && !i.modifiers.command {
-                actions.push("input_monitor".into());
-            }
-            // Cmd+B for bounce
-            if i.modifiers.command && i.key_pressed(egui::Key::B) {
-                actions.push("bounce".into());
-            }
-            // Cmd+C copy, Cmd+V paste
-            if i.modifiers.command && i.key_pressed(egui::Key::C) {
-                actions.push("copy".into());
-            }
-            if i.modifiers.command && i.key_pressed(egui::Key::V) {
-                actions.push("paste".into());
-            }
-            // Z zoom to fit, F focus playhead
-            if i.key_pressed(egui::Key::Z) && !i.modifiers.command {
-                actions.push("zoom_fit".into());
-            }
-            if i.key_pressed(egui::Key::F) && !i.modifiers.command {
-                // F was FX browser, repurpose: Cmd+F for FX browser, F for focus
-                actions.push("focus_playhead".into());
-            }
-            // Cmd+M for add marker
-            if i.modifiers.command && i.key_pressed(egui::Key::M) {
-                actions.push("add_marker".into());
-            }
-            // Cmd+F for FX browser
-            if i.modifiers.command && i.key_pressed(egui::Key::F) {
-                actions.push("fx_browser".into());
-            }
-            // A for automation toggle
-            if i.key_pressed(egui::Key::A) && !i.modifiers.command {
-                actions.push("toggle_automation".into());
-            }
-            // Left/Right arrows to nudge selected clip
-            if i.key_pressed(egui::Key::ArrowLeft) && !i.modifiers.command && i.modifiers.alt {
-                actions.push("nudge_left".into());
-            }
-            if i.key_pressed(egui::Key::ArrowRight) && !i.modifiers.command && i.modifiers.alt {
-                actions.push("nudge_right".into());
-            }
+            if i.modifiers.command && i.key_pressed(egui::Key::S) { actions.push("save".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::D) { actions.push("duplicate_track".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::E) { actions.push("effects".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::I) { actions.push("import".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::P) { actions.push("piano_roll".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::B) { actions.push("bounce".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::C) { actions.push("copy".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::V) { actions.push("paste".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::M) { actions.push("add_marker".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::F) { actions.push("fx_browser".into()); }
         });
 
         for action in &actions {
