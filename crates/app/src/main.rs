@@ -295,8 +295,20 @@ impl DawApp {
             self.project.tracks[track_idx].clips.push(clip);
             self.sync_project();
 
+            // 8. Scroll view to show the recorded clip
+            self.scroll_x = 0.0; // Reset to start since clip starts at rec_start
+            let clip_end_sec = (rec_start + duration) as f64 / engine_sr as f64;
+            // Ensure zoom shows the whole clip — adjust if clip doesn't fit in view
+            let min_zoom = 0.3;
+            if self.zoom < min_zoom {
+                self.zoom = min_zoom;
+            }
+
+            // Rewind playhead to start of clip for immediate playback
+            self.send_command(EngineCommand::SetPosition(rec_start));
+
             self.set_status(&format!(
-                "Recording saved ({:.1}s)",
+                "Recording saved ({:.1}s) — press Space to play",
                 duration as f64 / engine_sr as f64
             ));
         } else {
@@ -685,19 +697,33 @@ impl eframe::App for DawApp {
         // Status bar
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                // Status message
                 if let Some((msg, time)) = &self.status_message {
-                    if time.elapsed().as_secs() < 5 {
+                    if time.elapsed().as_secs() < 8 {
                         ui.label(msg);
                     }
                 }
+
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Keyboard hint
+                    ui.label(
+                        egui::RichText::new("Space:play  R:record  M:metro  Cmd+scroll:zoom")
+                            .small()
+                            .color(egui::Color32::from_rgb(100, 100, 110)),
+                    );
+                    ui.separator();
                     if self.snap_to_grid {
-                        ui.label("SNAP");
+                        ui.label(
+                            egui::RichText::new("SNAP")
+                                .small()
+                                .color(egui::Color32::from_rgb(100, 180, 255)),
+                        );
                         ui.label("|");
                     }
+                    let sr = self.sample_rate();
+                    let sr_khz = sr as f64 / 1000.0;
                     ui.label(format!(
-                        "{}Hz | {} tracks",
-                        self.sample_rate(),
+                        "Sample rate: {sr_khz:.1}kHz | Tracks: {}",
                         self.project.tracks.len()
                     ));
                 });

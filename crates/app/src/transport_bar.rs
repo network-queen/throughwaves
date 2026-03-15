@@ -6,16 +6,19 @@ use crate::DawApp;
 
 pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.spacing_mut().item_spacing.x = 6.0;
 
         let state = app.transport_state();
 
-        // Rewind
-        if ui.button("⏮").on_hover_text("Rewind (Home)").clicked() {
+        // Transport buttons
+        if ui
+            .button("⏮")
+            .on_hover_text("Rewind to start (Home)")
+            .clicked()
+        {
             app.send_command(EngineCommand::SetPosition(0));
         }
 
-        // Stop
         let stop_color = if state == TransportState::Stopped {
             egui::Color32::WHITE
         } else {
@@ -31,7 +34,6 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             app.send_command(EngineCommand::Stop);
         }
 
-        // Play
         let play_color = if state == TransportState::Playing {
             egui::Color32::from_rgb(80, 200, 80)
         } else {
@@ -41,13 +43,12 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             .add(egui::Button::new(
                 egui::RichText::new("▶").color(play_color),
             ))
-            .on_hover_text("Play (Space)")
+            .on_hover_text("Play / Pause (Space)")
             .clicked()
         {
             app.send_command(EngineCommand::Play);
         }
 
-        // Record
         let rec_color = if app.is_recording {
             egui::Color32::from_rgb(220, 50, 50)
         } else {
@@ -65,7 +66,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
-        // Metronome toggle
+        // Metronome
         let met_color = if app.metronome_enabled {
             egui::Color32::from_rgb(255, 200, 50)
         } else {
@@ -75,7 +76,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             .add(egui::Button::new(
                 egui::RichText::new("🔔").color(met_color),
             ))
-            .on_hover_text("Metronome (M)")
+            .on_hover_text("Metronome on/off (M)")
             .clicked()
         {
             app.metronome_enabled = !app.metronome_enabled;
@@ -84,30 +85,50 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
-        // Position display
+        // === TIME DISPLAY ===
         let pos = app.position_samples();
         let sr = app.sample_rate();
         let seconds = pos as f64 / sr as f64;
         let minutes = (seconds / 60.0) as u32;
         let secs = seconds % 60.0;
+
+        ui.label(
+            egui::RichText::new("Time")
+                .small()
+                .color(egui::Color32::GRAY),
+        );
+        ui.monospace(format!("{minutes:02}m {secs:05.2}s"));
+
+        ui.separator();
+
+        // === BAR.BEAT DISPLAY ===
         let beat = app.project.tempo.beat_at_sample(pos, sr as f64);
-        let bar = (beat / app.project.time_signature.numerator as f64).floor() as u32 + 1;
+        let bar =
+            (beat / app.project.time_signature.numerator as f64).floor() as u32 + 1;
         let beat_in_bar =
             (beat % app.project.time_signature.numerator as f64).floor() as u32 + 1;
 
-        ui.monospace(format!("{minutes:02}:{secs:05.2}"));
-        ui.separator();
+        ui.label(
+            egui::RichText::new("Bar")
+                .small()
+                .color(egui::Color32::GRAY),
+        );
         ui.monospace(format!("{bar}.{beat_in_bar}"));
 
         ui.separator();
 
-        // BPM
-        ui.label("BPM:");
+        // === BPM ===
+        ui.label(
+            egui::RichText::new("Tempo")
+                .small()
+                .color(egui::Color32::GRAY),
+        );
         let mut bpm = app.project.tempo.bpm;
         let response = ui.add(
             egui::DragValue::new(&mut bpm)
                 .range(20.0..=300.0)
-                .speed(0.5),
+                .speed(0.5)
+                .suffix(" bpm"),
         );
         if response.changed() {
             app.project.tempo.bpm = bpm;
@@ -116,7 +137,12 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
-        // Time signature
+        // === TIME SIGNATURE ===
+        ui.label(
+            egui::RichText::new("Sig")
+                .small()
+                .color(egui::Color32::GRAY),
+        );
         let mut num = app.project.time_signature.numerator as i32;
         ui.add(egui::DragValue::new(&mut num).range(1..=16).speed(0.1));
         ui.label("/");
@@ -132,21 +158,25 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
-        // Zoom
-        ui.label("Zoom:");
+        // === ZOOM ===
+        ui.label(
+            egui::RichText::new("Zoom")
+                .small()
+                .color(egui::Color32::GRAY),
+        );
         ui.add(
             egui::DragValue::new(&mut app.zoom)
                 .range(0.1..=10.0)
-                .speed(0.05),
+                .speed(0.05)
+                .suffix("x"),
         );
 
+        // Right side
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Session indicator
             if app.session.is_connected() {
-                ui.colored_label(
-                    egui::Color32::from_rgb(80, 200, 80),
-                    "● Online",
-                );
+                ui.colored_label(egui::Color32::from_rgb(80, 200, 80), "● Online");
+                ui.separator();
             }
             ui.label(
                 egui::RichText::new("JamHub")

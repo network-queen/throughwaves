@@ -287,11 +287,20 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
-        // Scroll wheel for zoom
+        // Cmd+scroll to zoom, plain scroll to horizontal scroll
         ui.input(|i| {
-            let scroll = i.smooth_scroll_delta.y;
-            if scroll != 0.0 {
-                app.zoom = (app.zoom * (1.0 + scroll * 0.002)).clamp(0.1, 10.0);
+            if i.modifiers.command {
+                // Cmd + scroll wheel = zoom
+                let scroll = i.smooth_scroll_delta.y;
+                if scroll != 0.0 {
+                    app.zoom = (app.zoom * (1.0 + scroll * 0.005)).clamp(0.1, 10.0);
+                }
+            } else {
+                // Plain scroll = horizontal scroll
+                let scroll_x = i.smooth_scroll_delta.x - i.smooth_scroll_delta.y;
+                if scroll_x != 0.0 {
+                    app.scroll_x = (app.scroll_x - scroll_x).max(0.0);
+                }
             }
         });
 
@@ -334,10 +343,18 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
             if is_bar {
                 let bar = (b as f64 / beats_per_bar) as i32 + 1;
+                let bar_time_sec = b as f64 * seconds_per_beat;
+                let bar_min = (bar_time_sec / 60.0) as u32;
+                let bar_sec = bar_time_sec % 60.0;
+                let time_label = if bar_min > 0 {
+                    format!("Bar {bar}  {bar_min}:{bar_sec:04.1}")
+                } else {
+                    format!("Bar {bar}  {bar_sec:.1}s")
+                };
                 painter.text(
                     egui::pos2(x + 4.0, rect.min.y + 4.0),
                     egui::Align2::LEFT_TOP,
-                    format!("{bar}"),
+                    time_label,
                     egui::FontId::proportional(11.0),
                     egui::Color32::from_rgb(160, 160, 170),
                 );
@@ -463,12 +480,19 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             ));
         }
 
-        // Auto-scroll playhead into view during playback
+        // Gentle auto-scroll: keep playhead visible during playback
         if app.transport_state() == jamhub_model::TransportState::Playing {
-            let view_right = app.scroll_x + available.x * 0.8;
             let playhead_px = pos_sec as f32 * pixels_per_second;
-            if playhead_px > view_right {
-                app.scroll_x = playhead_px - available.x * 0.2;
+            let view_left = app.scroll_x;
+            let view_right = app.scroll_x + available.x;
+
+            // Only scroll if playhead goes past 80% of the visible area
+            if playhead_px > view_left + available.x * 0.8 {
+                // Smooth scroll: move view so playhead is at 20% from left
+                let target = playhead_px - available.x * 0.2;
+                app.scroll_x += (target - app.scroll_x) * 0.1; // lerp for smoothness
+            } else if playhead_px < view_left {
+                app.scroll_x = (playhead_px - available.x * 0.1).max(0.0);
             }
         }
     });
