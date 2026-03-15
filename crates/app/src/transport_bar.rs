@@ -73,6 +73,15 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
+        // Automation toggle
+        let auto_bg = if app.show_automation { egui::Color32::from_rgb(140, 100, 20) } else { egui::Color32::from_rgb(45, 45, 50) };
+        if ui.add_sized(toggle_size, egui::Button::new(egui::RichText::new("A").small().color(egui::Color32::WHITE)).fill(auto_bg))
+            .on_hover_text("Show automation lanes [A]\nClick on timeline to add control points\nAutomate volume, pan, or mute over time").clicked() {
+            app.show_automation = !app.show_automation;
+        }
+
+        ui.separator();
+
         // === TIME DISPLAY (big, readable) ===
         let pos = app.position_samples();
         let sr = app.sample_rate();

@@ -72,6 +72,29 @@ pub struct DawApp {
     pub resizing_track: Option<usize>,
     pub fx_browser: fx_browser::FxBrowser,
     pub audio_settings: audio_settings::AudioSettings,
+    // Time selection range (for export selection, loop-to-selection, delete range)
+    pub selection_start: Option<u64>,
+    pub selection_end: Option<u64>,
+    pub selecting: bool,
+    // Automation editing
+    pub show_automation: bool,
+    pub automation_param: jamhub_model::AutomationParam,
+    // Clip trim state
+    pub trimming_clip: Option<ClipTrimState>,
+}
+
+pub struct ClipTrimState {
+    pub track_idx: usize,
+    pub clip_idx: usize,
+    pub edge: TrimEdge,
+    pub original_start: u64,
+    pub original_duration: u64,
+}
+
+#[derive(PartialEq)]
+pub enum TrimEdge {
+    Left,
+    Right,
 }
 
 pub struct ClipDragState {
@@ -170,6 +193,12 @@ impl DawApp {
             resizing_track: None,
             fx_browser: fx_browser::FxBrowser::default(),
             audio_settings: audio_settings::AudioSettings::default(),
+            selection_start: None,
+            selection_end: None,
+            selecting: false,
+            show_automation: false,
+            automation_param: jamhub_model::AutomationParam::Volume,
+            trimming_clip: None,
         }
     }
 
@@ -822,6 +851,17 @@ impl eframe::App for DawApp {
             if i.key_pressed(egui::Key::F) && !i.modifiers.command {
                 actions.push("fx_browser".into());
             }
+            // A for automation toggle
+            if i.key_pressed(egui::Key::A) && !i.modifiers.command {
+                actions.push("toggle_automation".into());
+            }
+            // Left/Right arrows to nudge selected clip
+            if i.key_pressed(egui::Key::ArrowLeft) && !i.modifiers.command && i.modifiers.alt {
+                actions.push("nudge_left".into());
+            }
+            if i.key_pressed(egui::Key::ArrowRight) && !i.modifiers.command && i.modifiers.alt {
+                actions.push("nudge_right".into());
+            }
         });
 
         for action in &actions {
@@ -924,6 +964,67 @@ impl eframe::App for DawApp {
                 }
                 "fx_browser" => {
                     self.fx_browser.show = !self.fx_browser.show;
+                }
+                "toggle_automation" => {
+                    self.show_automation = !self.show_automation;
+                    if self.show_automation {
+                        self.set_status("Automation visible — click timeline to add points");
+                    } else {
+                        self.set_status("Automation hidden");
+                    }
+                }
+                "nudge_left" => {
+                    if let Some((ti, ci)) = self.selected_clip {
+                        if ti < self.project.tracks.len()
+                            && ci < self.project.tracks[ti].clips.len()
+                        {
+                            self.push_undo("Nudge clip");
+                            let sr = self.sample_rate() as f64;
+                            let nudge = match self.snap_mode {
+                                SnapMode::Off => 1u64, // 1 sample
+                                SnapMode::HalfBeat => {
+                                    (self.project.tempo.samples_per_beat(sr) / 2.0) as u64
+                                }
+                                SnapMode::Beat => {
+                                    self.project.tempo.samples_per_beat(sr) as u64
+                                }
+                                SnapMode::Bar => {
+                                    (self.project.tempo.samples_per_beat(sr)
+                                        * self.project.time_signature.numerator as f64)
+                                        as u64
+                                }
+                            };
+                            let clip = &mut self.project.tracks[ti].clips[ci];
+                            clip.start_sample = clip.start_sample.saturating_sub(nudge);
+                            self.sync_project();
+                        }
+                    }
+                }
+                "nudge_right" => {
+                    if let Some((ti, ci)) = self.selected_clip {
+                        if ti < self.project.tracks.len()
+                            && ci < self.project.tracks[ti].clips.len()
+                        {
+                            self.push_undo("Nudge clip");
+                            let sr = self.sample_rate() as f64;
+                            let nudge = match self.snap_mode {
+                                SnapMode::Off => 1u64,
+                                SnapMode::HalfBeat => {
+                                    (self.project.tempo.samples_per_beat(sr) / 2.0) as u64
+                                }
+                                SnapMode::Beat => {
+                                    self.project.tempo.samples_per_beat(sr) as u64
+                                }
+                                SnapMode::Bar => {
+                                    (self.project.tempo.samples_per_beat(sr)
+                                        * self.project.time_signature.numerator as f64)
+                                        as u64
+                                }
+                            };
+                            self.project.tracks[ti].clips[ci].start_sample += nudge;
+                            self.sync_project();
+                        }
+                    }
                 }
                 a if a.starts_with("select_track_") => {
                     if let Ok(idx) = a[13..].parse::<usize>() {

@@ -526,30 +526,174 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
-        // Clip dragging (horizontal + vertical for cross-track moves)
+        // Clip dragging / edge trimming / selection range
         if response.drag_started_by(egui::PointerButton::Primary) {
             if let Some(pos) = response.interact_pointer_pos {
-                let mut drag_target: Option<(usize, usize, u64)> = None;
+                let edge_zone = 8.0; // pixels from edge for trim detection
+                let mut action_taken = false;
+
+                // Check for edge trim first (higher priority than drag)
                 for &(ti, ci, _, cr) in &clip_rects {
-                    if cr.contains(pos) {
-                        drag_target =
-                            Some((ti, ci, app.project.tracks[ti].clips[ci].start_sample));
+                    if !cr.contains(pos) {
+                        continue;
+                    }
+
+                    let left_edge = (pos.x - cr.left()).abs() < edge_zone;
+                    let right_edge = (pos.x - cr.right()).abs() < edge_zone;
+
+                    if left_edge || right_edge {
+                        let orig_start = app.project.tracks[ti].clips[ci].start_sample;
+                        let orig_dur = app.project.tracks[ti].clips[ci].duration_samples;
+                        app.push_undo("Trim clip");
+                        app.trimming_clip = Some(crate::ClipTrimState {
+                            track_idx: ti,
+                            clip_idx: ci,
+                            edge: if left_edge {
+                                crate::TrimEdge::Left
+                            } else {
+                                crate::TrimEdge::Right
+                            },
+                            original_start: orig_start,
+                            original_duration: orig_dur,
+                        });
+                        action_taken = true;
+                        break;
                     }
                 }
-                if let Some((ti, ci, orig)) = drag_target {
-                    app.push_undo("Move clip");
-                    app.dragging_clip = Some(crate::ClipDragState {
-                        track_idx: ti,
-                        clip_idx: ci,
-                        start_x: pos.x,
-                        original_start_sample: orig,
-                    });
+
+                // If not trimming, check for automation point adding
+                if !action_taken && app.show_automation {
+                    if let Some(ti) = track_at_y(app, pos.y, tracks_y_start) {
+                        let x_offset = pos.x - rect.min.x + app.scroll_x;
+                        let sample = (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
+                        let sample = app.snap_position(sample);
+
+                        // Calculate value from Y position within track
+                        let offsets = track_y_offsets(app);
+                        let track_top = tracks_y_start + offsets[ti];
+                        let t_h = track_height(&app.project.tracks[ti]);
+                        let rel_y = (pos.y - track_top) / t_h;
+                        let param = app.automation_param;
+                        let (min_val, max_val) = param.range();
+                        let value = max_val - rel_y * (max_val - min_val);
+                        let value = value.clamp(min_val, max_val);
+
+                        // Add or update automation point
+                        app.push_undo("Add automation point");
+                        let sr = app.sample_rate();
+                        let lane = app.project.tracks[ti]
+                            .automation
+                            .iter_mut()
+                            .find(|l| l.parameter == param);
+
+                        if let Some(lane) = lane {
+                            let min_dist = sr as u64 / 10;
+                            lane.points.retain(|p| {
+                                (p.sample as i64 - sample as i64).unsigned_abs() > min_dist
+                            });
+                            lane.points.push(jamhub_model::AutomationPoint { sample, value });
+                            lane.points.sort_by_key(|p| p.sample);
+                        } else {
+                            app.project.tracks[ti].automation.push(
+                                jamhub_model::AutomationLane {
+                                    parameter: param,
+                                    points: vec![jamhub_model::AutomationPoint { sample, value }],
+                                    visible: true,
+                                },
+                            );
+                        }
+                        app.sync_project();
+                        action_taken = true;
+                    }
+                }
+
+                // If not trimming or automation, try clip drag
+                if !action_taken {
+                    let mut drag_target: Option<(usize, usize, u64)> = None;
+                    for &(ti, ci, _, cr) in &clip_rects {
+                        if cr.contains(pos) {
+                            drag_target = Some((
+                                ti,
+                                ci,
+                                app.project.tracks[ti].clips[ci].start_sample,
+                            ));
+                        }
+                    }
+                    if let Some((ti, ci, orig)) = drag_target {
+                        app.push_undo("Move clip");
+                        app.dragging_clip = Some(crate::ClipDragState {
+                            track_idx: ti,
+                            clip_idx: ci,
+                            start_x: pos.x,
+                            original_start_sample: orig,
+                        });
+                        action_taken = true;
+                    }
+                }
+
+                // If nothing else, start a selection range
+                if !action_taken {
+                    let x_offset = pos.x - rect.min.x + app.scroll_x;
+                    let sample =
+                        (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
+                    app.selection_start = Some(app.snap_position(sample));
+                    app.selection_end = app.selection_start;
+                    app.selecting = true;
                 }
             }
         }
 
         if response.dragged_by(egui::PointerButton::Primary) {
-            if let Some(ref drag) = app.dragging_clip {
+            // Handle clip trim dragging
+            if let Some(ref trim) = app.trimming_clip {
+                if let Some(pos) = response.interact_pointer_pos {
+                    let x_offset = pos.x - rect.min.x + app.scroll_x;
+                    let sample = (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
+                    let sample = app.snap_position(sample);
+                    let ti = trim.track_idx;
+                    let ci = trim.clip_idx;
+                    let orig_start = trim.original_start;
+                    let orig_dur = trim.original_duration;
+                    let orig_end = orig_start + orig_dur;
+
+                    if ti < app.project.tracks.len()
+                        && ci < app.project.tracks[ti].clips.len()
+                    {
+                        match trim.edge {
+                            crate::TrimEdge::Left => {
+                                // Move start forward, reduce duration
+                                let new_start = sample.min(orig_end.saturating_sub(256));
+                                let new_start = new_start.max(0);
+                                app.project.tracks[ti].clips[ci].start_sample = new_start;
+                                if new_start < orig_end {
+                                    app.project.tracks[ti].clips[ci].duration_samples =
+                                        orig_end - new_start;
+                                }
+                            }
+                            crate::TrimEdge::Right => {
+                                // Keep start, change duration
+                                let new_end = sample.max(orig_start + 256);
+                                app.project.tracks[ti].clips[ci].duration_samples =
+                                    new_end - orig_start;
+                            }
+                        }
+                    }
+
+                    // Show trim cursor
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                }
+            }
+            // Handle selection range dragging
+            else if app.selecting {
+                if let Some(pos) = response.interact_pointer_pos {
+                    let x_offset = pos.x - rect.min.x + app.scroll_x;
+                    let sample =
+                        (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
+                    app.selection_end = Some(app.snap_position(sample));
+                }
+            }
+            // Handle clip dragging
+            else if let Some(ref drag) = app.dragging_clip {
                 if let Some(pos) = response.interact_pointer_pos {
                     // Horizontal movement (time)
                     let dx = pos.x - drag.start_x;
@@ -595,6 +739,27 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             if app.dragging_clip.is_some() {
                 app.dragging_clip = None;
                 app.sync_project();
+            }
+            if app.trimming_clip.is_some() {
+                app.trimming_clip = None;
+                app.sync_project();
+            }
+            if app.selecting {
+                app.selecting = false;
+                // Normalize selection so start < end
+                if let (Some(s), Some(e)) = (app.selection_start, app.selection_end) {
+                    if s > e {
+                        app.selection_start = Some(e);
+                        app.selection_end = Some(s);
+                    }
+                    // If selection is tiny (click, not drag), clear it
+                    if let (Some(s2), Some(e2)) = (app.selection_start, app.selection_end) {
+                        if e2.saturating_sub(s2) < 100 {
+                            app.selection_start = None;
+                            app.selection_end = None;
+                        }
+                    }
+                }
             }
         }
 
@@ -840,6 +1005,110 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         [egui::pos2(lx, rect.min.y), egui::pos2(lx, rect.max.y)],
                         egui::Stroke::new(1.5, egui::Color32::from_rgb(80, 130, 220)),
                     );
+                }
+            }
+        }
+
+        // Selection range
+        if let (Some(sel_s), Some(sel_e)) = (app.selection_start, app.selection_end) {
+            let s1 = sel_s.min(sel_e);
+            let s2 = sel_s.max(sel_e);
+            let sx1 = rect.min.x + (s1 as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+            let sx2 = rect.min.x + (s2 as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+            let sel_rect = egui::Rect::from_min_max(
+                egui::pos2(sx1.max(rect.min.x), rect.min.y),
+                egui::pos2(sx2.min(rect.max.x), rect.max.y),
+            );
+            painter.rect_filled(
+                sel_rect,
+                0.0,
+                egui::Color32::from_rgba_premultiplied(100, 150, 255, 30),
+            );
+            // Selection edges
+            for sx in [sx1, sx2] {
+                if sx >= rect.min.x && sx <= rect.max.x {
+                    painter.line_segment(
+                        [egui::pos2(sx, rect.min.y), egui::pos2(sx, rect.max.y)],
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255)),
+                    );
+                }
+            }
+        }
+
+        // Automation curves (when visible)
+        if app.show_automation {
+            let param = app.automation_param;
+            let (min_val, max_val) = param.range();
+
+            for (i, track) in app.project.tracks.iter().enumerate() {
+                let t_y = tracks_y_start + track_offsets[i];
+                let t_h = track_height(track);
+
+                if let Some(lane) = track.automation.iter().find(|l| l.parameter == param) {
+                    if lane.points.len() >= 2 {
+                        // Draw automation line
+                        let points: Vec<egui::Pos2> = lane
+                            .points
+                            .iter()
+                            .map(|p| {
+                                let x = rect.min.x
+                                    + (p.sample as f64 / sample_rate) as f32 * pixels_per_second
+                                    - app.scroll_x;
+                                let norm = (p.value - min_val) / (max_val - min_val);
+                                let y = t_y + t_h * (1.0 - norm);
+                                egui::pos2(x, y)
+                            })
+                            .collect();
+
+                        for w in points.windows(2) {
+                            painter.line_segment(
+                                [w[0], w[1]],
+                                egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 180, 50)),
+                            );
+                        }
+                    }
+
+                    // Draw automation points as dots
+                    for p in &lane.points {
+                        let x = rect.min.x
+                            + (p.sample as f64 / sample_rate) as f32 * pixels_per_second
+                            - app.scroll_x;
+                        let norm = (p.value - min_val) / (max_val - min_val);
+                        let y = t_y + t_h * (1.0 - norm);
+                        if x >= rect.min.x && x <= rect.max.x {
+                            painter.circle_filled(
+                                egui::pos2(x, y),
+                                4.0,
+                                egui::Color32::from_rgb(255, 200, 50),
+                            );
+                            painter.circle_stroke(
+                                egui::pos2(x, y),
+                                4.0,
+                                egui::Stroke::new(1.0, egui::Color32::WHITE),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Trim cursor hint — change cursor when hovering near clip edges
+        if app.trimming_clip.is_none() && app.dragging_clip.is_none() {
+            if let Some(hover_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                let edge_zone = 8.0;
+                let mut near_edge = false;
+                for &(_, _, _, cr) in &clip_rects {
+                    if cr.contains(hover_pos) {
+                        if (hover_pos.x - cr.left()).abs() < edge_zone
+                            || (hover_pos.x - cr.right()).abs() < edge_zone
+                        {
+                            near_edge = true;
+                            break;
+                        }
+                    }
+                }
+                if near_edge {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                 }
             }
         }
