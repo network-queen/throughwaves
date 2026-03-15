@@ -10,6 +10,17 @@ pub struct Project {
     pub time_signature: TimeSignature,
     pub sample_rate: u32,
     pub tracks: Vec<Track>,
+    #[serde(default)]
+    pub markers: Vec<Marker>,
+}
+
+/// A named position on the timeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Marker {
+    pub id: Uuid,
+    pub name: String,
+    pub sample: u64,
+    pub color: [u8; 3],
 }
 
 impl Default for Project {
@@ -20,6 +31,7 @@ impl Default for Project {
             time_signature: TimeSignature::default(),
             sample_rate: 44100,
             tracks: Vec::new(),
+            markers: Vec::new(),
         }
     }
 }
@@ -128,6 +140,10 @@ pub enum TrackEffect {
     HighPass { cutoff_hz: f32 },
     Delay { time_ms: f32, feedback: f32, mix: f32 },
     Reverb { decay: f32, mix: f32 },
+    Compressor { threshold_db: f32, ratio: f32, attack_ms: f32, release_ms: f32 },
+    EqBand { freq_hz: f32, gain_db: f32, q: f32 },
+    Chorus { rate_hz: f32, depth: f32, mix: f32 },
+    Distortion { drive: f32, mix: f32 },
 }
 
 impl TrackEffect {
@@ -138,6 +154,10 @@ impl TrackEffect {
             TrackEffect::HighPass { .. } => "High Pass",
             TrackEffect::Delay { .. } => "Delay",
             TrackEffect::Reverb { .. } => "Reverb",
+            TrackEffect::Compressor { .. } => "Compressor",
+            TrackEffect::EqBand { .. } => "EQ Band",
+            TrackEffect::Chorus { .. } => "Chorus",
+            TrackEffect::Distortion { .. } => "Distortion",
         }
     }
 }

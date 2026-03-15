@@ -1,5 +1,6 @@
 mod about;
 mod effects_panel;
+mod fx_browser;
 mod mixer_view;
 mod piano_roll;
 mod session_panel;
@@ -68,6 +69,7 @@ pub struct DawApp {
     pub show_about: bool,
     input_monitor: InputMonitor,
     pub resizing_track: Option<usize>,
+    pub fx_browser: fx_browser::FxBrowser,
 }
 
 pub struct ClipDragState {
@@ -164,6 +166,7 @@ impl DawApp {
             show_about: false,
             input_monitor: InputMonitor::new(),
             resizing_track: None,
+            fx_browser: fx_browser::FxBrowser::default(),
         }
     }
 
@@ -808,6 +811,14 @@ impl eframe::App for DawApp {
             if i.modifiers.command && i.key_pressed(egui::Key::B) {
                 actions.push("bounce".into());
             }
+            // Cmd+M for add marker
+            if i.modifiers.command && i.key_pressed(egui::Key::M) {
+                actions.push("add_marker".into());
+            }
+            // F for FX browser
+            if i.key_pressed(egui::Key::F) && !i.modifiers.command {
+                actions.push("fx_browser".into());
+            }
         });
 
         for action in &actions {
@@ -896,6 +907,20 @@ impl eframe::App for DawApp {
                 }
                 "bounce" => {
                     self.bounce_selected_track();
+                }
+                "add_marker" => {
+                    let pos = self.position_samples();
+                    let marker_num = self.project.markers.len() + 1;
+                    self.project.markers.push(jamhub_model::Marker {
+                        id: Uuid::new_v4(),
+                        name: format!("Marker {marker_num}"),
+                        sample: pos,
+                        color: [255, 200, 50],
+                    });
+                    self.set_status(&format!("Marker {} added", marker_num));
+                }
+                "fx_browser" => {
+                    self.fx_browser.show = !self.fx_browser.show;
                 }
                 a if a.starts_with("select_track_") => {
                     if let Ok(idx) = a[13..].parse::<usize>() {
@@ -1172,6 +1197,7 @@ impl eframe::App for DawApp {
         // Floating panels
         effects_panel::show(self, ctx);
         piano_roll::show(self, ctx);
+        fx_browser::show(self, ctx);
         about::show(self, ctx);
 
         // Main content

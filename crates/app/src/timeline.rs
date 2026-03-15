@@ -826,6 +826,38 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
+        // Markers on ruler
+        for marker in &app.project.markers {
+            let mx = rect.min.x + (marker.sample as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+            if mx >= rect.min.x && mx <= rect.max.x {
+                let mc = egui::Color32::from_rgb(marker.color[0], marker.color[1], marker.color[2]);
+                // Vertical line
+                painter.line_segment(
+                    [egui::pos2(mx, rect.min.y), egui::pos2(mx, rect.max.y)],
+                    egui::Stroke::new(1.0, mc.gamma_multiply(0.4)),
+                );
+                // Triangle on ruler
+                let tri = 5.0;
+                painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        egui::pos2(mx, ruler_rect.min.y),
+                        egui::pos2(mx - tri, ruler_rect.min.y + tri * 1.5),
+                        egui::pos2(mx + tri, ruler_rect.min.y + tri * 1.5),
+                    ],
+                    mc,
+                    egui::Stroke::NONE,
+                ));
+                // Label
+                painter.text(
+                    egui::pos2(mx + 3.0, ruler_rect.min.y + 1.0),
+                    egui::Align2::LEFT_TOP,
+                    &marker.name,
+                    egui::FontId::proportional(9.0),
+                    mc,
+                );
+            }
+        }
+
         // Playhead
         let pos = app.position_samples();
         let pos_sec = pos as f64 / sample_rate;

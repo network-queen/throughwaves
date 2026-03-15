@@ -9,6 +9,7 @@ mod mixer;
 mod project_io;
 mod recorder;
 mod transport;
+pub mod vst_host;
 pub mod waveform;
 
 pub use audio::AudioBackend;
@@ -21,4 +22,5 @@ pub use mixer::Mixer;
 pub use project_io::{load_project, save_project};
 pub use recorder::{resample, Recorder, RecordingResult};
 pub use transport::{EngineCommand, EngineHandle};
+pub use vst_host::{VstCategory, VstPluginInfo, VstScanner};
 pub use waveform::WaveformCache;
