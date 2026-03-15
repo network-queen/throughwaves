@@ -11,13 +11,22 @@ const PIXELS_PER_SECOND_BASE: f32 = 100.0;
 
 /// Compute the height of a track based on how many take lanes it needs.
 fn track_height(track: &jamhub_model::Track) -> f32 {
+    if !track.lanes_expanded {
+        return BASE_LANE_HEIGHT;
+    }
     let lanes = compute_take_lanes(track);
     let max_lane = lanes.iter().map(|&(_, l)| l).max().unwrap_or(0);
     if max_lane == 0 {
         BASE_LANE_HEIGHT
     } else {
-        BASE_LANE_HEIGHT + max_lane as f32 * TAKE_LANE_HEIGHT
+        // Each lane gets TAKE_LANE_HEIGHT, minimum BASE_LANE_HEIGHT
+        ((max_lane + 1) as f32 * TAKE_LANE_HEIGHT).max(BASE_LANE_HEIGHT)
     }
+}
+
+fn has_multiple_lanes(track: &jamhub_model::Track) -> bool {
+    let lanes = compute_take_lanes(track);
+    lanes.iter().map(|&(_, l)| l).max().unwrap_or(0) > 0
 }
 
 /// Compute the Y offset of each track (cumulative heights).
@@ -200,13 +209,31 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 }
                             });
 
-                            // Show take count if > 1 lane
+                            // Show take count and fold/unfold button
                             if num_lanes > 1 {
-                                ui.label(
-                                    egui::RichText::new(format!("{num_lanes} takes"))
-                                        .small()
-                                        .color(egui::Color32::from_rgb(180, 160, 100)),
-                                );
+                                ui.horizontal(|ui| {
+                                    let arrow = if track.lanes_expanded {
+                                        "▼"
+                                    } else {
+                                        "▶"
+                                    };
+                                    if ui
+                                        .small_button(arrow)
+                                        .on_hover_text(if track.lanes_expanded {
+                                            "Collapse take lanes"
+                                        } else {
+                                            "Expand take lanes"
+                                        })
+                                        .clicked()
+                                    {
+                                        track_actions.push(TrackAction::ToggleLanes(i));
+                                    }
+                                    ui.label(
+                                        egui::RichText::new(format!("{num_lanes} takes"))
+                                            .small()
+                                            .color(egui::Color32::from_rgb(180, 160, 100)),
+                                    );
+                                });
                             }
 
                             ui.horizontal(|ui| {
@@ -287,6 +314,10 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         }
                         app.renaming_track = None;
                     }
+                    TrackAction::ToggleLanes(i) => {
+                        app.project.tracks[i].lanes_expanded =
+                            !app.project.tracks[i].lanes_expanded;
+                    }
                 }
             }
 
@@ -325,11 +356,17 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         let clip_rects: Vec<(usize, usize, usize, egui::Rect)> = {
             let mut rects = Vec::new();
             for ti in 0..app.project.tracks.len() {
+                let expanded = app.project.tracks[ti].lanes_expanded;
                 let lanes = compute_take_lanes(&app.project.tracks[ti]);
                 for (ci, lane) in lanes {
+                    // When collapsed, skip muted clips and put active ones in lane 0
+                    if !expanded && app.project.tracks[ti].clips[ci].muted {
+                        continue;
+                    }
+                    let draw_lane = if expanded { lane } else { 0 };
                     let cr = make_clip_rect(
                         &app.project.tracks[ti].clips[ci],
-                        lane,
+                        draw_lane,
                         tracks_y_start + track_offsets[ti],
                         sample_rate,
                         pixels_per_second,
@@ -652,10 +689,10 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 egui::Stroke::new(0.5, egui::Color32::from_rgb(50, 50, 58)),
             );
 
-            // Take lane separators
+            // Take lane separators (only when expanded)
             let take_lanes = compute_take_lanes(track);
             let num_lanes = take_lanes.iter().map(|&(_, l)| l).max().unwrap_or(0) + 1;
-            if num_lanes > 1 {
+            if num_lanes > 1 && track.lanes_expanded {
                 for lane in 1..num_lanes {
                     let ly = t_y + lane as f32 * TAKE_LANE_HEIGHT;
                     painter.line_segment(
@@ -683,7 +720,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             // Draw clips in their take lanes
             for &(ci, lane) in &take_lanes {
                 let clip = &track.clips[ci];
-                let cr = make_clip_rect(&track.clips[ci], lane, tracks_y_start + track_offsets[i], sample_rate, pixels_per_second, app.scroll_x, rect.min.x);
+
+                // When collapsed, only show active (non-muted) clips, all in lane 0
+                let draw_lane = if track.lanes_expanded { lane } else { 0 };
+                if !track.lanes_expanded && clip.muted {
+                    continue; // hide inactive takes when collapsed
+                }
+
+                let cr = make_clip_rect(&track.clips[ci], draw_lane, tracks_y_start + track_offsets[i], sample_rate, pixels_per_second, app.scroll_x, rect.min.x);
 
                 if cr.right() < rect.min.x || cr.left() > rect.max.x {
                     continue;
@@ -918,4 +962,5 @@ enum TrackAction {
     Duplicate(usize),
     StartRename(usize),
     FinishRename(usize, String),
+    ToggleLanes(usize),
 }

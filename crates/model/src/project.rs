@@ -39,6 +39,7 @@ impl Project {
             armed: false,
             color: random_track_color(),
             effects: Vec::new(),
+            lanes_expanded: false,
         });
         id
     }
@@ -58,6 +59,9 @@ pub struct Track {
     pub color: [u8; 3],
     #[serde(default)]
     pub effects: Vec<TrackEffect>,
+    /// Whether take lanes are expanded (showing all takes) or collapsed (showing only active)
+    #[serde(default)]
+    pub lanes_expanded: bool,
 }
 
 /// Effect types that can be applied to a track.
