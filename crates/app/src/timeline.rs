@@ -430,6 +430,35 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.sync_project();
                         ui.close_menu();
                     }
+                    ui.separator();
+                    ui.menu_button("Process", |ui| {
+                        if ui.button("Normalize").on_hover_text("Normalize peak to 0dB").clicked() {
+                            app.selected_clip = Some((ti, ci));
+                            app.normalize_clip();
+                            ui.close_menu();
+                        }
+                        if ui.button("Reverse").on_hover_text("Reverse audio").clicked() {
+                            app.selected_clip = Some((ti, ci));
+                            app.reverse_clip();
+                            ui.close_menu();
+                        }
+                        if ui.button("Fade In").on_hover_text("100ms smooth fade in").clicked() {
+                            app.selected_clip = Some((ti, ci));
+                            app.fade_in_clip();
+                            ui.close_menu();
+                        }
+                        if ui.button("Fade Out").on_hover_text("100ms smooth fade out").clicked() {
+                            app.selected_clip = Some((ti, ci));
+                            app.fade_out_clip();
+                            ui.close_menu();
+                        }
+                        if ui.button("Invert Phase").on_hover_text("Flip polarity (phase invert)").clicked() {
+                            app.selected_clip = Some((ti, ci));
+                            app.invert_clip();
+                            ui.close_menu();
+                        }
+                    });
+                    ui.separator();
                     if ui.button("Delete Clip").clicked() {
                         app.push_undo("Delete clip");
                         app.project.tracks[ti].clips.remove(ci);

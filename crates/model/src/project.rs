@@ -54,6 +54,9 @@ impl Project {
             lanes_expanded: false,
             custom_height: 0.0,
             automation: Vec::new(),
+            sends: Vec::new(),
+            group_id: None,
+            frozen: false,
         });
         id
     }
@@ -82,6 +85,23 @@ pub struct Track {
     /// Automation lanes for this track
     #[serde(default)]
     pub automation: Vec<AutomationLane>,
+    /// Send routing: send this track's audio to other tracks (for submixes/buses)
+    #[serde(default)]
+    pub sends: Vec<TrackSend>,
+    /// Group/folder ID — tracks with the same group_id belong together
+    #[serde(default)]
+    pub group_id: Option<Uuid>,
+    /// Frozen track — effects baked, original preserved, CPU saved
+    #[serde(default)]
+    pub frozen: bool,
+}
+
+/// A send routes audio from this track to another track at a given level.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackSend {
+    pub target_track_id: Uuid,
+    pub level: f32, // 0.0 to 1.0
+    pub pre_fader: bool,
 }
 
 /// An automation lane controls a parameter over time.

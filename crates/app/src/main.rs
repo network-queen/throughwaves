@@ -8,6 +8,7 @@ mod session_panel;
 mod timeline;
 mod transport_bar;
 mod undo;
+mod undo_panel;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -84,6 +85,7 @@ pub struct DawApp {
     // Live recording waveform
     live_rec_buffer_id: Option<uuid::Uuid>,
     live_rec_last_update: std::time::Instant,
+    pub show_undo_history: bool,
 }
 
 pub struct ClipTrimState {
@@ -204,6 +206,7 @@ impl DawApp {
             trimming_clip: None,
             live_rec_buffer_id: None,
             live_rec_last_update: std::time::Instant::now(),
+            show_undo_history: false,
         }
     }
 
@@ -684,6 +687,78 @@ impl DawApp {
                 Err(e) => self.set_status(&format!("Export failed: {e}")),
             }
         }
+    }
+
+    /// Apply an offline operation to the selected clip's audio buffer.
+    fn apply_clip_operation(&mut self, op_name: &str, op: fn(&mut Vec<f32>, u32)) {
+        let (ti, ci) = match self.selected_clip {
+            Some(tc) => tc,
+            None => {
+                self.set_status("No clip selected");
+                return;
+            }
+        };
+        if ti >= self.project.tracks.len()
+            || ci >= self.project.tracks[ti].clips.len()
+        {
+            return;
+        }
+        if let ClipSource::AudioBuffer { buffer_id } =
+            &self.project.tracks[ti].clips[ci].source
+        {
+            let buf_data = self.audio_buffers.get(buffer_id).cloned();
+            if let Some(mut buf) = buf_data {
+                self.push_undo(op_name);
+                let sr = self.sample_rate();
+                op(&mut buf, sr);
+
+                // Update everything
+                let new_id = Uuid::new_v4();
+                self.waveform_cache.insert(new_id, &buf);
+                self.send_command(EngineCommand::LoadAudioBuffer {
+                    id: new_id,
+                    samples: buf.clone(),
+                });
+                self.project.tracks[ti].clips[ci].duration_samples = buf.len() as u64;
+                self.project.tracks[ti].clips[ci].source =
+                    ClipSource::AudioBuffer { buffer_id: new_id };
+                self.audio_buffers.insert(new_id, buf);
+                self.sync_project();
+                self.set_status(&format!("{op_name} applied"));
+            }
+        }
+    }
+
+    pub fn reverse_clip(&mut self) {
+        self.apply_clip_operation("Reverse", |buf, _| {
+            jamhub_engine::clip_ops::reverse(buf);
+        });
+    }
+
+    pub fn normalize_clip(&mut self) {
+        self.apply_clip_operation("Normalize", |buf, _| {
+            jamhub_engine::clip_ops::normalize(buf);
+        });
+    }
+
+    pub fn fade_in_clip(&mut self) {
+        self.apply_clip_operation("Fade In", |buf, sr| {
+            let fade = (sr as f32 * 0.1) as usize; // 100ms fade
+            jamhub_engine::clip_ops::fade_in(buf, fade);
+        });
+    }
+
+    pub fn fade_out_clip(&mut self) {
+        self.apply_clip_operation("Fade Out", |buf, sr| {
+            let fade = (sr as f32 * 0.1) as usize;
+            jamhub_engine::clip_ops::fade_out(buf, fade);
+        });
+    }
+
+    pub fn invert_clip(&mut self) {
+        self.apply_clip_operation("Invert Phase", |buf, _| {
+            jamhub_engine::clip_ops::invert(buf);
+        });
     }
 
     pub fn open_import_dialog(&mut self) {
@@ -1173,6 +1248,11 @@ impl eframe::App for DawApp {
                         }
                         ui.close_menu();
                     }
+                    if ui.button("Undo History...").clicked() {
+                        self.show_undo_history = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("Split Clip at Playhead  S").clicked() {
                         self.split_clip_at_playhead();
                         ui.close_menu();
@@ -1373,6 +1453,7 @@ impl eframe::App for DawApp {
         piano_roll::show(self, ctx);
         fx_browser::show(self, ctx);
         audio_settings::show(self, ctx);
+        undo_panel::show(self, ctx);
         about::show(self, ctx);
 
         // Main content

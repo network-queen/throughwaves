@@ -1,6 +1,7 @@
 mod audio;
 pub mod audio_devices;
 mod audio_file;
+pub mod clip_ops;
 pub mod effects;
 mod export;
 mod input_monitor;
