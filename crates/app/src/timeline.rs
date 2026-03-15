@@ -436,28 +436,24 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         });
 
-        // Double-click on clip: move playhead to clip start
+        // Double-click anywhere: navigate playhead to that exact time point
         if response.double_clicked() {
             if let Some(pos) = response.interact_pointer_pos {
-                let mut dbl_clip = None;
+                let x_offset = pos.x - rect.min.x + app.scroll_x;
+                let seconds = x_offset as f64 / pixels_per_second as f64;
+                let sample_pos = (seconds * sample_rate) as u64;
+                let snapped = app.snap_position(sample_pos);
+                app.send_command(jamhub_engine::EngineCommand::SetPosition(snapped));
+
+                // Also select track/clip under cursor
+                if let Some(ti) = track_at_y(app, pos.y, tracks_y_start) {
+                    app.selected_track = Some(ti);
+                }
                 for &(ti, ci, _, cr) in &clip_rects {
                     if cr.contains(pos) {
-                        dbl_clip = Some((ti, ci));
+                        app.selected_clip = Some((ti, ci));
+                        app.selected_track = Some(ti);
                     }
-                }
-                if let Some((ti, ci)) = dbl_clip {
-                    let clip_start = app.project.tracks[ti].clips[ci].start_sample;
-                    app.send_command(jamhub_engine::EngineCommand::SetPosition(clip_start));
-                    app.selected_clip = Some((ti, ci));
-                    app.selected_track = Some(ti);
-                } else {
-                    // Double-click on empty: set playhead
-                    let x_offset = pos.x - rect.min.x + app.scroll_x;
-                    let seconds = x_offset as f64 / pixels_per_second as f64;
-                    let sample_pos = (seconds * sample_rate) as u64;
-                    app.send_command(jamhub_engine::EngineCommand::SetPosition(
-                        app.snap_to_beat(sample_pos),
-                    ));
                 }
             }
         }
@@ -506,7 +502,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     let x_offset = pos.x - rect.min.x + app.scroll_x;
                     let seconds = x_offset as f64 / pixels_per_second as f64;
                     let sample_pos = (seconds * sample_rate) as u64;
-                    let snapped = app.snap_to_beat(sample_pos);
+                    let snapped = app.snap_position(sample_pos);
                     app.send_command(jamhub_engine::EngineCommand::SetPosition(snapped));
                 }
             }
@@ -543,7 +539,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     let d_samples = (d_seconds * sample_rate) as i64;
                     let new_start =
                         (drag.original_start_sample as i64 + d_samples).max(0) as u64;
-                    let snapped = app.snap_to_beat(new_start);
+                    let snapped = app.snap_position(new_start);
 
                     if drag.track_idx < app.project.tracks.len()
                         && drag.clip_idx

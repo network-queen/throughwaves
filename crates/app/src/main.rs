@@ -55,7 +55,7 @@ pub struct DawApp {
     pub project_path: Option<PathBuf>,
     pub session: SessionPanel,
     pub metronome_enabled: bool,
-    pub snap_to_grid: bool,
+    pub snap_mode: SnapMode,
     // Clip dragging state
     pub dragging_clip: Option<ClipDragState>,
     pub show_effects: bool,
@@ -81,6 +81,34 @@ pub struct ClipDragState {
 pub enum View {
     Arrange,
     Mixer,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+pub enum SnapMode {
+    Off,        // Free positioning, sample-accurate
+    Beat,       // Snap to beats
+    Bar,        // Snap to bars
+    HalfBeat,   // Snap to half beats (8th notes in 4/4)
+}
+
+impl SnapMode {
+    pub fn label(&self) -> &str {
+        match self {
+            SnapMode::Off => "Free",
+            SnapMode::Beat => "Beat",
+            SnapMode::Bar => "Bar",
+            SnapMode::HalfBeat => "1/2 Beat",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            SnapMode::Off => SnapMode::HalfBeat,
+            SnapMode::HalfBeat => SnapMode::Beat,
+            SnapMode::Beat => SnapMode::Bar,
+            SnapMode::Bar => SnapMode::Off,
+        }
+    }
 }
 
 impl DawApp {
@@ -124,7 +152,7 @@ impl DawApp {
             project_path: None,
             session: SessionPanel::default(),
             metronome_enabled: false,
-            snap_to_grid: true,
+            snap_mode: SnapMode::Beat,
             dragging_clip: None,
             show_effects: false,
             loop_enabled: false,
@@ -648,14 +676,27 @@ impl DawApp {
     }
 
     /// Snap a sample position to the nearest beat.
-    pub fn snap_to_beat(&self, sample: u64) -> u64 {
-        if !self.snap_to_grid {
-            return sample;
-        }
+    /// Snap a sample position according to the current snap mode.
+    pub fn snap_position(&self, sample: u64) -> u64 {
         let sr = self.sample_rate() as f64;
         let spb = self.project.tempo.samples_per_beat(sr);
-        let beat = (sample as f64 / spb).round();
-        (beat * spb) as u64
+        match self.snap_mode {
+            SnapMode::Off => sample,
+            SnapMode::HalfBeat => {
+                let half = spb / 2.0;
+                let n = (sample as f64 / half).round();
+                (n * half) as u64
+            }
+            SnapMode::Beat => {
+                let n = (sample as f64 / spb).round();
+                (n * spb) as u64
+            }
+            SnapMode::Bar => {
+                let spbar = spb * self.project.time_signature.numerator as f64;
+                let n = (sample as f64 / spbar).round();
+                (n * spbar) as u64
+            }
+        }
     }
 }
 
@@ -747,6 +788,10 @@ impl eframe::App for DawApp {
             if i.modifiers.command && i.key_pressed(egui::Key::P) {
                 actions.push("piano_roll".into());
             }
+            // G for snap mode cycle
+            if i.key_pressed(egui::Key::G) && !i.modifiers.command {
+                actions.push("cycle_snap".into());
+            }
             // S for split clip
             if i.key_pressed(egui::Key::S) && !i.modifiers.command {
                 actions.push("split".into());
@@ -825,6 +870,10 @@ impl eframe::App for DawApp {
                 }
                 "piano_roll" => {
                     self.show_piano_roll = !self.show_piano_roll;
+                }
+                "cycle_snap" => {
+                    self.snap_mode = self.snap_mode.next();
+                    self.set_status(&format!("Snap: {}", self.snap_mode.label()));
                 }
                 "split" => {
                     self.split_clip_at_playhead();
@@ -994,11 +1043,11 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui
-                        .selectable_label(self.snap_to_grid, "Snap to Grid")
-                        .clicked()
-                    {
-                        self.snap_to_grid = !self.snap_to_grid;
+                    ui.label(egui::RichText::new("Snap Mode:").small().color(egui::Color32::GRAY));
+                    for mode in [SnapMode::Off, SnapMode::HalfBeat, SnapMode::Beat, SnapMode::Bar] {
+                        if ui.selectable_label(self.snap_mode == mode, mode.label()).clicked() {
+                            self.snap_mode = mode;
+                        }
                     }
                 });
                 ui.menu_button("Help", |ui| {
@@ -1034,8 +1083,9 @@ impl eframe::App for DawApp {
                         .small().color(egui::Color32::from_rgb(90, 90, 100)));
                     ui.label(egui::RichText::new("|").small().color(egui::Color32::from_rgb(50, 50, 60)));
 
-                    if self.snap_to_grid {
-                        ui.label(egui::RichText::new("SNAP").small().color(egui::Color32::from_rgb(100, 160, 220)));
+                    if self.snap_mode != SnapMode::Off {
+                        ui.label(egui::RichText::new(format!("SNAP: {}", self.snap_mode.label()))
+                            .small().color(egui::Color32::from_rgb(100, 160, 220)));
                         ui.label(egui::RichText::new("|").small().color(egui::Color32::from_rgb(50, 50, 60)));
                     }
 

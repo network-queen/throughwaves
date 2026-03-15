@@ -99,6 +99,20 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
+        // === SNAP MODE ===
+        let snap_label = format!("Snap: {}", app.snap_mode.label());
+        let snap_bg = if app.snap_mode != crate::SnapMode::Off {
+            egui::Color32::from_rgb(40, 60, 100)
+        } else {
+            egui::Color32::from_rgb(45, 45, 50)
+        };
+        if ui.add(egui::Button::new(egui::RichText::new(&snap_label).small().color(egui::Color32::WHITE)).fill(snap_bg))
+            .on_hover_text("Click to cycle snap mode [G]").clicked() {
+            app.snap_mode = app.snap_mode.next();
+        }
+
+        ui.separator();
+
         // === TEMPO & TIME SIG (compact) ===
         let mut bpm = app.project.tempo.bpm;
         if ui.add(egui::DragValue::new(&mut bpm).range(20.0..=300.0).speed(0.5).suffix(" bpm")).changed() {
