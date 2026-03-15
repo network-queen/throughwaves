@@ -2,6 +2,7 @@ mod about;
 mod audio_settings;
 mod effects_panel;
 mod fx_browser;
+mod midi_panel;
 mod mixer_view;
 mod piano_roll;
 mod session_panel;
@@ -153,6 +154,7 @@ pub struct DawApp {
     pub dirty: bool,
     // Color picker
     pub color_picker_track: Option<usize>,
+    pub midi_panel: midi_panel::MidiPanel,
 }
 
 pub struct ClipTrimState {
@@ -277,6 +279,7 @@ impl DawApp {
             clipboard_clips: Vec::new(),
             dirty: false,
             color_picker_track: None,
+            midi_panel: midi_panel::MidiPanel::default(),
         }
     }
 
@@ -1476,6 +1479,10 @@ impl eframe::App for DawApp {
                         self.show_piano_roll = true;
                         ui.close_menu();
                     }
+                    if ui.button("MIDI Input...").clicked() {
+                        self.midi_panel.show = true;
+                        ui.close_menu();
+                    }
                     if ui.button("Bounce Track     Cmd+B").clicked() {
                         self.bounce_selected_track();
                         ui.close_menu();
@@ -1647,6 +1654,7 @@ impl eframe::App for DawApp {
         piano_roll::show(self, ctx);
         fx_browser::show(self, ctx);
         audio_settings::show(self, ctx);
+        midi_panel::show(self, ctx);
         undo_panel::show(self, ctx);
         about::show(self, ctx);
 

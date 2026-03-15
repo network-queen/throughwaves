@@ -6,6 +6,7 @@ pub mod effects;
 mod export;
 mod input_monitor;
 pub mod levels;
+pub mod midi_input;
 mod metronome;
 mod mixer;
 mod project_io;

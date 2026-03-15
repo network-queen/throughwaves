@@ -12,6 +12,8 @@ pub struct Project {
     pub tracks: Vec<Track>,
     #[serde(default)]
     pub markers: Vec<Marker>,
+    #[serde(default)]
+    pub tempo_map: crate::time::TempoMap,
 }
 
 /// A named position on the timeline.
@@ -32,6 +34,7 @@ impl Default for Project {
             sample_rate: 44100,
             tracks: Vec::new(),
             markers: Vec::new(),
+            tempo_map: crate::time::TempoMap::default(),
         }
     }
 }
