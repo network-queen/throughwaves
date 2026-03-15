@@ -18,6 +18,14 @@ impl AudioBackend {
         let supported = device
             .default_output_config()
             .map_err(|e| format!("Failed to get default output config: {e}"))?;
+
+        println!(
+            "Audio output: {:?}, {} channels, {}Hz",
+            device.name().unwrap_or_default(),
+            supported.channels(),
+            supported.sample_rate().0,
+        );
+
         let config: StreamConfig = supported.into();
 
         Ok(Self {
@@ -37,15 +45,15 @@ impl AudioBackend {
     }
 
     pub fn start(&mut self, audio_rx: Receiver<Vec<f32>>) -> Result<(), String> {
-        let channels = self.config.channels as usize;
-        let mut buffer: Vec<f32> = Vec::new();
+        // Pre-allocate a ring buffer large enough for smooth playback
+        let mut buffer: Vec<f32> = Vec::with_capacity(65536);
 
         let stream = self
             .device
             .build_output_stream(
                 &self.config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    // Drain available buffers into our local buffer
+                    // Drain all available blocks into our local buffer
                     while let Ok(chunk) = audio_rx.try_recv() {
                         buffer.extend_from_slice(&chunk);
                     }
@@ -55,7 +63,7 @@ impl AudioBackend {
                         data[..to_copy].copy_from_slice(&buffer[..to_copy]);
                         buffer.drain(..to_copy);
                     }
-                    // Fill remaining with silence
+                    // Fill remaining with silence (buffer underrun)
                     for sample in data[to_copy..].iter_mut() {
                         *sample = 0.0;
                     }
@@ -67,7 +75,9 @@ impl AudioBackend {
             )
             .map_err(|e| format!("Failed to build output stream: {e}"))?;
 
-        stream.play().map_err(|e| format!("Failed to play stream: {e}"))?;
+        stream
+            .play()
+            .map_err(|e| format!("Failed to play stream: {e}"))?;
         self._stream = Some(stream);
         Ok(())
     }

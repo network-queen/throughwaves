@@ -41,14 +41,26 @@ pub struct DawApp {
     pub zoom: f32,
     pub scroll_x: f32,
     recorder: Recorder,
+    pub is_recording: bool,
     pub status_message: Option<(String, std::time::Instant)>,
     pub selected_track: Option<usize>,
+    pub selected_clip: Option<(usize, usize)>, // (track_idx, clip_idx)
     pub waveform_cache: WaveformCache,
     undo_manager: UndoManager,
-    /// Keeps a copy of audio buffers for save/load
     audio_buffers: HashMap<Uuid, Vec<f32>>,
     pub project_path: Option<PathBuf>,
     pub session: SessionPanel,
+    pub metronome_enabled: bool,
+    pub snap_to_grid: bool,
+    // Clip dragging state
+    pub dragging_clip: Option<ClipDragState>,
+}
+
+pub struct ClipDragState {
+    pub track_idx: usize,
+    pub clip_idx: usize,
+    pub start_x: f32,
+    pub original_start_sample: u64,
 }
 
 #[derive(PartialEq)]
@@ -87,13 +99,18 @@ impl DawApp {
             zoom: 1.0,
             scroll_x: 0.0,
             recorder: Recorder::new(),
+            is_recording: false,
             status_message: None,
             selected_track: Some(0),
+            selected_clip: None,
             waveform_cache: WaveformCache::new(),
             undo_manager: UndoManager::new(),
             audio_buffers: HashMap::new(),
             project_path: None,
             session: SessionPanel::default(),
+            metronome_enabled: false,
+            snap_to_grid: true,
+            dragging_clip: None,
         }
     }
 
@@ -178,10 +195,7 @@ impl DawApp {
                     source: ClipSource::AudioBuffer { buffer_id },
                 };
 
-                // Build waveform peaks for display
                 self.waveform_cache.insert(buffer_id, &data.samples);
-
-                // Store buffer copy for save/load
                 self.audio_buffers.insert(buffer_id, data.samples.clone());
 
                 self.project.tracks[track_idx].clips.push(clip);
@@ -200,7 +214,8 @@ impl DawApp {
     }
 
     pub fn toggle_recording(&mut self) {
-        if self.recorder.is_recording() {
+        if self.is_recording {
+            self.is_recording = false;
             let samples = self.recorder.stop();
             if samples.is_empty() {
                 self.set_status("Recording was empty");
@@ -248,12 +263,54 @@ impl DawApp {
 
             match self.recorder.start() {
                 Ok(()) => {
+                    self.is_recording = true;
                     self.send_command(EngineCommand::Play);
                     self.set_status("Recording...");
                 }
                 Err(e) => {
                     self.set_status(&format!("Record failed: {e}"));
                 }
+            }
+        }
+    }
+
+    pub fn delete_selected_clip(&mut self) {
+        if let Some((track_idx, clip_idx)) = self.selected_clip {
+            if track_idx < self.project.tracks.len()
+                && clip_idx < self.project.tracks[track_idx].clips.len()
+            {
+                self.push_undo("Delete clip");
+                self.project.tracks[track_idx].clips.remove(clip_idx);
+                self.selected_clip = None;
+                self.sync_project();
+                self.set_status("Clip deleted");
+            }
+        }
+    }
+
+    pub fn delete_selected_track(&mut self) {
+        if let Some(track_idx) = self.selected_track {
+            if track_idx < self.project.tracks.len() && self.project.tracks.len() > 1 {
+                self.push_undo("Delete track");
+                self.project.tracks.remove(track_idx);
+                self.selected_track = Some(track_idx.min(self.project.tracks.len() - 1));
+                self.selected_clip = None;
+                self.sync_project();
+                self.set_status("Track deleted");
+            }
+        }
+    }
+
+    pub fn duplicate_selected_track(&mut self) {
+        if let Some(track_idx) = self.selected_track {
+            if track_idx < self.project.tracks.len() {
+                self.push_undo("Duplicate track");
+                let mut new_track = self.project.tracks[track_idx].clone();
+                new_track.id = Uuid::new_v4();
+                new_track.name = format!("{} (copy)", new_track.name);
+                self.project.tracks.insert(track_idx + 1, new_track);
+                self.selected_track = Some(track_idx + 1);
+                self.sync_project();
             }
         }
     }
@@ -297,7 +354,6 @@ impl DawApp {
         {
             match jamhub_engine::load_project(&dir) {
                 Ok((project, buffers)) => {
-                    // Load all audio buffers into engine and waveform cache
                     for (id, samples) in &buffers {
                         self.waveform_cache.insert(*id, samples);
                         self.send_command(EngineCommand::LoadAudioBuffer {
@@ -315,11 +371,22 @@ impl DawApp {
             }
         }
     }
+
+    /// Snap a sample position to the nearest beat.
+    pub fn snap_to_beat(&self, sample: u64) -> u64 {
+        if !self.snap_to_grid {
+            return sample;
+        }
+        let sr = self.sample_rate() as f64;
+        let spb = self.project.tempo.samples_per_beat(sr);
+        let beat = (sample as f64 / spb).round();
+        (beat * spb) as u64
+    }
 }
 
 impl eframe::App for DawApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if self.transport_state() == TransportState::Playing {
+        if self.transport_state() == TransportState::Playing || self.is_recording {
             ctx.request_repaint();
         }
 
@@ -342,43 +409,72 @@ impl eframe::App for DawApp {
         }
 
         // Keyboard shortcuts
-        let mut do_undo = false;
-        let mut do_redo = false;
+        let mut actions: Vec<&str> = Vec::new();
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Space) {
-                if self.transport_state() == TransportState::Playing {
-                    self.send_command(EngineCommand::Stop);
-                } else {
-                    self.send_command(EngineCommand::Play);
-                }
+                actions.push("toggle_play");
             }
             if i.modifiers.command && i.key_pressed(egui::Key::Z) {
                 if i.modifiers.shift {
-                    do_redo = true;
+                    actions.push("redo");
                 } else {
-                    do_undo = true;
+                    actions.push("undo");
                 }
             }
             if i.modifiers.command && i.key_pressed(egui::Key::S) {
-                // save handled below
+                actions.push("save");
+            }
+            if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
+                actions.push("delete");
+            }
+            if i.key_pressed(egui::Key::Home) {
+                actions.push("rewind");
+            }
+            if i.key_pressed(egui::Key::R) && !i.modifiers.command {
+                actions.push("record");
+            }
+            if i.key_pressed(egui::Key::M) && !i.modifiers.command {
+                actions.push("metronome");
+            }
+            if i.modifiers.command && i.key_pressed(egui::Key::D) {
+                actions.push("duplicate_track");
             }
         });
-        if do_undo {
-            self.undo();
-        }
-        if do_redo {
-            self.redo();
-        }
 
-        // Cmd+S save
-        let mut do_save = false;
-        ctx.input(|i| {
-            if i.modifiers.command && i.key_pressed(egui::Key::S) {
-                do_save = true;
+        for action in actions {
+            match action {
+                "toggle_play" => {
+                    if self.transport_state() == TransportState::Playing {
+                        self.send_command(EngineCommand::Stop);
+                    } else {
+                        self.send_command(EngineCommand::Play);
+                    }
+                }
+                "undo" => self.undo(),
+                "redo" => self.redo(),
+                "save" => self.save_project(),
+                "delete" => {
+                    if self.selected_clip.is_some() {
+                        self.delete_selected_clip();
+                    } else {
+                        self.delete_selected_track();
+                    }
+                }
+                "rewind" => {
+                    self.send_command(EngineCommand::SetPosition(0));
+                }
+                "record" => {
+                    self.toggle_recording();
+                }
+                "metronome" => {
+                    self.metronome_enabled = !self.metronome_enabled;
+                    self.send_command(EngineCommand::SetMetronome(self.metronome_enabled));
+                }
+                "duplicate_track" => {
+                    self.duplicate_selected_track();
+                }
+                _ => {}
             }
-        });
-        if do_save {
-            self.save_project();
         }
 
         // Top menu bar
@@ -393,11 +489,11 @@ impl eframe::App for DawApp {
                         self.sync_project();
                         ui.close_menu();
                     }
-                    if ui.button("Open Project...").clicked() {
+                    if ui.button("Open Project...        Cmd+O").clicked() {
                         ui.close_menu();
                         self.load_project_dialog();
                     }
-                    if ui.button("Save Project").clicked() {
+                    if ui.button("Save Project           Cmd+S").clicked() {
                         ui.close_menu();
                         self.save_project();
                     }
@@ -411,8 +507,8 @@ impl eframe::App for DawApp {
                     let undo_label = self
                         .undo_manager
                         .undo_label()
-                        .map(|l| format!("Undo {l}"))
-                        .unwrap_or_else(|| "Undo".into());
+                        .map(|l| format!("Undo {l}              Cmd+Z"))
+                        .unwrap_or_else(|| "Undo                   Cmd+Z".into());
                     if ui
                         .add_enabled(self.undo_manager.can_undo(), egui::Button::new(undo_label))
                         .clicked()
@@ -423,8 +519,8 @@ impl eframe::App for DawApp {
                     let redo_label = self
                         .undo_manager
                         .redo_label()
-                        .map(|l| format!("Redo {l}"))
-                        .unwrap_or_else(|| "Redo".into());
+                        .map(|l| format!("Redo {l}        Cmd+Shift+Z"))
+                        .unwrap_or_else(|| "Redo             Cmd+Shift+Z".into());
                     if ui
                         .add_enabled(self.undo_manager.can_redo(), egui::Button::new(redo_label))
                         .clicked()
@@ -432,10 +528,50 @@ impl eframe::App for DawApp {
                         self.redo();
                         ui.close_menu();
                     }
+                    ui.separator();
+                    if ui.button("Delete                 Del").clicked() {
+                        if self.selected_clip.is_some() {
+                            self.delete_selected_clip();
+                        } else {
+                            self.delete_selected_track();
+                        }
+                        ui.close_menu();
+                    }
+                    if ui.button("Duplicate Track        Cmd+D").clicked() {
+                        self.duplicate_selected_track();
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("Track", |ui| {
+                    if ui.button("Add Audio Track").clicked() {
+                        self.push_undo("Add track");
+                        let n = self.project.tracks.len() + 1;
+                        self.project
+                            .add_track(&format!("Track {n}"), TrackKind::Audio);
+                        self.sync_project();
+                        ui.close_menu();
+                    }
+                    if ui.button("Add MIDI Track").clicked() {
+                        self.push_undo("Add track");
+                        let n = self.project.tracks.len() + 1;
+                        self.project
+                            .add_track(&format!("MIDI {n}"), TrackKind::Midi);
+                        self.sync_project();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Delete Selected Track").clicked() {
+                        self.delete_selected_track();
+                        ui.close_menu();
+                    }
                 });
                 ui.menu_button("Session", |ui| {
                     let connected = self.session.is_connected();
-                    let label = if connected { "Session Panel (connected)" } else { "Session Panel" };
+                    let label = if connected {
+                        "Session Panel (connected)"
+                    } else {
+                        "Session Panel"
+                    };
                     if ui.button(label).clicked() {
                         self.session.show_panel = !self.session.show_panel;
                         ui.close_menu();
@@ -456,6 +592,13 @@ impl eframe::App for DawApp {
                         self.view = View::Mixer;
                         ui.close_menu();
                     }
+                    ui.separator();
+                    if ui
+                        .selectable_label(self.snap_to_grid, "Snap to Grid")
+                        .clicked()
+                    {
+                        self.snap_to_grid = !self.snap_to_grid;
+                    }
                 });
             });
         });
@@ -474,6 +617,10 @@ impl eframe::App for DawApp {
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.snap_to_grid {
+                        ui.label("SNAP");
+                        ui.label("|");
+                    }
                     ui.label(format!(
                         "{}Hz | {} tracks",
                         self.sample_rate(),
@@ -498,13 +645,28 @@ impl eframe::App for DawApp {
                     self.sync_project();
                 }
                 jamhub_network::message::SessionMessage::TrackUpdated {
-                    track_id, volume, pan, muted, solo, ..
+                    track_id,
+                    volume,
+                    pan,
+                    muted,
+                    solo,
+                    ..
                 } => {
-                    if let Some(track) = self.project.tracks.iter_mut().find(|t| t.id == track_id) {
-                        if let Some(v) = volume { track.volume = v; }
-                        if let Some(p) = pan { track.pan = p; }
-                        if let Some(m) = muted { track.muted = m; }
-                        if let Some(s) = solo { track.solo = s; }
+                    if let Some(track) =
+                        self.project.tracks.iter_mut().find(|t| t.id == track_id)
+                    {
+                        if let Some(v) = volume {
+                            track.volume = v;
+                        }
+                        if let Some(p) = pan {
+                            track.pan = p;
+                        }
+                        if let Some(m) = muted {
+                            track.muted = m;
+                        }
+                        if let Some(s) = solo {
+                            track.solo = s;
+                        }
                     }
                     self.sync_project();
                 }
@@ -512,7 +674,12 @@ impl eframe::App for DawApp {
                     self.project.tempo = tempo;
                     self.sync_project();
                 }
-                jamhub_network::message::SessionMessage::Welcome { tracks, tempo, time_signature, .. } => {
+                jamhub_network::message::SessionMessage::Welcome {
+                    tracks,
+                    tempo,
+                    time_signature,
+                    ..
+                } => {
                     self.project.tracks = tracks;
                     self.project.tempo = tempo;
                     self.project.time_signature = time_signature;
@@ -526,11 +693,9 @@ impl eframe::App for DawApp {
         session_panel::show(self, ctx);
 
         // Main content
-        egui::CentralPanel::default().show(ctx, |ui| {
-            match self.view {
-                View::Arrange => timeline::show(self, ui),
-                View::Mixer => mixer_view::show(self, ui),
-            }
+        egui::CentralPanel::default().show(ctx, |ui| match self.view {
+            View::Arrange => timeline::show(self, ui),
+            View::Mixer => mixer_view::show(self, ui),
         });
     }
 }

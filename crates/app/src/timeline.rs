@@ -12,11 +12,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
     let pixels_per_second = PIXELS_PER_SECOND_BASE * app.zoom;
     let sample_rate = app.sample_rate() as f64;
 
+    // Track headers (left panel)
     egui::SidePanel::left("track_headers")
         .exact_width(HEADER_WIDTH)
         .resizable(false)
         .show_inside(ui, |ui| {
-            // Spacer for ruler
             ui.allocate_space(egui::vec2(HEADER_WIDTH, RULER_HEIGHT));
             ui.separator();
 
@@ -28,13 +28,15 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]);
                     let is_selected = app.selected_track == Some(i);
 
-                    let header_response = ui.allocate_ui(
-                        egui::vec2(HEADER_WIDTH, TRACK_HEIGHT),
-                        |ui| {
+                    let header_response =
+                        ui.allocate_ui(egui::vec2(HEADER_WIDTH, TRACK_HEIGHT), |ui| {
                             if is_selected {
                                 let rect = ui.max_rect();
-                                ui.painter()
-                                    .rect_filled(rect, 0.0, egui::Color32::from_rgb(45, 45, 55));
+                                ui.painter().rect_filled(
+                                    rect,
+                                    0.0,
+                                    egui::Color32::from_rgb(45, 45, 55),
+                                );
                             }
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
@@ -43,17 +45,15 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 });
 
                                 ui.horizontal(|ui| {
-                                    let muted = track.muted;
                                     if ui
-                                        .selectable_label(muted, "M")
+                                        .selectable_label(track.muted, "M")
                                         .on_hover_text("Mute")
                                         .clicked()
                                     {
                                         track_actions.push(TrackAction::ToggleMute(i));
                                     }
-                                    let solo = track.solo;
                                     if ui
-                                        .selectable_label(solo, "S")
+                                        .selectable_label(track.solo, "S")
                                         .on_hover_text("Solo")
                                         .clicked()
                                     {
@@ -90,11 +90,23 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     }
                                 });
                             });
-                        },
-                    );
+                        });
                     if header_response.response.clicked() {
                         track_actions.push(TrackAction::Select(i));
                     }
+                    // Right-click context menu on track header
+                    header_response
+                        .response
+                        .context_menu(|ui| {
+                            if ui.button("Delete Track").clicked() {
+                                track_actions.push(TrackAction::Delete(i));
+                                ui.close_menu();
+                            }
+                            if ui.button("Duplicate Track").clicked() {
+                                track_actions.push(TrackAction::Duplicate(i));
+                                ui.close_menu();
+                            }
+                        });
                     ui.separator();
                 });
             }
@@ -105,30 +117,52 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     TrackAction::ToggleMute(i) => {
                         app.push_undo("Toggle mute");
                         app.project.tracks[i].muted = !app.project.tracks[i].muted;
+                        app.sync_project();
                     }
                     TrackAction::ToggleSolo(i) => {
                         app.push_undo("Toggle solo");
                         app.project.tracks[i].solo = !app.project.tracks[i].solo;
+                        app.sync_project();
                     }
                     TrackAction::ToggleArm(i) => {
                         app.project.tracks[i].armed = !app.project.tracks[i].armed;
                     }
                     TrackAction::SetVolume(i, v) => {
                         app.project.tracks[i].volume = v;
+                        app.sync_project();
                     }
                     TrackAction::Select(i) => {
                         app.selected_track = Some(i);
-                        continue;
+                        app.selected_clip = None;
+                    }
+                    TrackAction::Delete(i) => {
+                        if app.project.tracks.len() > 1 {
+                            app.push_undo("Delete track");
+                            app.project.tracks.remove(i);
+                            app.selected_track =
+                                Some(i.min(app.project.tracks.len() - 1));
+                            app.selected_clip = None;
+                            app.sync_project();
+                        }
+                    }
+                    TrackAction::Duplicate(i) => {
+                        app.push_undo("Duplicate track");
+                        let mut t = app.project.tracks[i].clone();
+                        t.id = uuid::Uuid::new_v4();
+                        t.name = format!("{} (copy)", t.name);
+                        app.project.tracks.insert(i + 1, t);
+                        app.selected_track = Some(i + 1);
+                        app.sync_project();
                     }
                 }
-                app.sync_project();
             }
 
             ui.add_space(8.0);
             if ui.button("+ Add Track").clicked() {
                 app.push_undo("Add track");
                 let n = app.project.tracks.len() + 1;
-                app.project.add_track(&format!("Track {n}"), TrackKind::Audio);
+                app.project
+                    .add_track(&format!("Track {n}"), TrackKind::Audio);
                 app.sync_project();
             }
         });
@@ -136,26 +170,120 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
     // Timeline area
     egui::CentralPanel::default().show_inside(ui, |ui| {
         let available = ui.available_size();
+        let rect = ui.max_rect();
 
-        // Handle horizontal scroll with mouse wheel
-        let scroll_response = ui.interact(
-            ui.max_rect(),
-            ui.id().with("timeline_scroll"),
+        // Interactions
+        let response = ui.interact(
+            rect,
+            ui.id().with("timeline_area"),
             egui::Sense::click_and_drag(),
         );
-        if scroll_response.dragged_by(egui::PointerButton::Middle) {
-            app.scroll_x -= scroll_response.drag_delta().x;
+
+        // Middle mouse drag to scroll
+        if response.dragged_by(egui::PointerButton::Middle) {
+            app.scroll_x -= response.drag_delta().x;
             app.scroll_x = app.scroll_x.max(0.0);
         }
 
-        // Click on timeline to set position
-        if scroll_response.clicked() {
-            if let Some(pos) = scroll_response.interact_pointer_pos {
-                let rect = ui.max_rect();
-                let x_offset = pos.x - rect.min.x + app.scroll_x;
-                let seconds = x_offset as f64 / pixels_per_second as f64;
-                let sample_pos = (seconds * sample_rate) as u64;
-                app.send_command(jamhub_engine::EngineCommand::SetPosition(sample_pos));
+        // Left click on empty area to set playhead and deselect clip
+        if response.clicked_by(egui::PointerButton::Primary) {
+            if let Some(pos) = response.interact_pointer_pos {
+                let tracks_y_start = rect.min.y + RULER_HEIGHT;
+
+                // Check if clicked on a clip
+                let mut clicked_clip = None;
+                for (ti, track) in app.project.tracks.iter().enumerate() {
+                    let y = tracks_y_start + ti as f32 * TRACK_HEIGHT;
+                    for (ci, clip) in track.clips.iter().enumerate() {
+                        let clip_x = rect.min.x
+                            + (clip.start_sample as f64 / sample_rate) as f32 * pixels_per_second
+                            - app.scroll_x;
+                        let clip_w = (clip.duration_samples as f64 / sample_rate) as f32
+                            * pixels_per_second;
+                        let clip_rect = egui::Rect::from_min_size(
+                            egui::pos2(clip_x, y + 2.0),
+                            egui::vec2(clip_w, TRACK_HEIGHT - 4.0),
+                        );
+                        if clip_rect.contains(pos) {
+                            clicked_clip = Some((ti, ci));
+                        }
+                    }
+                }
+
+                if let Some((ti, ci)) = clicked_clip {
+                    app.selected_clip = Some((ti, ci));
+                    app.selected_track = Some(ti);
+                } else {
+                    // Set playhead
+                    app.selected_clip = None;
+                    let x_offset = pos.x - rect.min.x + app.scroll_x;
+                    let seconds = x_offset as f64 / pixels_per_second as f64;
+                    let sample_pos = (seconds * sample_rate) as u64;
+                    let snapped = app.snap_to_beat(sample_pos);
+                    app.send_command(jamhub_engine::EngineCommand::SetPosition(snapped));
+                }
+            }
+        }
+
+        // Clip dragging - find target first, then apply
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            if let Some(pos) = response.interact_pointer_pos {
+                let tracks_y_start = rect.min.y + RULER_HEIGHT;
+                let mut drag_target: Option<(usize, usize, u64)> = None;
+                for ti in 0..app.project.tracks.len() {
+                    let y = tracks_y_start + ti as f32 * TRACK_HEIGHT;
+                    for ci in 0..app.project.tracks[ti].clips.len() {
+                        let clip = &app.project.tracks[ti].clips[ci];
+                        let clip_x = rect.min.x
+                            + (clip.start_sample as f64 / sample_rate) as f32 * pixels_per_second
+                            - app.scroll_x;
+                        let clip_w = (clip.duration_samples as f64 / sample_rate) as f32
+                            * pixels_per_second;
+                        let clip_rect = egui::Rect::from_min_size(
+                            egui::pos2(clip_x, y + 2.0),
+                            egui::vec2(clip_w, TRACK_HEIGHT - 4.0),
+                        );
+                        if clip_rect.contains(pos) {
+                            drag_target = Some((ti, ci, clip.start_sample));
+                        }
+                    }
+                }
+                if let Some((ti, ci, orig)) = drag_target {
+                    app.push_undo("Move clip");
+                    app.dragging_clip = Some(crate::ClipDragState {
+                        track_idx: ti,
+                        clip_idx: ci,
+                        start_x: pos.x,
+                        original_start_sample: orig,
+                    });
+                }
+            }
+        }
+
+        if response.dragged_by(egui::PointerButton::Primary) {
+            if let Some(ref drag) = app.dragging_clip {
+                if let Some(pos) = response.interact_pointer_pos {
+                    let dx = pos.x - drag.start_x;
+                    let d_seconds = dx as f64 / pixels_per_second as f64;
+                    let d_samples = (d_seconds * sample_rate) as i64;
+                    let new_start =
+                        (drag.original_start_sample as i64 + d_samples).max(0) as u64;
+                    let snapped = app.snap_to_beat(new_start);
+
+                    if drag.track_idx < app.project.tracks.len()
+                        && drag.clip_idx < app.project.tracks[drag.track_idx].clips.len()
+                    {
+                        app.project.tracks[drag.track_idx].clips[drag.clip_idx]
+                            .start_sample = snapped;
+                    }
+                }
+            }
+        }
+
+        if response.drag_stopped() {
+            if app.dragging_clip.is_some() {
+                app.dragging_clip = None;
+                app.sync_project();
             }
         }
 
@@ -168,7 +296,6 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         });
 
         let painter = ui.painter();
-        let rect = ui.max_rect();
 
         // Background
         painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(30, 30, 35));
@@ -178,7 +305,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             egui::Rect::from_min_size(rect.min, egui::vec2(available.x, RULER_HEIGHT));
         painter.rect_filled(ruler_rect, 0.0, egui::Color32::from_rgb(40, 40, 48));
 
-        // Draw beat/bar markers
+        // Beat/bar grid
         let bpm = app.project.tempo.bpm;
         let beats_per_bar = app.project.time_signature.numerator as f64;
         let seconds_per_beat = 60.0 / bpm;
@@ -217,7 +344,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
-        // Track lanes
+        // Track lanes and clips
         let tracks_y_start = rect.min.y + RULER_HEIGHT;
         for (i, track) in app.project.tracks.iter().enumerate() {
             let y = tracks_y_start + i as f32 * TRACK_HEIGHT;
@@ -236,7 +363,6 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             };
             painter.rect_filled(lane_rect, 0.0, bg);
 
-            // Lane separator
             painter.line_segment(
                 [
                     egui::pos2(rect.min.x, y + TRACK_HEIGHT),
@@ -245,17 +371,25 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 egui::Stroke::new(0.5, egui::Color32::from_rgb(50, 50, 58)),
             );
 
-            // Draw clips with waveforms
+            // Muted overlay
+            if track.muted {
+                painter.rect_filled(
+                    lane_rect,
+                    0.0,
+                    egui::Color32::from_rgba_premultiplied(0, 0, 0, 80),
+                );
+            }
+
             let color =
                 egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]);
-            for clip in &track.clips {
+
+            for (ci, clip) in track.clips.iter().enumerate() {
                 let clip_start_sec = clip.start_sample as f64 / sample_rate;
                 let clip_dur_sec = clip.duration_samples as f64 / sample_rate;
                 let clip_x =
                     rect.min.x + clip_start_sec as f32 * pixels_per_second - app.scroll_x;
                 let clip_w = clip_dur_sec as f32 * pixels_per_second;
 
-                // Skip clips not visible
                 if clip_x + clip_w < rect.min.x || clip_x > rect.max.x {
                     continue;
                 }
@@ -265,27 +399,30 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     egui::vec2(clip_w, TRACK_HEIGHT - 4.0),
                 );
 
-                // Clip background
-                painter.rect_filled(clip_rect, 4.0, color.gamma_multiply(0.3));
+                let is_clip_selected = app.selected_clip == Some((i, ci));
 
-                // Draw waveform
+                // Clip background
+                let bg_alpha = if is_clip_selected { 0.5 } else { 0.3 };
+                painter.rect_filled(clip_rect, 4.0, color.gamma_multiply(bg_alpha));
+
+                // Waveform
                 if let ClipSource::AudioBuffer { buffer_id } = &clip.source {
                     if let Some(peaks) = app.waveform_cache.get(buffer_id) {
-                        draw_waveform(
-                            painter,
-                            &peaks,
-                            clip_rect,
-                            clip.duration_samples,
-                            color,
-                        );
+                        draw_waveform(painter, &peaks, clip_rect, clip.duration_samples, color);
                     }
                 }
 
-                // Clip border
+                // Border
+                let border_width = if is_clip_selected { 2.0 } else { 1.0 };
+                let border_color = if is_clip_selected {
+                    egui::Color32::WHITE
+                } else {
+                    color
+                };
                 painter.rect_stroke(
                     clip_rect,
                     4.0,
-                    egui::Stroke::new(1.0, color),
+                    egui::Stroke::new(border_width, border_color),
                     egui::StrokeKind::Outside,
                 );
 
@@ -325,6 +462,15 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 egui::Stroke::NONE,
             ));
         }
+
+        // Auto-scroll playhead into view during playback
+        if app.transport_state() == jamhub_model::TransportState::Playing {
+            let view_right = app.scroll_x + available.x * 0.8;
+            let playhead_px = pos_sec as f32 * pixels_per_second;
+            if playhead_px > view_right {
+                app.scroll_x = playhead_px - available.x * 0.2;
+            }
+        }
     });
 }
 
@@ -345,17 +491,15 @@ fn draw_waveform(
     let block_size = peaks.block_size_for_level(samples_per_pixel) as f64;
 
     let center_y = clip_rect.center().y;
-    let half_height = clip_rect.height() * 0.45;
+    let half_height = clip_rect.height() * 0.4;
 
-    let waveform_color = color.gamma_multiply(0.8);
-
-    let num_pixels = width as usize;
+    let num_pixels = (width as usize).min(2000); // cap to avoid huge polygon
     let mut points_top: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
     let mut points_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
 
     for px in 0..num_pixels {
-        let sample_start = (px as f64 * samples_per_pixel) as f64;
-        let sample_end = ((px + 1) as f64 * samples_per_pixel) as f64;
+        let sample_start = px as f64 * samples_per_pixel;
+        let sample_end = (px + 1) as f64 * samples_per_pixel;
 
         let peak_start = (sample_start / block_size) as usize;
         let peak_end = ((sample_end / block_size) as usize + 1).min(peak_data.len());
@@ -381,17 +525,18 @@ fn draw_waveform(
         points_bottom.push(egui::pos2(x, center_y - min * half_height));
     }
 
-    // Draw as filled polygon: top line forward, bottom line backward
     if points_top.len() >= 2 {
         points_bottom.reverse();
         let mut polygon = points_top;
         polygon.extend(points_bottom);
 
-        painter.with_clip_rect(clip_rect).add(egui::Shape::convex_polygon(
-            polygon,
-            waveform_color.gamma_multiply(0.5),
-            egui::Stroke::NONE,
-        ));
+        painter
+            .with_clip_rect(clip_rect)
+            .add(egui::Shape::convex_polygon(
+                polygon,
+                color.gamma_multiply(0.45),
+                egui::Stroke::NONE,
+            ));
     }
 }
 
@@ -401,4 +546,6 @@ enum TrackAction {
     ToggleArm(usize),
     SetVolume(usize, f32),
     Select(usize),
+    Delete(usize),
+    Duplicate(usize),
 }

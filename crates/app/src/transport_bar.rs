@@ -11,7 +11,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         let state = app.transport_state();
 
         // Rewind
-        if ui.button("⏮").on_hover_text("Rewind").clicked() {
+        if ui.button("⏮").on_hover_text("Rewind (Home)").clicked() {
             app.send_command(EngineCommand::SetPosition(0));
         }
 
@@ -22,7 +22,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             egui::Color32::GRAY
         };
         if ui
-            .add(egui::Button::new(egui::RichText::new("⏹").color(stop_color)))
+            .add(egui::Button::new(
+                egui::RichText::new("⏹").color(stop_color),
+            ))
             .on_hover_text("Stop")
             .clicked()
         {
@@ -36,25 +38,48 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             egui::Color32::GRAY
         };
         if ui
-            .add(egui::Button::new(egui::RichText::new("▶").color(play_color)))
-            .on_hover_text("Play")
+            .add(egui::Button::new(
+                egui::RichText::new("▶").color(play_color),
+            ))
+            .on_hover_text("Play (Space)")
             .clicked()
         {
             app.send_command(EngineCommand::Play);
         }
 
         // Record
-        let rec_color = if state == TransportState::Recording {
+        let rec_color = if app.is_recording {
             egui::Color32::from_rgb(220, 50, 50)
         } else {
             egui::Color32::GRAY
         };
         if ui
-            .add(egui::Button::new(egui::RichText::new("⏺").color(rec_color)))
-            .on_hover_text("Record")
+            .add(egui::Button::new(
+                egui::RichText::new("⏺").color(rec_color),
+            ))
+            .on_hover_text("Record (R)")
             .clicked()
         {
             app.toggle_recording();
+        }
+
+        ui.separator();
+
+        // Metronome toggle
+        let met_color = if app.metronome_enabled {
+            egui::Color32::from_rgb(255, 200, 50)
+        } else {
+            egui::Color32::GRAY
+        };
+        if ui
+            .add(egui::Button::new(
+                egui::RichText::new("🔔").color(met_color),
+            ))
+            .on_hover_text("Metronome (M)")
+            .clicked()
+        {
+            app.metronome_enabled = !app.metronome_enabled;
+            app.send_command(EngineCommand::SetMetronome(app.metronome_enabled));
         }
 
         ui.separator();
@@ -67,7 +92,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         let secs = seconds % 60.0;
         let beat = app.project.tempo.beat_at_sample(pos, sr as f64);
         let bar = (beat / app.project.time_signature.numerator as f64).floor() as u32 + 1;
-        let beat_in_bar = (beat % app.project.time_signature.numerator as f64).floor() as u32 + 1;
+        let beat_in_bar =
+            (beat % app.project.time_signature.numerator as f64).floor() as u32 + 1;
 
         ui.monospace(format!("{minutes:02}:{secs:05.2}"));
         ui.separator();
@@ -90,6 +116,22 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
+        // Time signature
+        let mut num = app.project.time_signature.numerator as i32;
+        ui.add(egui::DragValue::new(&mut num).range(1..=16).speed(0.1));
+        ui.label("/");
+        let mut den = app.project.time_signature.denominator as i32;
+        ui.add(egui::DragValue::new(&mut den).range(1..=16).speed(0.1));
+        if num != app.project.time_signature.numerator as i32
+            || den != app.project.time_signature.denominator as i32
+        {
+            app.project.time_signature.numerator = num as u8;
+            app.project.time_signature.denominator = den as u8;
+            app.sync_project();
+        }
+
+        ui.separator();
+
         // Zoom
         ui.label("Zoom:");
         ui.add(
@@ -99,6 +141,13 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         );
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Session indicator
+            if app.session.is_connected() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(80, 200, 80),
+                    "● Online",
+                );
+            }
             ui.label(
                 egui::RichText::new("JamHub")
                     .strong()

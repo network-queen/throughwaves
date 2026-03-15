@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use parking_lot::RwLock;
 use jamhub_model::{ClipBufferId, Project, TransportState};
 
 use crate::audio::AudioBackend;
+use crate::metronome::Metronome;
 use crate::mixer::Mixer;
 
 pub enum EngineCommand {
@@ -15,6 +17,7 @@ pub enum EngineCommand {
     SetPosition(u64),
     UpdateProject(Project),
     LoadAudioBuffer { id: ClipBufferId, samples: Vec<f32> },
+    SetMetronome(bool),
 }
 
 pub struct EngineHandle {
@@ -35,7 +38,8 @@ impl EngineHandle {
         let channels = backend.channels();
 
         let (cmd_tx, cmd_rx) = bounded::<EngineCommand>(256);
-        let (audio_tx, audio_rx) = bounded::<Vec<f32>>(64);
+        // Larger buffer to allow pre-filling
+        let (audio_tx, audio_rx) = bounded::<Vec<f32>>(128);
 
         backend.start(audio_rx)?;
 
@@ -69,15 +73,16 @@ fn engine_loop(
     sample_rate: u32,
     channels: u16,
 ) {
-    let block_size: usize = 512;
+    let block_size: usize = 256;
     let mixer = Mixer::new(sample_rate, channels);
     let mut project = Project::default();
     let mut audio_buffers: HashMap<ClipBufferId, Vec<f32>> = HashMap::new();
     let mut transport = TransportState::Stopped;
     let mut position: u64 = 0;
+    let mut metronome = Metronome::default();
 
     loop {
-        // Process commands
+        // Process all pending commands
         while let Ok(cmd) = cmd_rx.try_recv() {
             match cmd {
                 EngineCommand::Play => {
@@ -95,6 +100,9 @@ fn engine_loop(
                 EngineCommand::LoadAudioBuffer { id, samples } => {
                     audio_buffers.insert(id, samples);
                 }
+                EngineCommand::SetMetronome(enabled) => {
+                    metronome.enabled = enabled;
+                }
             }
         }
 
@@ -106,20 +114,35 @@ fn engine_loop(
         }
 
         if transport == TransportState::Playing {
-            let block = mixer.render_block(&project, position, block_size, &audio_buffers);
+            // Render a block
+            let mut block = mixer.render_block(&project, position, block_size, &audio_buffers);
+
+            // Add metronome clicks
+            metronome.render(
+                &mut block,
+                position,
+                block_size,
+                channels as usize,
+                sample_rate,
+                &project.tempo,
+                project.time_signature.numerator,
+            );
+
             position += block_size as u64;
 
-            // Try to send the block; if the audio output is backed up, drop it
-            let _ = audio_tx.try_send(block);
+            // Send to audio output — use blocking send with timeout so we naturally
+            // pace to real-time via backpressure. If the channel is full, the audio
+            // output hasn't consumed yet, so we wait.
+            match audio_tx.send_timeout(block, Duration::from_millis(100)) {
+                Ok(()) => {}
+                Err(_) => {
+                    // Timeout or disconnected — audio output may have stalled
+                    thread::sleep(Duration::from_millis(1));
+                }
+            }
         } else {
-            // When stopped, sleep a bit to avoid burning CPU
-            thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        // Pace the render loop to roughly match real-time
-        if transport == TransportState::Playing {
-            let block_duration_us = (block_size as f64 / sample_rate as f64 * 1_000_000.0) as u64;
-            thread::sleep(std::time::Duration::from_micros(block_duration_us / 2));
+            // When stopped, sleep to avoid burning CPU
+            thread::sleep(Duration::from_millis(5));
         }
     }
 }
