@@ -1,7 +1,15 @@
 mod audio;
+mod audio_file;
 mod mixer;
+mod project_io;
+mod recorder;
 mod transport;
+pub mod waveform;
 
 pub use audio::AudioBackend;
+pub use audio_file::{load_wav, save_wav, AudioFileData};
 pub use mixer::Mixer;
+pub use project_io::{load_project, save_project};
+pub use recorder::Recorder;
 pub use transport::{EngineCommand, EngineHandle};
+pub use waveform::WaveformCache;

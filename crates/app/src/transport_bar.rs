@@ -54,7 +54,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             .on_hover_text("Record")
             .clicked()
         {
-            // TODO: implement recording
+            app.toggle_recording();
         }
 
         ui.separator();

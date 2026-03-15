@@ -1,0 +1,93 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use parking_lot::RwLock;
+use uuid::Uuid;
+
+/// Precomputed waveform peaks for rendering in the UI.
+#[derive(Clone)]
+pub struct WaveformPeaks {
+    /// Min/max pairs at various resolutions.
+    /// Level 0 = 1 sample per peak, Level 1 = 2 samples per peak, etc.
+    /// We store levels at powers of 2: 256, 512, 1024, 2048, 4096 samples per peak.
+    pub levels: Vec<Vec<(f32, f32)>>,
+    pub total_samples: usize,
+}
+
+impl WaveformPeaks {
+    pub fn from_samples(samples: &[f32]) -> Self {
+        let mut levels = Vec::new();
+
+        // Build mip-map levels: 256, 512, 1024, 2048, 4096 samples per peak
+        for &block_size in &[256, 512, 1024, 2048, 4096] {
+            let num_peaks = (samples.len() + block_size - 1) / block_size;
+            let mut peaks = Vec::with_capacity(num_peaks);
+
+            for chunk in samples.chunks(block_size) {
+                let mut min = f32::MAX;
+                let mut max = f32::MIN;
+                for &s in chunk {
+                    if s < min {
+                        min = s;
+                    }
+                    if s > max {
+                        max = s;
+                    }
+                }
+                peaks.push((min, max));
+            }
+            levels.push(peaks);
+        }
+
+        Self {
+            levels,
+            total_samples: samples.len(),
+        }
+    }
+
+    /// Get the best mip-map level for the given samples-per-pixel ratio.
+    pub fn get_peaks_for_resolution(&self, samples_per_pixel: f64) -> &[(f32, f32)] {
+        let block_sizes = [256, 512, 1024, 2048, 4096];
+        let mut best = 0;
+        for (i, &bs) in block_sizes.iter().enumerate() {
+            if (bs as f64) <= samples_per_pixel * 2.0 {
+                best = i;
+            }
+        }
+        &self.levels[best]
+    }
+
+    pub fn block_size_for_level(&self, samples_per_pixel: f64) -> usize {
+        let block_sizes = [256, 512, 1024, 2048, 4096];
+        let mut best = 0;
+        for (i, &bs) in block_sizes.iter().enumerate() {
+            if (bs as f64) <= samples_per_pixel * 2.0 {
+                best = i;
+            }
+        }
+        block_sizes[best]
+    }
+}
+
+/// Shared cache of waveform peaks, keyed by buffer ID.
+#[derive(Clone)]
+pub struct WaveformCache {
+    inner: Arc<RwLock<HashMap<Uuid, WaveformPeaks>>>,
+}
+
+impl WaveformCache {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn insert(&self, id: Uuid, samples: &[f32]) {
+        let peaks = WaveformPeaks::from_samples(samples);
+        self.inner.write().insert(id, peaks);
+    }
+
+    pub fn get(&self, id: &Uuid) -> Option<WaveformPeaks> {
+        self.inner.read().get(id).cloned()
+    }
+}

@@ -9,3 +9,6 @@ jamhub-engine = { path = "../engine" }
 eframe = "0.31"
 egui = "0.31"
 rfd = "0.15"
+uuid = { version = "1", features = ["v4"] }
+jamhub-network = { path = "../network" }
+whoami = "1"
