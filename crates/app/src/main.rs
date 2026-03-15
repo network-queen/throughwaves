@@ -244,12 +244,19 @@ impl DawApp {
             // 2. Stop the engine AFTER getting recording data
             self.send_command(EngineCommand::Stop);
 
+            // Unmute the track we muted during recording, disarm it
+            let track_idx = self.selected_track.unwrap_or(0);
+            if track_idx < self.project.tracks.len() {
+                self.project.tracks[track_idx].muted = false;
+                self.project.tracks[track_idx].armed = false;
+            }
+
             if result.samples.is_empty() {
+                self.sync_project();
                 self.set_status("Recording was empty");
                 return;
             }
 
-            let track_idx = self.selected_track.unwrap_or(0);
             if track_idx >= self.project.tracks.len() {
                 return;
             }
@@ -292,12 +299,20 @@ impl DawApp {
                 }
             }
 
+            // Count overlapping takes for naming
+            let take_num = self.project.tracks[track_idx]
+                .clips
+                .iter()
+                .filter(|c| {
+                    let c_end = c.start_sample + c.duration_samples;
+                    rec_start < c_end && (rec_start + duration) > c.start_sample
+                })
+                .count()
+                + 1;
+
             let clip = Clip {
                 id: Uuid::new_v4(),
-                name: format!(
-                    "Take {}",
-                    self.project.tracks[track_idx].clips.len() + 1
-                ),
+                name: format!("Take {}", take_num),
                 start_sample: rec_start,
                 duration_samples: duration,
                 source: ClipSource::AudioBuffer { buffer_id },
@@ -334,7 +349,8 @@ impl DawApp {
             self.send_command(EngineCommand::SetPosition(rec_start));
 
             self.set_status(&format!(
-                "Recording saved ({:.1}s) — press Space to play",
+                "Take {} saved ({:.1}s) — press Space to play",
+                take_num,
                 duration as f64 / engine_sr as f64
             ));
         } else {
@@ -342,6 +358,10 @@ impl DawApp {
             let track_idx = self.selected_track.unwrap_or(0);
             if track_idx < self.project.tracks.len() {
                 self.project.tracks[track_idx].armed = true;
+                // Mute this track while recording so old takes don't
+                // play back through speakers (prevents feedback/confusion)
+                self.project.tracks[track_idx].muted = true;
+                self.sync_project();
             }
 
             // Store the current playhead position BEFORE starting
@@ -350,11 +370,16 @@ impl DawApp {
             match self.recorder.start() {
                 Ok(()) => {
                     self.is_recording = true;
-                    // Start engine playback so the playhead advances
                     self.send_command(EngineCommand::Play);
-                    self.set_status("Recording...");
+                    self.set_status("Recording... (track muted for monitoring)");
                 }
                 Err(e) => {
+                    // Undo mute on failure
+                    if track_idx < self.project.tracks.len() {
+                        self.project.tracks[track_idx].muted = false;
+                        self.project.tracks[track_idx].armed = false;
+                        self.sync_project();
+                    }
                     self.set_status(&format!("Record failed: {e}"));
                 }
             }
