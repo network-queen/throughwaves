@@ -25,69 +25,87 @@ use undo::UndoManager;
 fn setup_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
 
-    // Modern dark theme — inspired by Ableton/Bitwig
-    let bg = egui::Color32::from_rgb(24, 24, 28);
-    let panel_bg = egui::Color32::from_rgb(30, 30, 35);
-    let widget_bg = egui::Color32::from_rgb(42, 42, 48);
-    let widget_hover = egui::Color32::from_rgb(55, 55, 65);
-    let widget_active = egui::Color32::from_rgb(65, 65, 78);
-    let accent = egui::Color32::from_rgb(90, 160, 255);
-    let text = egui::Color32::from_rgb(210, 210, 215);
-    let text_dim = egui::Color32::from_rgb(140, 140, 148);
+    // Premium studio theme — deep, warm, and refined
+    // Inspired by high-end audio gear: warm dark tones with electric blue accents
+    let bg_deep = egui::Color32::from_rgb(18, 18, 22);        // deepest background
+    let bg_panel = egui::Color32::from_rgb(26, 26, 32);       // panels
+    let bg_surface = egui::Color32::from_rgb(34, 35, 42);     // widgets
+    let bg_elevated = egui::Color32::from_rgb(44, 45, 55);    // hover
+    let bg_pressed = egui::Color32::from_rgb(52, 54, 66);     // active/pressed
+    let accent = egui::Color32::from_rgb(70, 140, 255);       // electric blue
+    let text_bright = egui::Color32::from_rgb(225, 226, 230); // primary text
+    let text_secondary = egui::Color32::from_rgb(130, 132, 142); // secondary text
 
-    visuals.panel_fill = panel_bg;
-    visuals.window_fill = egui::Color32::from_rgb(32, 32, 38);
-    visuals.extreme_bg_color = bg;
-    visuals.faint_bg_color = egui::Color32::from_rgb(35, 35, 40);
+    visuals.panel_fill = bg_panel;
+    visuals.window_fill = egui::Color32::from_rgb(28, 28, 35);
+    visuals.extreme_bg_color = bg_deep;
+    visuals.faint_bg_color = egui::Color32::from_rgb(30, 30, 36);
 
-    // Widget styles
-    visuals.widgets.noninteractive.bg_fill = panel_bg;
-    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_dim);
-    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(4);
+    // Widgets — subtle, refined, high contrast text
+    visuals.widgets.noninteractive.bg_fill = bg_panel;
+    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_secondary);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(5);
 
-    visuals.widgets.inactive.bg_fill = widget_bg;
-    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text);
-    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(4);
+    visuals.widgets.inactive.bg_fill = bg_surface;
+    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text_bright);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(5);
     visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
 
-    visuals.widgets.hovered.bg_fill = widget_hover;
+    visuals.widgets.hovered.bg_fill = bg_elevated;
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(4);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent);
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(5);
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.7));
 
-    visuals.widgets.active.bg_fill = widget_active;
+    visuals.widgets.active.bg_fill = bg_pressed;
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.active.corner_radius = egui::CornerRadius::same(4);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(5);
 
-    visuals.widgets.open.bg_fill = widget_hover;
+    visuals.widgets.open.bg_fill = bg_elevated;
     visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
 
-    visuals.selection.bg_fill = accent.gamma_multiply(0.3);
+    visuals.selection.bg_fill = accent.gamma_multiply(0.2);
     visuals.selection.stroke = egui::Stroke::new(1.0, accent);
 
+    // Windows — floating panels feel premium
     visuals.window_shadow = egui::epaint::Shadow {
-        offset: [0, 4],
-        blur: 12,
-        spread: 0,
-        color: egui::Color32::from_black_alpha(80),
+        offset: [0, 6],
+        blur: 16,
+        spread: 2,
+        color: egui::Color32::from_black_alpha(100),
     };
-    visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 58));
+    visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 46, 55));
+
+    // Slider style — more visible
+    visuals.widgets.inactive.expansion = 1.0;
+    visuals.widgets.hovered.expansion = 2.0;
+    visuals.widgets.active.expansion = 1.0;
 
     ctx.set_visuals(visuals);
 
-    // Fonts — slightly larger default for readability
+    // Typography and spacing — generous, readable
     let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(6.0, 4.0);
-    style.spacing.button_padding = egui::vec2(6.0, 3.0);
-    style.spacing.window_margin = egui::Margin::same(10);
+    style.spacing.item_spacing = egui::vec2(6.0, 5.0);
+    style.spacing.button_padding = egui::vec2(8.0, 4.0);
+    style.spacing.window_margin = egui::Margin::same(12);
+    style.spacing.menu_margin = egui::Margin::same(8);
+    style.spacing.indent = 18.0;
+
+    // Override text styles for slightly larger defaults
+    use egui::FontId;
+    use egui::TextStyle;
+    style.text_styles.insert(TextStyle::Body, FontId::proportional(13.0));
+    style.text_styles.insert(TextStyle::Button, FontId::proportional(13.0));
+    style.text_styles.insert(TextStyle::Small, FontId::proportional(11.0));
+    style.text_styles.insert(TextStyle::Heading, FontId::proportional(18.0));
+
     ctx.set_style(style);
 }
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 800.0])
-            .with_title("JamHub — Collaborative DAW"),
+            .with_inner_size([1400.0, 860.0])
+            .with_title("JamHub — Studio"),
         ..Default::default()
     };
 
