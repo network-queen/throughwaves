@@ -12,6 +12,7 @@ mod project_io;
 mod recorder;
 mod transport;
 pub mod vst_host;
+pub mod vst_loader;
 pub mod waveform;
 
 pub use audio::AudioBackend;

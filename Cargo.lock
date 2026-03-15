@@ -1972,6 +1972,7 @@ dependencies = [
  "dirs",
  "hound",
  "jamhub-model",
+ "libloading",
  "parking_lot",
  "serde",
  "serde_json",

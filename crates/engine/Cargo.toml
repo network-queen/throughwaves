@@ -14,3 +14,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 symphonia = { version = "0.5", features = ["mp3", "ogg", "flac", "wav", "pcm", "vorbis"] }
 dirs = "5"
+libloading = "0.8"

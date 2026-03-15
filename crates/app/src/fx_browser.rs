@@ -9,6 +9,8 @@ pub struct FxBrowser {
     pub scanned: bool,
     pub filter: String,
     pub category_filter: Option<VstCategory>,
+    pub loaded_plugins: Vec<jamhub_engine::vst_loader::VstInstance>,
+    pub load_status: Option<String>,
 }
 
 impl Default for FxBrowser {
@@ -19,6 +21,8 @@ impl Default for FxBrowser {
             scanned: false,
             filter: String::new(),
             category_filter: None,
+            loaded_plugins: Vec::new(),
+            load_status: None,
         }
     }
 }
@@ -79,6 +83,25 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
 
             ui.separator();
 
+            // Load status
+            if let Some(ref status) = app.fx_browser.load_status {
+                let color = if status.starts_with("Loaded") {
+                    egui::Color32::from_rgb(80, 200, 80)
+                } else {
+                    egui::Color32::from_rgb(220, 80, 80)
+                };
+                ui.colored_label(color, status);
+            }
+
+            // Loaded count
+            let loaded_count = app.fx_browser.loaded_plugins.iter().filter(|p| p.loaded).count();
+            if loaded_count > 0 {
+                ui.label(egui::RichText::new(format!("{loaded_count} plugin(s) loaded"))
+                    .small().color(egui::Color32::from_rgb(80, 200, 80)));
+            }
+
+            ui.separator();
+
             if ui.button("Rescan Plugins").clicked() {
                 app.fx_browser.scanned = false;
                 app.fx_browser.scan_if_needed();
@@ -108,9 +131,32 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                         VstCategory::Unknown => "?",
                     };
 
+                    let plugin_path = plugin.path.clone();
+                    let plugin_name = plugin.name.clone();
+                    let is_loaded = app.fx_browser.loaded_plugins.iter().any(|l| l.path == plugin_path && l.loaded);
+
                     ui.horizontal(|ui| {
                         ui.label(cat_icon);
-                        ui.strong(&plugin.name);
+                        if is_loaded {
+                            ui.strong(egui::RichText::new(&plugin_name).color(egui::Color32::from_rgb(80, 200, 80)));
+                        } else {
+                            ui.strong(&plugin_name);
+                        }
+
+                        if is_loaded {
+                            ui.label(egui::RichText::new("loaded").small().color(egui::Color32::from_rgb(80, 200, 80)));
+                        } else {
+                            if ui.small_button("Load").on_hover_text("Load this plugin").clicked() {
+                                let instance = jamhub_engine::vst_loader::VstInstance::load(&plugin_path);
+                                if instance.loaded {
+                                    app.fx_browser.load_status = Some(format!("Loaded: {plugin_name}"));
+                                } else {
+                                    app.fx_browser.load_status = Some(format!("Failed: {}", instance.error.as_deref().unwrap_or("unknown error")));
+                                }
+                                app.fx_browser.loaded_plugins.push(instance);
+                            }
+                        }
+
                         ui.label(
                             egui::RichText::new(&plugin.path.to_string_lossy().to_string())
                                 .small()
