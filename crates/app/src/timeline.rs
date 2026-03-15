@@ -9,7 +9,7 @@ const TAKE_LANE_HEIGHT: f32 = 40.0;
 const HEADER_WIDTH: f32 = 180.0;
 const RULER_HEIGHT: f32 = 24.0;
 const PIXELS_PER_SECOND_BASE: f32 = 100.0;
-const RESIZE_HANDLE_PX: f32 = 5.0;
+const RESIZE_HANDLE_PX: f32 = 8.0;
 
 /// Compute the height of a track.
 /// If user has dragged a custom height, use that.
@@ -121,10 +121,29 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     let color = egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]);
                     let is_selected = app.selected_track == Some(i);
 
-                    ui.allocate_ui(egui::vec2(HEADER_WIDTH, h), |ui| {
-                        let header_rect = ui.max_rect();
+                    // Allocate: header content + resize handle together
+                    let total_h = h + RESIZE_HANDLE_PX;
+                    ui.allocate_ui(egui::vec2(HEADER_WIDTH, total_h), |ui| {
+                        let full_rect = ui.max_rect();
 
-                        // Click area
+                        // Split into header area and resize handle area
+                        let header_rect = egui::Rect::from_min_max(
+                            full_rect.min,
+                            egui::pos2(full_rect.max.x, full_rect.max.y - RESIZE_HANDLE_PX),
+                        );
+                        let handle_rect = egui::Rect::from_min_max(
+                            egui::pos2(full_rect.min.x, full_rect.max.y - RESIZE_HANDLE_PX),
+                            full_rect.max,
+                        );
+
+                        // Resize handle — MUST be registered first to get priority over bg
+                        let handle_response = ui.interact(
+                            handle_rect,
+                            ui.id().with("resize").with(i),
+                            egui::Sense::click_and_drag(),
+                        );
+
+                        // Header click area (excluding handle)
                         let bg_response = ui.interact(header_rect, ui.id().with("tbg").with(i), egui::Sense::click());
                         if bg_response.clicked() { track_actions.push(TrackAction::Select(i)); }
                         if bg_response.double_clicked() { track_actions.push(TrackAction::StartRename(i)); }
@@ -212,50 +231,37 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 ui.label(egui::RichText::new(format!("{:.0}%", vol * 100.0)).small().color(egui::Color32::GRAY));
                             });
                         });
+
+                        // Draw resize handle at bottom
+                        let handle_color = if handle_response.hovered() || handle_response.dragged() {
+                            egui::Color32::from_rgb(100, 180, 255)
+                        } else {
+                            egui::Color32::from_rgb(60, 60, 65)
+                        };
+                        ui.painter().rect_filled(handle_rect, 0.0, handle_color);
+
+                        if handle_response.hovered() || handle_response.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                        }
+
+                        if handle_response.dragged() {
+                            let delta = handle_response.drag_delta().y;
+                            let current = track_height(&app.project.tracks[i]);
+                            let new_h = (current + delta).max(MIN_TRACK_HEIGHT).min(400.0);
+                            track_actions.push(TrackAction::SetHeight(i, new_h));
+
+                            if new_h > BASE_LANE_HEIGHT && !app.project.tracks[i].lanes_expanded {
+                                track_actions.push(TrackAction::ToggleLanes(i));
+                            }
+                            if new_h <= MIN_TRACK_HEIGHT + 5.0 && app.project.tracks[i].lanes_expanded {
+                                track_actions.push(TrackAction::ToggleLanes(i));
+                            }
+                        }
+
+                        if handle_response.double_clicked() {
+                            track_actions.push(TrackAction::SetHeight(i, 0.0));
+                        }
                     });
-
-                    // Drag handle at bottom edge for resizing (Reaper-style)
-                    let (handle_id, handle_rect) = ui.allocate_space(egui::vec2(HEADER_WIDTH, RESIZE_HANDLE_PX));
-                    let handle_response = ui.interact(
-                        handle_rect,
-                        ui.id().with("resize").with(i),
-                        egui::Sense::drag(),
-                    );
-
-                    // Visual: thin line, highlighted on hover
-                    let handle_color = if handle_response.hovered() || handle_response.dragged() {
-                        egui::Color32::from_rgb(100, 180, 255)
-                    } else {
-                        egui::Color32::from_rgb(55, 55, 60)
-                    };
-                    ui.painter().rect_filled(handle_rect, 0.0, handle_color);
-
-                    // Change cursor on hover
-                    if handle_response.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-                    }
-
-                    // Drag to resize
-                    if handle_response.dragged() {
-                        let delta = handle_response.drag_delta().y;
-                        let current = track_height(&app.project.tracks[i]);
-                        let new_h = (current + delta).max(MIN_TRACK_HEIGHT).min(400.0);
-                        track_actions.push(TrackAction::SetHeight(i, new_h));
-
-                        // Auto-expand lanes when dragging larger
-                        if new_h > BASE_LANE_HEIGHT && !app.project.tracks[i].lanes_expanded {
-                            track_actions.push(TrackAction::ToggleLanes(i));
-                        }
-                        // Auto-collapse when dragging smaller
-                        if new_h <= MIN_TRACK_HEIGHT + 5.0 && app.project.tracks[i].lanes_expanded {
-                            track_actions.push(TrackAction::ToggleLanes(i));
-                        }
-                    }
-
-                    // Double-click handle to reset to auto height
-                    if handle_response.double_clicked() {
-                        track_actions.push(TrackAction::SetHeight(i, 0.0)); // 0 = auto
-                    }
                 });
             }
 
