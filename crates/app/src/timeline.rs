@@ -185,6 +185,74 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             app.scroll_x = app.scroll_x.max(0.0);
         }
 
+        // Right-click context menu
+        response.context_menu(|ui| {
+            if let Some(pos) = ui.input(|i| i.pointer.latest_pos()) {
+                let tracks_y_start = rect.min.y + RULER_HEIGHT;
+                // Find which clip was right-clicked
+                let mut right_clicked_clip = None;
+                for ti in 0..app.project.tracks.len() {
+                    let y = tracks_y_start + ti as f32 * TRACK_HEIGHT;
+                    for ci in 0..app.project.tracks[ti].clips.len() {
+                        let clip = &app.project.tracks[ti].clips[ci];
+                        let clip_x = rect.min.x
+                            + (clip.start_sample as f64 / sample_rate) as f32 * pixels_per_second
+                            - app.scroll_x;
+                        let clip_w = (clip.duration_samples as f64 / sample_rate) as f32
+                            * pixels_per_second;
+                        let clip_rect = egui::Rect::from_min_size(
+                            egui::pos2(clip_x, y + 2.0),
+                            egui::vec2(clip_w, TRACK_HEIGHT - 4.0),
+                        );
+                        if clip_rect.contains(pos) {
+                            right_clicked_clip = Some((ti, ci));
+                        }
+                    }
+                }
+
+                if let Some((ti, ci)) = right_clicked_clip {
+                    let clip_name = app.project.tracks[ti].clips[ci].name.clone();
+                    ui.label(egui::RichText::new(&clip_name).strong());
+                    ui.separator();
+                    if ui.button("Delete Clip").clicked() {
+                        app.push_undo("Delete clip");
+                        app.project.tracks[ti].clips.remove(ci);
+                        app.selected_clip = None;
+                        app.sync_project();
+                        ui.close_menu();
+                    }
+                    if ui.button("Duplicate Clip").clicked() {
+                        app.push_undo("Duplicate clip");
+                        let mut new_clip = app.project.tracks[ti].clips[ci].clone();
+                        new_clip.id = uuid::Uuid::new_v4();
+                        new_clip.start_sample += new_clip.duration_samples;
+                        new_clip.name = format!("{} (copy)", new_clip.name);
+                        app.project.tracks[ti].clips.push(new_clip);
+                        app.sync_project();
+                        ui.close_menu();
+                    }
+                } else {
+                    // Right-clicked on empty area
+                    if ui.button("Add Audio Track").clicked() {
+                        app.push_undo("Add track");
+                        let n = app.project.tracks.len() + 1;
+                        app.project
+                            .add_track(&format!("Track {n}"), TrackKind::Audio);
+                        app.sync_project();
+                        ui.close_menu();
+                    }
+                    if ui.button("Import Audio...").clicked() {
+                        ui.close_menu();
+                        app.open_import_dialog();
+                    }
+                    if ui.button("Paste at Playhead").clicked() {
+                        // placeholder for future clipboard
+                        ui.close_menu();
+                    }
+                }
+            }
+        });
+
         // Left click on empty area to set playhead and deselect clip
         if response.clicked_by(egui::PointerButton::Primary) {
             if let Some(pos) = response.interact_pointer_pos {

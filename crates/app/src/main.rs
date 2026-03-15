@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::egui;
-use jamhub_engine::{load_wav, EngineCommand, EngineHandle, Recorder, WaveformCache};
+use jamhub_engine::{load_audio, EngineCommand, EngineHandle, LevelMeters, Recorder, WaveformCache};
 use jamhub_model::{Clip, ClipSource, Project, TrackKind, TransportState};
 use uuid::Uuid;
 
@@ -140,6 +140,10 @@ impl DawApp {
             .unwrap_or(44100)
     }
 
+    pub fn levels(&self) -> Option<&LevelMeters> {
+        self.engine.as_ref().map(|e| &e.levels)
+    }
+
     pub fn send_command(&self, cmd: EngineCommand) {
         if let Some(ref engine) = self.engine {
             engine.send(cmd);
@@ -181,7 +185,7 @@ impl DawApp {
             return;
         }
 
-        match load_wav(&path) {
+        match load_audio(&path) {
             Ok(data) => {
                 self.push_undo("Import audio");
 
@@ -393,7 +397,7 @@ impl DawApp {
 
     pub fn open_import_dialog(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Audio Files", &["wav", "wave"])
+            .add_filter("Audio Files", &["wav", "wave", "mp3", "ogg", "flac"])
             .pick_file()
         {
             self.import_audio_file(path);
@@ -473,7 +477,7 @@ impl eframe::App for DawApp {
                 if let Some(path) = &file.path {
                     if let Some(ext) = path.extension() {
                         let ext = ext.to_string_lossy().to_lowercase();
-                        if ext == "wav" || ext == "wave" {
+                        if matches!(ext.as_str(), "wav" | "wave" | "mp3" | "ogg" | "flac") {
                             files_to_import.push(path.clone());
                         }
                     }
