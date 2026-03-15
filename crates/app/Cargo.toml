@@ -1,0 +1,11 @@
+[package]
+name = "jamhub-app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+jamhub-model = { path = "../model" }
+jamhub-engine = { path = "../engine" }
+eframe = "0.31"
+egui = "0.31"
+rfd = "0.15"
