@@ -41,7 +41,22 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
                                     ui.colored_label(color, "█");
-                                    ui.strong(&track.name);
+                                    // Check if we're renaming this track
+                                    if let Some((rename_idx, ref rename_buf)) = app.renaming_track {
+                                        if rename_idx == i {
+                                            let mut buf = rename_buf.clone();
+                                            let r = ui.text_edit_singleline(&mut buf);
+                                            if r.lost_focus() {
+                                                track_actions.push(TrackAction::FinishRename(i, buf));
+                                            } else {
+                                                app.renaming_track = Some((i, buf));
+                                            }
+                                        } else {
+                                            ui.strong(&track.name);
+                                        }
+                                    } else {
+                                        ui.strong(&track.name);
+                                    }
                                 });
 
                                 ui.horizontal(|ui| {
@@ -94,16 +109,24 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     if header_response.response.clicked() {
                         track_actions.push(TrackAction::Select(i));
                     }
+                    if header_response.response.double_clicked() {
+                        track_actions.push(TrackAction::StartRename(i));
+                    }
                     // Right-click context menu on track header
                     header_response
                         .response
                         .context_menu(|ui| {
-                            if ui.button("Delete Track").clicked() {
-                                track_actions.push(TrackAction::Delete(i));
+                            if ui.button("Rename Track").clicked() {
+                                track_actions.push(TrackAction::StartRename(i));
                                 ui.close_menu();
                             }
                             if ui.button("Duplicate Track").clicked() {
                                 track_actions.push(TrackAction::Duplicate(i));
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button("Delete Track").clicked() {
+                                track_actions.push(TrackAction::Delete(i));
                                 ui.close_menu();
                             }
                         });
@@ -153,6 +176,18 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.project.tracks.insert(i + 1, t);
                         app.selected_track = Some(i + 1);
                         app.sync_project();
+                    }
+                    TrackAction::StartRename(i) => {
+                        let name = app.project.tracks[i].name.clone();
+                        app.renaming_track = Some((i, name));
+                    }
+                    TrackAction::FinishRename(i, name) => {
+                        if !name.is_empty() {
+                            app.push_undo("Rename track");
+                            app.project.tracks[i].name = name;
+                            app.sync_project();
+                        }
+                        app.renaming_track = None;
                     }
                 }
             }
@@ -523,6 +558,32 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
+        // Loop region
+        if app.loop_enabled && app.loop_end > app.loop_start {
+            let ls = app.loop_start as f64 / sample_rate;
+            let le = app.loop_end as f64 / sample_rate;
+            let lx1 = rect.min.x + ls as f32 * pixels_per_second - app.scroll_x;
+            let lx2 = rect.min.x + le as f32 * pixels_per_second - app.scroll_x;
+            let loop_rect = egui::Rect::from_min_max(
+                egui::pos2(lx1.max(rect.min.x), rect.min.y),
+                egui::pos2(lx2.min(rect.max.x), rect.max.y),
+            );
+            painter.rect_filled(
+                loop_rect,
+                0.0,
+                egui::Color32::from_rgba_premultiplied(60, 100, 200, 25),
+            );
+            // Loop boundaries
+            for lx in [lx1, lx2] {
+                if lx >= rect.min.x && lx <= rect.max.x {
+                    painter.line_segment(
+                        [egui::pos2(lx, rect.min.y), egui::pos2(lx, rect.max.y)],
+                        egui::Stroke::new(1.5, egui::Color32::from_rgb(80, 130, 220)),
+                    );
+                }
+            }
+        }
+
         // Playhead
         let pos = app.position_samples();
         let pos_sec = pos as f64 / sample_rate;
@@ -640,4 +701,6 @@ enum TrackAction {
     Select(usize),
     Delete(usize),
     Duplicate(usize),
+    StartRename(usize),
+    FinishRename(usize, String),
 }

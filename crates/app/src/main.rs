@@ -57,6 +57,11 @@ pub struct DawApp {
     // Clip dragging state
     pub dragging_clip: Option<ClipDragState>,
     pub show_effects: bool,
+    pub loop_enabled: bool,
+    pub loop_start: u64,
+    pub loop_end: u64,
+    pub master_volume: f32,
+    pub renaming_track: Option<(usize, String)>,
 }
 
 pub struct ClipDragState {
@@ -116,6 +121,11 @@ impl DawApp {
             snap_to_grid: true,
             dragging_clip: None,
             show_effects: false,
+            loop_enabled: false,
+            loop_start: 0,
+            loop_end: 0,
+            master_volume: 1.0,
+            renaming_track: None,
         }
     }
 
@@ -489,40 +499,69 @@ impl eframe::App for DawApp {
         }
 
         // Keyboard shortcuts
-        let mut actions: Vec<&str> = Vec::new();
+        let mut actions: Vec<String> = Vec::new();
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Space) {
-                actions.push("toggle_play");
+                actions.push("toggle_play".into());
             }
             if i.modifiers.command && i.key_pressed(egui::Key::Z) {
                 if i.modifiers.shift {
-                    actions.push("redo");
+                    actions.push("redo".into());
                 } else {
-                    actions.push("undo");
+                    actions.push("undo".into());
                 }
             }
             if i.modifiers.command && i.key_pressed(egui::Key::S) {
-                actions.push("save");
+                actions.push("save".into());
             }
             if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
-                actions.push("delete");
+                actions.push("delete".into());
             }
             if i.key_pressed(egui::Key::Home) {
-                actions.push("rewind");
+                actions.push("rewind".into());
             }
             if i.key_pressed(egui::Key::R) && !i.modifiers.command {
-                actions.push("record");
+                actions.push("record".into());
             }
             if i.key_pressed(egui::Key::M) && !i.modifiers.command {
-                actions.push("metronome");
+                actions.push("metronome".into());
             }
             if i.modifiers.command && i.key_pressed(egui::Key::D) {
-                actions.push("duplicate_track");
+                actions.push("duplicate_track".into());
+            }
+            // Track switching: Up/Down arrows
+            if i.key_pressed(egui::Key::ArrowUp) && !i.modifiers.command {
+                actions.push("track_up".into());
+            }
+            if i.key_pressed(egui::Key::ArrowDown) && !i.modifiers.command {
+                actions.push("track_down".into());
+            }
+            // Number keys 1-9 to select track
+            for (idx, key) in [
+                egui::Key::Num1, egui::Key::Num2, egui::Key::Num3,
+                egui::Key::Num4, egui::Key::Num5, egui::Key::Num6,
+                egui::Key::Num7, egui::Key::Num8, egui::Key::Num9,
+            ].iter().enumerate() {
+                if i.key_pressed(*key) && !i.modifiers.command {
+                    actions.push(format!("select_track_{}", idx));
+                }
+            }
+            // L key for loop toggle
+            if i.key_pressed(egui::Key::L) && !i.modifiers.command {
+                actions.push("toggle_loop".into());
+            }
+            // Cmd+E for effects
+            if i.modifiers.command && i.key_pressed(egui::Key::E) {
+                actions.push("effects".into());
+            }
+            // Cmd+I for import
+            if i.modifiers.command && i.key_pressed(egui::Key::I) {
+                actions.push("import".into());
             }
         });
 
-        for action in actions {
-            match action {
+        for action in &actions {
+            match action.as_str() {
                 "toggle_play" => {
                     if self.transport_state() == TransportState::Playing {
                         self.send_command(EngineCommand::Stop);
@@ -552,6 +591,44 @@ impl eframe::App for DawApp {
                 }
                 "duplicate_track" => {
                     self.duplicate_selected_track();
+                }
+                "track_up" => {
+                    if let Some(idx) = self.selected_track {
+                        if idx > 0 {
+                            self.selected_track = Some(idx - 1);
+                            self.selected_clip = None;
+                        }
+                    }
+                }
+                "track_down" => {
+                    if let Some(idx) = self.selected_track {
+                        if idx + 1 < self.project.tracks.len() {
+                            self.selected_track = Some(idx + 1);
+                            self.selected_clip = None;
+                        }
+                    }
+                }
+                "toggle_loop" => {
+                    self.loop_enabled = !self.loop_enabled;
+                    if self.loop_enabled {
+                        self.set_status("Loop ON");
+                    } else {
+                        self.set_status("Loop OFF");
+                    }
+                }
+                "effects" => {
+                    self.show_effects = !self.show_effects;
+                }
+                "import" => {
+                    self.open_import_dialog();
+                }
+                a if a.starts_with("select_track_") => {
+                    if let Ok(idx) = a[13..].parse::<usize>() {
+                        if idx < self.project.tracks.len() {
+                            self.selected_track = Some(idx);
+                            self.selected_clip = None;
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -711,7 +788,7 @@ impl eframe::App for DawApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Keyboard hint
                     ui.label(
-                        egui::RichText::new("Space:play  R:record  M:metro  Cmd+scroll:zoom")
+                        egui::RichText::new("Space:play  R:rec  M:metro  L:loop  ↑↓:tracks  1-9:select  Cmd+scroll:zoom")
                             .small()
                             .color(egui::Color32::from_rgb(100, 100, 110)),
                     );

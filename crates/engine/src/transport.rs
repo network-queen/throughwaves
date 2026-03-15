@@ -19,6 +19,8 @@ pub enum EngineCommand {
     UpdateProject(Project),
     LoadAudioBuffer { id: ClipBufferId, samples: Vec<f32> },
     SetMetronome(bool),
+    SetLoop { enabled: bool, start: u64, end: u64 },
+    SetMasterVolume(f32),
 }
 
 pub struct EngineHandle {
@@ -90,6 +92,10 @@ fn engine_loop(
     let mut transport = TransportState::Stopped;
     let mut position: u64 = 0;
     let mut metronome = Metronome::default();
+    let mut loop_enabled = false;
+    let mut loop_start: u64 = 0;
+    let mut loop_end: u64 = 0;
+    let mut master_volume: f32 = 1.0;
 
     loop {
         while let Ok(cmd) = cmd_rx.try_recv() {
@@ -102,6 +108,12 @@ fn engine_loop(
                     audio_buffers.insert(id, samples);
                 }
                 EngineCommand::SetMetronome(enabled) => metronome.enabled = enabled,
+                EngineCommand::SetLoop { enabled, start, end } => {
+                    loop_enabled = enabled;
+                    loop_start = start;
+                    loop_end = end;
+                }
+                EngineCommand::SetMasterVolume(vol) => master_volume = vol,
             }
         }
 
@@ -124,6 +136,13 @@ fn engine_loop(
                 project.time_signature.numerator,
             );
 
+            // Apply master volume
+            if master_volume != 1.0 {
+                for s in block.iter_mut() {
+                    *s *= master_volume;
+                }
+            }
+
             // Update master level meter
             let (ml, mr) = peak_level(&block, channels as usize);
             levels.set_master_level(ml, mr);
@@ -131,6 +150,10 @@ fn engine_loop(
             match audio_tx.send(block) {
                 Ok(()) => {
                     position += block_size as u64;
+                    // Loop: wrap position back to loop start
+                    if loop_enabled && loop_end > loop_start && position >= loop_end {
+                        position = loop_start;
+                    }
                 }
                 Err(_) => break,
             }
