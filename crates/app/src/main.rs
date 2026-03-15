@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::egui;
-use jamhub_engine::{load_audio, EngineCommand, EngineHandle, LevelMeters, Recorder, WaveformCache};
+use jamhub_engine::{load_audio, EngineCommand, EngineHandle, InputMonitor, LevelMeters, Recorder, WaveformCache};
 use jamhub_model::{Clip, ClipSource, Project, TrackKind, TransportState};
 use uuid::Uuid;
 
@@ -66,6 +66,7 @@ pub struct DawApp {
     pub renaming_track: Option<(usize, String)>,
     pub show_piano_roll: bool,
     pub show_about: bool,
+    input_monitor: InputMonitor,
 }
 
 pub struct ClipDragState {
@@ -132,6 +133,7 @@ impl DawApp {
             renaming_track: None,
             show_piano_roll: false,
             show_about: false,
+            input_monitor: InputMonitor::new(),
         }
     }
 
@@ -433,6 +435,170 @@ impl DawApp {
         }
     }
 
+    /// Split the selected clip at the current playhead position.
+    pub fn split_clip_at_playhead(&mut self) {
+        let pos = self.position_samples();
+        let (track_idx, clip_idx) = match self.selected_clip {
+            Some(tc) => tc,
+            None => {
+                // Try to find a clip under the playhead on the selected track
+                let ti = self.selected_track.unwrap_or(0);
+                if ti >= self.project.tracks.len() {
+                    self.set_status("No clip to split");
+                    return;
+                }
+                let mut found = None;
+                for (ci, clip) in self.project.tracks[ti].clips.iter().enumerate() {
+                    let end = clip.start_sample + clip.duration_samples;
+                    if pos > clip.start_sample && pos < end {
+                        found = Some((ti, ci));
+                        break;
+                    }
+                }
+                match found {
+                    Some(tc) => tc,
+                    None => {
+                        self.set_status("No clip at playhead");
+                        return;
+                    }
+                }
+            }
+        };
+
+        if track_idx >= self.project.tracks.len()
+            || clip_idx >= self.project.tracks[track_idx].clips.len()
+        {
+            return;
+        }
+
+        // Extract clip data before any mutation
+        let clip_start = self.project.tracks[track_idx].clips[clip_idx].start_sample;
+        let clip_duration = self.project.tracks[track_idx].clips[clip_idx].duration_samples;
+        let clip_end = clip_start + clip_duration;
+        let clip_name = self.project.tracks[track_idx].clips[clip_idx].name.clone();
+        let clip_source = self.project.tracks[track_idx].clips[clip_idx].source.clone();
+        let clip_muted = self.project.tracks[track_idx].clips[clip_idx].muted;
+
+        if pos <= clip_start || pos >= clip_end {
+            self.set_status("Playhead not inside clip");
+            return;
+        }
+
+        self.push_undo("Split clip");
+
+        let split_offset = pos - clip_start;
+
+        // Create the right half
+        let mut right_clip = Clip {
+            id: Uuid::new_v4(),
+            name: format!("{} (R)", clip_name),
+            start_sample: pos,
+            duration_samples: clip_duration - split_offset,
+            source: clip_source.clone(),
+            muted: clip_muted,
+        };
+
+        // If it's an audio buffer, split the buffer into left and right
+        if let ClipSource::AudioBuffer { buffer_id } = &clip_source {
+            // Clone the buffer data to avoid borrow issues
+            let buf_data = self.audio_buffers.get(buffer_id).cloned();
+            if let Some(buf) = buf_data {
+                let right_samples: Vec<f32> =
+                    buf[split_offset as usize..].to_vec();
+                let left_samples: Vec<f32> =
+                    buf[..split_offset as usize].to_vec();
+
+                let right_id = Uuid::new_v4();
+                let left_id = Uuid::new_v4();
+
+                right_clip.source = ClipSource::AudioBuffer { buffer_id: right_id };
+                right_clip.duration_samples = right_samples.len() as u64;
+
+                self.waveform_cache.insert(right_id, &right_samples);
+                self.waveform_cache.insert(left_id, &left_samples);
+
+                self.send_command(EngineCommand::LoadAudioBuffer {
+                    id: right_id,
+                    samples: right_samples.clone(),
+                });
+                self.send_command(EngineCommand::LoadAudioBuffer {
+                    id: left_id,
+                    samples: left_samples.clone(),
+                });
+
+                self.audio_buffers.insert(right_id, right_samples);
+                self.audio_buffers.insert(left_id, left_samples);
+
+                self.project.tracks[track_idx].clips[clip_idx].source =
+                    ClipSource::AudioBuffer { buffer_id: left_id };
+            }
+        }
+
+        // Trim the left clip
+        self.project.tracks[track_idx].clips[clip_idx].duration_samples = split_offset;
+        self.project.tracks[track_idx].clips[clip_idx].name =
+            format!("{} (L)", self.project.tracks[track_idx].clips[clip_idx].name);
+
+        // Add right clip
+        self.project.tracks[track_idx].clips.push(right_clip);
+        self.selected_clip = None;
+        self.sync_project();
+        self.set_status("Clip split at playhead");
+    }
+
+    /// Bounce/freeze selected track: render all effects to a new audio buffer.
+    pub fn bounce_selected_track(&mut self) {
+        let track_idx = self.selected_track.unwrap_or(0);
+        if track_idx >= self.project.tracks.len() {
+            return;
+        }
+
+        let sr = self.sample_rate();
+        match jamhub_engine::bounce_track(
+            &self.project,
+            track_idx,
+            &self.audio_buffers,
+            sr,
+        ) {
+            Ok(samples) => {
+                self.push_undo("Bounce track");
+                let buffer_id = Uuid::new_v4();
+                let duration = samples.len() as u64;
+
+                self.waveform_cache.insert(buffer_id, &samples);
+                self.send_command(EngineCommand::LoadAudioBuffer {
+                    id: buffer_id,
+                    samples: samples.clone(),
+                });
+                self.audio_buffers.insert(buffer_id, samples);
+
+                // Replace all clips with a single bounced clip, clear effects
+                let bounced_name = format!("{} (bounced)", self.project.tracks[track_idx].name);
+                self.project.tracks[track_idx].clips.clear();
+                self.project.tracks[track_idx].clips.push(Clip {
+                    id: Uuid::new_v4(),
+                    name: bounced_name,
+                    start_sample: 0,
+                    duration_samples: duration,
+                    source: ClipSource::AudioBuffer { buffer_id },
+                    muted: false,
+                });
+                self.project.tracks[track_idx].effects.clear();
+                self.sync_project();
+                self.set_status("Track bounced — effects baked in");
+            }
+            Err(e) => self.set_status(&format!("Bounce failed: {e}")),
+        }
+    }
+
+    pub fn toggle_input_monitor(&mut self) {
+        match self.input_monitor.toggle() {
+            Ok(true) => self.set_status("Input monitoring ON — you can hear your mic"),
+            Ok(false) => self.set_status("Input monitoring OFF"),
+            Err(e) => self.set_status(&format!("Monitor failed: {e}")),
+        }
+    }
+
     pub fn export_mixdown(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .set_title("Export Mixdown")
@@ -605,6 +771,18 @@ impl eframe::App for DawApp {
             if i.modifiers.command && i.key_pressed(egui::Key::P) {
                 actions.push("piano_roll".into());
             }
+            // S for split clip
+            if i.key_pressed(egui::Key::S) && !i.modifiers.command {
+                actions.push("split".into());
+            }
+            // I (no Cmd) for input monitor
+            if i.key_pressed(egui::Key::I) && !i.modifiers.command {
+                actions.push("input_monitor".into());
+            }
+            // Cmd+B for bounce
+            if i.modifiers.command && i.key_pressed(egui::Key::B) {
+                actions.push("bounce".into());
+            }
         });
 
         for action in &actions {
@@ -671,6 +849,15 @@ impl eframe::App for DawApp {
                 }
                 "piano_roll" => {
                     self.show_piano_roll = !self.show_piano_roll;
+                }
+                "split" => {
+                    self.split_clip_at_playhead();
+                }
+                "input_monitor" => {
+                    self.toggle_input_monitor();
+                }
+                "bounce" => {
+                    self.bounce_selected_track();
                 }
                 a if a.starts_with("select_track_") => {
                     if let Ok(idx) = a[13..].parse::<usize>() {
@@ -749,6 +936,10 @@ impl eframe::App for DawApp {
                         }
                         ui.close_menu();
                     }
+                    if ui.button("Split Clip at Playhead  S").clicked() {
+                        self.split_clip_at_playhead();
+                        ui.close_menu();
+                    }
                     if ui.button("Duplicate Track        Cmd+D").clicked() {
                         self.duplicate_selected_track();
                         ui.close_menu();
@@ -783,6 +974,10 @@ impl eframe::App for DawApp {
                     }
                     if ui.button("Piano Roll...    Cmd+P").clicked() {
                         self.show_piano_roll = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("Bounce Track     Cmd+B").clicked() {
+                        self.bounce_selected_track();
                         ui.close_menu();
                     }
                 });
@@ -861,7 +1056,7 @@ impl eframe::App for DawApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Keyboard hint
                     ui.label(
-                        egui::RichText::new("Space:play  R:rec  M:metro  L:loop  ↑↓:tracks  1-9:select  Cmd+scroll:zoom")
+                        egui::RichText::new("Space:play  R:rec  S:split  M:metro  L:loop  I:monitor  ↑↓:tracks  Cmd+B:bounce")
                             .small()
                             .color(egui::Color32::from_rgb(100, 100, 110)),
                     );

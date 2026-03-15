@@ -40,6 +40,7 @@ impl Project {
             color: random_track_color(),
             effects: Vec::new(),
             lanes_expanded: false,
+            automation: Vec::new(),
         });
         id
     }
@@ -62,6 +63,56 @@ pub struct Track {
     /// Whether take lanes are expanded (showing all takes) or collapsed (showing only active)
     #[serde(default)]
     pub lanes_expanded: bool,
+    /// Automation lanes for this track
+    #[serde(default)]
+    pub automation: Vec<AutomationLane>,
+}
+
+/// An automation lane controls a parameter over time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutomationLane {
+    pub parameter: AutomationParam,
+    pub points: Vec<AutomationPoint>,
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutomationParam {
+    Volume,
+    Pan,
+    Mute,
+}
+
+impl AutomationParam {
+    pub fn name(&self) -> &str {
+        match self {
+            AutomationParam::Volume => "Volume",
+            AutomationParam::Pan => "Pan",
+            AutomationParam::Mute => "Mute",
+        }
+    }
+
+    pub fn default_value(&self) -> f32 {
+        match self {
+            AutomationParam::Volume => 1.0,
+            AutomationParam::Pan => 0.0,
+            AutomationParam::Mute => 0.0,
+        }
+    }
+
+    pub fn range(&self) -> (f32, f32) {
+        match self {
+            AutomationParam::Volume => (0.0, 1.5),
+            AutomationParam::Pan => (-1.0, 1.0),
+            AutomationParam::Mute => (0.0, 1.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct AutomationPoint {
+    pub sample: u64,
+    pub value: f32,
 }
 
 /// Effect types that can be applied to a track.

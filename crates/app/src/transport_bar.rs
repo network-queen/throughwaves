@@ -83,6 +83,22 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             app.send_command(EngineCommand::SetMetronome(app.metronome_enabled));
         }
 
+        // Input monitor
+        let mon_color = if app.input_monitor.is_enabled() {
+            egui::Color32::from_rgb(255, 150, 50)
+        } else {
+            egui::Color32::GRAY
+        };
+        if ui
+            .add(egui::Button::new(
+                egui::RichText::new("🎧").color(mon_color),
+            ))
+            .on_hover_text("Input monitoring (I)")
+            .clicked()
+        {
+            app.toggle_input_monitor();
+        }
+
         ui.separator();
 
         // === TIME DISPLAY ===

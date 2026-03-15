@@ -2,6 +2,7 @@ mod audio;
 mod audio_file;
 pub mod effects;
 mod export;
+mod input_monitor;
 pub mod levels;
 mod metronome;
 mod mixer;
@@ -12,7 +13,8 @@ pub mod waveform;
 
 pub use audio::AudioBackend;
 pub use audio_file::{load_audio, load_wav, save_wav, AudioFileData};
-pub use export::export_wav;
+pub use export::{bounce_track, export_wav, export_wav_with_options, ExportOptions};
+pub use input_monitor::InputMonitor;
 pub use levels::LevelMeters;
 pub use metronome::Metronome;
 pub use mixer::Mixer;

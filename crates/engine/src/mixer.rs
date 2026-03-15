@@ -93,12 +93,26 @@ impl Mixer {
                 }
             }
 
-            // Apply volume and pan, mix into output
+            // Read automation at current position
+            let auto_volume = get_automation_value(
+                &track.automation,
+                jamhub_model::AutomationParam::Volume,
+                position_samples,
+                track.volume,
+            );
+            let auto_pan = get_automation_value(
+                &track.automation,
+                jamhub_model::AutomationParam::Pan,
+                position_samples,
+                track.pan,
+            );
+
+            // Apply volume and pan (with automation), mix into output
             let channels = self.channels as usize;
-            let (left_gain, right_gain) = pan_law(track.pan);
+            let (left_gain, right_gain) = pan_law(auto_pan);
 
             for i in 0..block_size {
-                let sample = track_mono[i] * track.volume;
+                let sample = track_mono[i] * auto_volume;
                 for ch in 0..channels {
                     let gain = if ch == 0 {
                         left_gain
@@ -118,6 +132,42 @@ impl Mixer {
 
         output
     }
+}
+
+/// Get interpolated automation value at a given sample position.
+fn get_automation_value(
+    automation: &[jamhub_model::AutomationLane],
+    param: jamhub_model::AutomationParam,
+    sample: u64,
+    default: f32,
+) -> f32 {
+    let lane = automation.iter().find(|l| l.parameter == param);
+    let lane = match lane {
+        Some(l) if !l.points.is_empty() => l,
+        _ => return default,
+    };
+
+    let points = &lane.points;
+
+    // Before first point
+    if sample <= points[0].sample {
+        return points[0].value;
+    }
+    // After last point
+    if sample >= points[points.len() - 1].sample {
+        return points[points.len() - 1].value;
+    }
+
+    // Find surrounding points and interpolate
+    for i in 0..points.len() - 1 {
+        if sample >= points[i].sample && sample < points[i + 1].sample {
+            let t = (sample - points[i].sample) as f32
+                / (points[i + 1].sample - points[i].sample) as f32;
+            return points[i].value + t * (points[i + 1].value - points[i].value);
+        }
+    }
+
+    default
 }
 
 fn pan_law(pan: f32) -> (f32, f32) {
