@@ -220,11 +220,16 @@ impl DawApp {
 
     pub fn toggle_recording(&mut self) {
         if self.is_recording {
+            // === STOP RECORDING ===
             self.is_recording = false;
-            let samples = self.recorder.stop();
+
+            // 1. Stop the recorder FIRST to get captured audio
+            let result = self.recorder.stop();
+
+            // 2. Stop the engine AFTER getting recording data
             self.send_command(EngineCommand::Stop);
 
-            if samples.is_empty() {
+            if result.samples.is_empty() {
                 self.set_status("Recording was empty");
                 return;
             }
@@ -236,10 +241,31 @@ impl DawApp {
 
             self.push_undo("Record audio");
 
+            // 3. Resample to engine sample rate if needed
+            let engine_sr = self.sample_rate();
+            let samples = if result.sample_rate != engine_sr {
+                println!(
+                    "Resampling recording from {}Hz to {}Hz",
+                    result.sample_rate, engine_sr
+                );
+                jamhub_engine::resample(&result.samples, result.sample_rate, engine_sr)
+            } else {
+                result.samples
+            };
+
+            // 4. Duration is simply the buffer length — this is the actual audio data
             let buffer_id = Uuid::new_v4();
-            let duration = samples.len() as u64;
-            // Use the stored start position, not a backwards calculation
             let rec_start = self.recording_start_pos;
+            let duration = samples.len() as u64;
+
+            println!(
+                "Recording clip: start={}, duration={} ({:.2}s), buffer_len={}, engine_sr={}",
+                rec_start,
+                duration,
+                duration as f64 / engine_sr as f64,
+                samples.len(),
+                engine_sr,
+            );
 
             let clip = Clip {
                 id: Uuid::new_v4(),
@@ -252,33 +278,41 @@ impl DawApp {
                 source: ClipSource::AudioBuffer { buffer_id },
             };
 
+            // 5. Build waveform for display
             self.waveform_cache.insert(buffer_id, &samples);
             self.audio_buffers.insert(buffer_id, samples.clone());
 
-            self.project.tracks[track_idx].clips.push(clip);
-            // Send buffer FIRST, then project update (order matters)
+            // 6. CRITICAL ORDER: Load buffer into engine FIRST, then update project.
+            //    The engine processes commands in order from a single channel.
+            //    If project arrives first, mixer would try to read a buffer that
+            //    doesn't exist yet.
             self.send_command(EngineCommand::LoadAudioBuffer {
                 id: buffer_id,
                 samples,
             });
+
+            // 7. Add clip to project and sync AFTER buffer is queued
+            self.project.tracks[track_idx].clips.push(clip);
             self.sync_project();
 
             self.set_status(&format!(
                 "Recording saved ({:.1}s)",
-                duration as f64 / self.sample_rate() as f64
+                duration as f64 / engine_sr as f64
             ));
         } else {
+            // === START RECORDING ===
             let track_idx = self.selected_track.unwrap_or(0);
             if track_idx < self.project.tracks.len() {
                 self.project.tracks[track_idx].armed = true;
             }
 
-            // Store the current position as recording start
+            // Store the current playhead position BEFORE starting
             self.recording_start_pos = self.position_samples();
 
             match self.recorder.start() {
                 Ok(()) => {
                     self.is_recording = true;
+                    // Start engine playback so the playhead advances
                     self.send_command(EngineCommand::Play);
                     self.set_status("Recording...");
                 }
@@ -338,18 +372,7 @@ impl DawApp {
             .save_file()
         {
             let sr = self.sample_rate();
-            let channels = self
-                .engine
-                .as_ref()
-                .map(|e| e.state.read().sample_rate) // just need to know channels
-                .unwrap_or(44100);
-            match jamhub_engine::export_wav(
-                &path,
-                &self.project,
-                &self.audio_buffers,
-                sr,
-                2, // stereo
-            ) {
+            match jamhub_engine::export_wav(&path, &self.project, &self.audio_buffers, sr, 2) {
                 Ok(()) => self.set_status(&format!("Exported: {}", path.display())),
                 Err(e) => self.set_status(&format!("Export failed: {e}")),
             }

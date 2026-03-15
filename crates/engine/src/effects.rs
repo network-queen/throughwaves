@@ -1,7 +1,3 @@
-use std::collections::HashMap;
-
-use uuid::Uuid;
-
 use jamhub_model::TrackEffect;
 
 /// Processes audio through an effect chain.

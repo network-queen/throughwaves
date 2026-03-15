@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use uuid::Uuid;
 
-use jamhub_model::{Clip, ClipSource, Project};
+use jamhub_model::{ClipSource, Project};
 
 use crate::audio_file;
 

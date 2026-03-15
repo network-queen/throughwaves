@@ -15,6 +15,6 @@ pub use export::export_wav;
 pub use metronome::Metronome;
 pub use mixer::Mixer;
 pub use project_io::{load_project, save_project};
-pub use recorder::Recorder;
+pub use recorder::{resample, Recorder, RecordingResult};
 pub use transport::{EngineCommand, EngineHandle};
 pub use waveform::WaveformCache;
