@@ -164,6 +164,8 @@ pub enum TrackEffect {
     EqBand { freq_hz: f32, gain_db: f32, q: f32 },
     Chorus { rate_hz: f32, depth: f32, mix: f32 },
     Distortion { drive: f32, mix: f32 },
+    /// External VST3 plugin — path to the .vst3 bundle
+    Vst3Plugin { path: String, name: String },
 }
 
 impl TrackEffect {
@@ -178,6 +180,7 @@ impl TrackEffect {
             TrackEffect::EqBand { .. } => "EQ Band",
             TrackEffect::Chorus { .. } => "Chorus",
             TrackEffect::Distortion { .. } => "Distortion",
+            TrackEffect::Vst3Plugin { ref name, .. } => name.as_str(),
         }
     }
 }

@@ -109,56 +109,81 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
 
             ui.separator();
 
-            // Plugin list
+            // Plugin list — collect filtered list first to avoid borrow issues
+            let filter_lower = app.fx_browser.filter.to_lowercase();
+            let visible_plugins: Vec<(String, std::path::PathBuf, VstCategory, bool)> =
+                app.fx_browser.plugins.iter()
+                    .filter(|p| filter_lower.is_empty() || p.name.to_lowercase().contains(&filter_lower))
+                    .filter(|p| app.fx_browser.category_filter.as_ref().map_or(true, |c| &p.category == c))
+                    .map(|p| {
+                        let is_loaded = app.fx_browser.loaded_plugins.iter().any(|l| l.path == p.path && l.loaded);
+                        (p.name.clone(), p.path.clone(), p.category.clone(), is_loaded)
+                    })
+                    .collect();
+
             egui::ScrollArea::vertical().show(ui, |ui| {
-                let filter_lower = app.fx_browser.filter.to_lowercase();
-
-                for plugin in &app.fx_browser.plugins {
-                    // Apply filters
-                    if !filter_lower.is_empty() && !plugin.name.to_lowercase().contains(&filter_lower) {
-                        continue;
-                    }
-                    if let Some(ref cat) = app.fx_browser.category_filter {
-                        if &plugin.category != cat {
-                            continue;
-                        }
-                    }
-
-                    let cat_icon = match plugin.category {
+                for (plugin_name, plugin_path, category, is_loaded) in &visible_plugins {
+                    let cat_icon = match category {
                         VstCategory::Instrument => "🎹",
                         VstCategory::Effect => "🎛",
                         VstCategory::Analyzer => "📊",
                         VstCategory::Unknown => "?",
                     };
 
-                    let plugin_path = plugin.path.clone();
-                    let plugin_name = plugin.name.clone();
-                    let is_loaded = app.fx_browser.loaded_plugins.iter().any(|l| l.path == plugin_path && l.loaded);
-
                     ui.horizontal(|ui| {
                         ui.label(cat_icon);
-                        if is_loaded {
-                            ui.strong(egui::RichText::new(&plugin_name).color(egui::Color32::from_rgb(80, 200, 80)));
+                        if *is_loaded {
+                            ui.strong(egui::RichText::new(plugin_name).color(egui::Color32::from_rgb(80, 200, 80)));
                         } else {
-                            ui.strong(&plugin_name);
+                            ui.strong(plugin_name);
                         }
 
-                        if is_loaded {
-                            ui.label(egui::RichText::new("loaded").small().color(egui::Color32::from_rgb(80, 200, 80)));
+                        if *is_loaded {
+                            ui.label(egui::RichText::new("✓").small().color(egui::Color32::from_rgb(80, 200, 80)));
+                            if ui.small_button("+ Track FX")
+                                .on_hover_text("Add this plugin to the selected track's FX chain")
+                                .clicked()
+                            {
+                                if let Some(ti) = app.selected_track {
+                                    if ti < app.project.tracks.len() {
+                                        app.push_undo("Add VST plugin");
+                                        app.project.tracks[ti].effects.push(
+                                            jamhub_model::TrackEffect::Vst3Plugin {
+                                                path: plugin_path.to_string_lossy().to_string(),
+                                                name: plugin_name.clone(),
+                                            },
+                                        );
+                                        app.sync_project();
+                                        app.fx_browser.load_status = Some(format!("Added {plugin_name} to track FX chain"));
+                                    }
+                                }
+                            }
                         } else {
-                            if ui.small_button("Load").on_hover_text("Load this plugin").clicked() {
-                                let instance = jamhub_engine::vst_loader::VstInstance::load(&plugin_path);
+                            if ui.small_button("Load").on_hover_text("Load this plugin into memory").clicked() {
+                                let instance = jamhub_engine::vst3_host::Vst3Plugin::load(
+                                    plugin_path,
+                                    app.sample_rate() as f64,
+                                    256,
+                                );
                                 if instance.loaded {
                                     app.fx_browser.load_status = Some(format!("Loaded: {plugin_name}"));
                                 } else {
                                     app.fx_browser.load_status = Some(format!("Failed: {}", instance.error.as_deref().unwrap_or("unknown error")));
                                 }
-                                app.fx_browser.loaded_plugins.push(instance);
+                                app.fx_browser.loaded_plugins.push(
+                                    jamhub_engine::vst_loader::VstInstance {
+                                        name: instance.name.clone(),
+                                        path: instance.path.clone(),
+                                        loaded: instance.loaded,
+                                        error: instance.error.clone(),
+                                        _lib: None,
+                                    },
+                                );
                             }
                         }
 
                         ui.label(
-                            egui::RichText::new(&plugin.path.to_string_lossy().to_string())
+                            egui::RichText::new(plugin_path.to_string_lossy().to_string())
                                 .small()
                                 .color(egui::Color32::GRAY),
                         );

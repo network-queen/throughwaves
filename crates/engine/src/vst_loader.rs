@@ -9,7 +9,7 @@ pub struct VstInstance {
     pub path: PathBuf,
     pub loaded: bool,
     pub error: Option<String>,
-    _lib: Option<libloading::Library>,
+    pub _lib: Option<libloading::Library>,
 }
 
 impl VstInstance {

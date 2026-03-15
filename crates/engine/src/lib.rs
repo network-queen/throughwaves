@@ -13,6 +13,7 @@ mod recorder;
 mod transport;
 pub mod vst_host;
 pub mod vst_loader;
+pub mod vst3_host;
 pub mod waveform;
 
 pub use audio::AudioBackend;

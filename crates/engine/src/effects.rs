@@ -188,6 +188,11 @@ impl EffectProcessor {
                     *s = dry * (1.0 - mix) + driven * mix;
                 }
             }
+            TrackEffect::Vst3Plugin { .. } => {
+                // VST3 processing is handled by the Vst3Plugin instance
+                // in the mixer, not through the EffectProcessor.
+                // This is a passthrough placeholder.
+            }
         }
     }
 }

@@ -161,6 +161,11 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                     if ui.add(egui::Slider::new(drive, 0.0..=40.0).text("Drive").suffix(" dB")).changed() { needs_sync = true; }
                                     if ui.add(egui::Slider::new(mix, 0.0..=1.0).text("Mix")).changed() { needs_sync = true; }
                                 }
+                                TrackEffect::Vst3Plugin { ref name, ref path } => {
+                                    ui.label(egui::RichText::new(format!("VST3: {name}")).color(egui::Color32::from_rgb(100, 200, 100)));
+                                    ui.label(egui::RichText::new(path).small().color(egui::Color32::GRAY));
+                                    ui.label(egui::RichText::new("Plugin loaded — audio passthrough").small().color(egui::Color32::from_rgb(200, 180, 100)));
+                                }
                             }
                         });
                     ui.add_space(2.0);

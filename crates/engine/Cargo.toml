@@ -15,3 +15,4 @@ serde_json = "1"
 symphonia = { version = "0.5", features = ["mp3", "ogg", "flac", "wav", "pcm", "vorbis"] }
 dirs = "5"
 libloading = "0.8"
+vst3 = "0.3"
