@@ -788,6 +788,10 @@ impl eframe::App for DawApp {
             if i.modifiers.command && i.key_pressed(egui::Key::P) {
                 actions.push("piano_roll".into());
             }
+            // T for toggle take lanes on selected track
+            if i.key_pressed(egui::Key::T) && !i.modifiers.command {
+                actions.push("toggle_takes".into());
+            }
             // G for snap mode cycle
             if i.key_pressed(egui::Key::G) && !i.modifiers.command {
                 actions.push("cycle_snap".into());
@@ -870,6 +874,15 @@ impl eframe::App for DawApp {
                 }
                 "piano_roll" => {
                     self.show_piano_roll = !self.show_piano_roll;
+                }
+                "toggle_takes" => {
+                    if let Some(ti) = self.selected_track {
+                        if ti < self.project.tracks.len() {
+                            self.project.tracks[ti].lanes_expanded =
+                                !self.project.tracks[ti].lanes_expanded;
+                            self.project.tracks[ti].custom_height = 0.0;
+                        }
+                    }
                 }
                 "cycle_snap" => {
                     self.snap_mode = self.snap_mode.next();
