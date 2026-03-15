@@ -30,10 +30,37 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                     let header_response =
                         ui.allocate_ui(egui::vec2(HEADER_WIDTH, TRACK_HEIGHT), |ui| {
+                            let header_rect = ui.max_rect();
+                            // Invisible click area behind everything for track selection
+                            let bg_response = ui.interact(
+                                header_rect,
+                                ui.id().with("track_bg").with(i),
+                                egui::Sense::click(),
+                            );
+                            if bg_response.clicked() {
+                                track_actions.push(TrackAction::Select(i));
+                            }
+                            if bg_response.double_clicked() {
+                                track_actions.push(TrackAction::StartRename(i));
+                            }
+                            bg_response.context_menu(|ui| {
+                                if ui.button("Rename Track").clicked() {
+                                    track_actions.push(TrackAction::StartRename(i));
+                                    ui.close_menu();
+                                }
+                                if ui.button("Duplicate Track").clicked() {
+                                    track_actions.push(TrackAction::Duplicate(i));
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if ui.button("Delete Track").clicked() {
+                                    track_actions.push(TrackAction::Delete(i));
+                                    ui.close_menu();
+                                }
+                            });
                             if is_selected {
-                                let rect = ui.max_rect();
                                 ui.painter().rect_filled(
-                                    rect,
+                                    header_rect,
                                     0.0,
                                     egui::Color32::from_rgb(45, 45, 55),
                                 );
@@ -106,30 +133,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 });
                             });
                         });
-                    if header_response.response.clicked() {
-                        track_actions.push(TrackAction::Select(i));
-                    }
-                    if header_response.response.double_clicked() {
-                        track_actions.push(TrackAction::StartRename(i));
-                    }
-                    // Right-click context menu on track header
-                    header_response
-                        .response
-                        .context_menu(|ui| {
-                            if ui.button("Rename Track").clicked() {
-                                track_actions.push(TrackAction::StartRename(i));
-                                ui.close_menu();
-                            }
-                            if ui.button("Duplicate Track").clicked() {
-                                track_actions.push(TrackAction::Duplicate(i));
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button("Delete Track").clicked() {
-                                track_actions.push(TrackAction::Delete(i));
-                                ui.close_menu();
-                            }
-                        });
+                    // click/double-click/context-menu handled inside allocate_ui above
                     ui.separator();
                 });
             }
@@ -339,6 +343,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         if clip_rect.contains(pos) {
                             clicked_clip = Some((ti, ci));
                         }
+                    }
+                }
+
+                // Select the track under the cursor based on Y position
+                if pos.y > tracks_y_start {
+                    let track_idx = ((pos.y - tracks_y_start) / TRACK_HEIGHT) as usize;
+                    if track_idx < app.project.tracks.len() {
+                        app.selected_track = Some(track_idx);
                     }
                 }
 
