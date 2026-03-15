@@ -434,6 +434,20 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         });
 
+        // Double-click on track lane area: toggle take lanes
+        if response.double_clicked() {
+            if let Some(pos) = response.interact_pointer_pos {
+                if let Some(ti) = track_at_y(app, pos.y, tracks_y_start) {
+                    let lanes = compute_take_lanes(&app.project.tracks[ti]);
+                    let num_lanes = lanes.iter().map(|&(_, l)| l).max().unwrap_or(0) + 1;
+                    if num_lanes > 1 {
+                        app.project.tracks[ti].lanes_expanded = !app.project.tracks[ti].lanes_expanded;
+                        app.project.tracks[ti].custom_height = 0.0;
+                    }
+                }
+            }
+        }
+
         // Left click: select track, select/activate take, set playhead
         if response.clicked_by(egui::PointerButton::Primary) {
             if let Some(pos) = response.interact_pointer_pos {
