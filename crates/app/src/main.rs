@@ -212,6 +212,7 @@ impl DawApp {
                     start_sample: position,
                     duration_samples: data.duration_samples,
                     source: ClipSource::AudioBuffer { buffer_id },
+                    muted: false,
                 };
 
                 self.waveform_cache.insert(buffer_id, &data.samples);
@@ -281,15 +282,26 @@ impl DawApp {
                 engine_sr,
             );
 
+            // Auto-mute older overlapping clips (takes behavior)
+            for existing_clip in &mut self.project.tracks[track_idx].clips {
+                let existing_end = existing_clip.start_sample + existing_clip.duration_samples;
+                let new_end = rec_start + duration;
+                // If clips overlap, mute the old one
+                if rec_start < existing_end && new_end > existing_clip.start_sample {
+                    existing_clip.muted = true;
+                }
+            }
+
             let clip = Clip {
                 id: Uuid::new_v4(),
                 name: format!(
-                    "Recording {}",
+                    "Take {}",
                     self.project.tracks[track_idx].clips.len() + 1
                 ),
                 start_sample: rec_start,
                 duration_samples: duration,
                 source: ClipSource::AudioBuffer { buffer_id },
+                muted: false,
             };
 
             // 5. Build waveform for display

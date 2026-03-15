@@ -247,22 +247,51 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                 if let Some((ti, ci)) = right_clicked_clip {
                     let clip_name = app.project.tracks[ti].clips[ci].name.clone();
+                    let is_muted = app.project.tracks[ti].clips[ci].muted;
                     ui.label(egui::RichText::new(&clip_name).strong());
+                    if is_muted {
+                        ui.label(egui::RichText::new("(muted take)").small().color(egui::Color32::GRAY));
+                    }
                     ui.separator();
-                    if ui.button("Delete Clip").clicked() {
-                        app.push_undo("Delete clip");
-                        app.project.tracks[ti].clips.remove(ci);
-                        app.selected_clip = None;
+
+                    // Activate this take (mute all overlapping, unmute this)
+                    let activate_label = if is_muted { "Activate Take" } else { "Mute Take" };
+                    if ui.button(activate_label).clicked() {
+                        app.push_undo("Toggle take");
+                        if is_muted {
+                            // Activating: mute all overlapping clips, unmute this one
+                            let clip_start = app.project.tracks[ti].clips[ci].start_sample;
+                            let clip_end = clip_start + app.project.tracks[ti].clips[ci].duration_samples;
+                            for (j, c) in app.project.tracks[ti].clips.iter_mut().enumerate() {
+                                let c_end = c.start_sample + c.duration_samples;
+                                if j != ci && clip_start < c_end && clip_end > c.start_sample {
+                                    c.muted = true;
+                                }
+                            }
+                            app.project.tracks[ti].clips[ci].muted = false;
+                        } else {
+                            app.project.tracks[ti].clips[ci].muted = true;
+                        }
                         app.sync_project();
                         ui.close_menu();
                     }
+                    ui.separator();
+
                     if ui.button("Duplicate Clip").clicked() {
                         app.push_undo("Duplicate clip");
                         let mut new_clip = app.project.tracks[ti].clips[ci].clone();
                         new_clip.id = uuid::Uuid::new_v4();
                         new_clip.start_sample += new_clip.duration_samples;
                         new_clip.name = format!("{} (copy)", new_clip.name);
+                        new_clip.muted = false;
                         app.project.tracks[ti].clips.push(new_clip);
+                        app.sync_project();
+                        ui.close_menu();
+                    }
+                    if ui.button("Delete Clip").clicked() {
+                        app.push_undo("Delete clip");
+                        app.project.tracks[ti].clips.remove(ci);
+                        app.selected_clip = None;
                         app.sync_project();
                         ui.close_menu();
                     }
@@ -520,15 +549,32 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 );
 
                 let is_clip_selected = app.selected_clip == Some((i, ci));
+                let is_clip_muted = clip.muted;
 
-                // Clip background
-                let bg_alpha = if is_clip_selected { 0.5 } else { 0.3 };
-                painter.rect_filled(clip_rect, 4.0, color.gamma_multiply(bg_alpha));
+                // Clip background — muted clips are dimmed
+                let draw_color = if is_clip_muted {
+                    egui::Color32::from_rgb(80, 80, 80)
+                } else {
+                    color
+                };
+                let bg_alpha = if is_clip_muted {
+                    0.15
+                } else if is_clip_selected {
+                    0.5
+                } else {
+                    0.3
+                };
+                painter.rect_filled(clip_rect, 4.0, draw_color.gamma_multiply(bg_alpha));
 
                 // Waveform
                 if let ClipSource::AudioBuffer { buffer_id } = &clip.source {
                     if let Some(peaks) = app.waveform_cache.get(buffer_id) {
-                        draw_waveform(painter, &peaks, clip_rect, clip.duration_samples, color);
+                        let wave_color = if is_clip_muted {
+                            egui::Color32::from_rgb(100, 100, 100)
+                        } else {
+                            color
+                        };
+                        draw_waveform(painter, &peaks, clip_rect, clip.duration_samples, wave_color);
                     }
                 }
 
@@ -536,6 +582,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 let border_width = if is_clip_selected { 2.0 } else { 1.0 };
                 let border_color = if is_clip_selected {
                     egui::Color32::WHITE
+                } else if is_clip_muted {
+                    egui::Color32::from_rgb(80, 80, 80)
                 } else {
                     color
                 };
@@ -545,6 +593,17 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     egui::Stroke::new(border_width, border_color),
                     egui::StrokeKind::Outside,
                 );
+
+                // Muted indicator
+                if is_clip_muted {
+                    painter.with_clip_rect(clip_rect).text(
+                        egui::pos2(clip_rect.right() - 20.0, clip_rect.top() + 4.0),
+                        egui::Align2::RIGHT_TOP,
+                        "MUTED",
+                        egui::FontId::proportional(8.0),
+                        egui::Color32::from_rgb(150, 150, 150),
+                    );
+                }
 
                 // Clip name
                 let text_rect = clip_rect.shrink(3.0);

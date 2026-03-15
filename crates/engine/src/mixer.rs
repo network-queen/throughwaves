@@ -49,6 +49,10 @@ impl Mixer {
             let mut has_audio = false;
 
             for clip in &track.clips {
+                if clip.muted {
+                    continue;
+                }
+
                 let clip_end = clip.start_sample + clip.duration_samples;
                 let block_end = position_samples + block_size as u64;
 

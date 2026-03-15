@@ -96,6 +96,9 @@ pub struct Clip {
     pub start_sample: u64,
     pub duration_samples: u64,
     pub source: ClipSource,
+    /// Muted clips are visible but don't play (used for takes management)
+    #[serde(default)]
+    pub muted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
