@@ -117,145 +117,105 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 let num_lanes = take_lanes.iter().map(|&(_, l)| l).max().unwrap_or(0) + 1;
 
                 ui.push_id(i, |ui| {
-                    let color =
-                        egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]);
+                    let color = egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]);
                     let is_selected = app.selected_track == Some(i);
 
                     ui.allocate_ui(egui::vec2(HEADER_WIDTH, h), |ui| {
                         let header_rect = ui.max_rect();
-                        let bg_response = ui.interact(
-                            header_rect,
-                            ui.id().with("track_bg").with(i),
-                            egui::Sense::click(),
-                        );
-                        if bg_response.clicked() {
-                            track_actions.push(TrackAction::Select(i));
-                        }
-                        if bg_response.double_clicked() {
-                            track_actions.push(TrackAction::StartRename(i));
-                        }
+
+                        // Click area
+                        let bg_response = ui.interact(header_rect, ui.id().with("tbg").with(i), egui::Sense::click());
+                        if bg_response.clicked() { track_actions.push(TrackAction::Select(i)); }
+                        if bg_response.double_clicked() { track_actions.push(TrackAction::StartRename(i)); }
                         bg_response.context_menu(|ui| {
-                            if ui.button("Rename Track").clicked() {
-                                track_actions.push(TrackAction::StartRename(i));
-                                ui.close_menu();
-                            }
-                            if ui.button("Duplicate Track").clicked() {
-                                track_actions.push(TrackAction::Duplicate(i));
-                                ui.close_menu();
-                            }
+                            if ui.button("Rename").clicked() { track_actions.push(TrackAction::StartRename(i)); ui.close_menu(); }
+                            if ui.button("Duplicate").clicked() { track_actions.push(TrackAction::Duplicate(i)); ui.close_menu(); }
+                            if ui.button("Bounce (bake FX)").clicked() { /* handled in main */ ui.close_menu(); }
                             ui.separator();
-                            if ui.button("Delete Track").clicked() {
-                                track_actions.push(TrackAction::Delete(i));
-                                ui.close_menu();
-                            }
+                            if ui.button("Delete").clicked() { track_actions.push(TrackAction::Delete(i)); ui.close_menu(); }
                         });
+
+                        // Background
+                        let bg = if is_selected { egui::Color32::from_rgb(42, 42, 52) } else { egui::Color32::from_rgb(35, 35, 40) };
+                        ui.painter().rect_filled(header_rect, 0.0, bg);
+
+                        // Selected indicator — colored left border
                         if is_selected {
-                            ui.painter().rect_filled(
-                                header_rect,
-                                0.0,
-                                egui::Color32::from_rgb(45, 45, 55),
-                            );
+                            let bar = egui::Rect::from_min_size(header_rect.min, egui::vec2(3.0, header_rect.height()));
+                            ui.painter().rect_filled(bar, 0.0, color);
                         }
+
                         ui.vertical(|ui| {
+                            // Row 1: Track number + name + armed indicator
                             ui.horizontal(|ui| {
-                                ui.colored_label(color, "█");
+                                // Track number badge
+                                ui.label(egui::RichText::new(format!("{}", i + 1)).small().color(egui::Color32::from_rgb(100, 100, 110)));
+                                ui.colored_label(color, "■");
+
                                 if let Some((rename_idx, ref rename_buf)) = app.renaming_track {
                                     if rename_idx == i {
                                         let mut buf = rename_buf.clone();
                                         let r = ui.text_edit_singleline(&mut buf);
-                                        if r.lost_focus() {
-                                            track_actions
-                                                .push(TrackAction::FinishRename(i, buf));
-                                        } else {
-                                            app.renaming_track = Some((i, buf));
-                                        }
+                                        if r.lost_focus() { track_actions.push(TrackAction::FinishRename(i, buf)); }
+                                        else { app.renaming_track = Some((i, buf)); }
                                     } else {
                                         ui.strong(&track.name);
                                     }
                                 } else {
                                     ui.strong(&track.name);
                                 }
+
+                                if track.armed {
+                                    ui.label(egui::RichText::new("REC").small().color(egui::Color32::RED));
+                                }
                             });
 
+                            // Row 2: M S R buttons + takes fold
                             ui.horizontal(|ui| {
-                                if ui
-                                    .selectable_label(track.muted, "M")
-                                    .on_hover_text("Mute")
-                                    .clicked()
-                                {
-                                    track_actions.push(TrackAction::ToggleMute(i));
-                                }
-                                if ui
-                                    .selectable_label(track.solo, "S")
-                                    .on_hover_text("Solo")
-                                    .clicked()
-                                {
-                                    track_actions.push(TrackAction::ToggleSolo(i));
-                                }
-                                let armed = track.armed;
-                                if ui
-                                    .selectable_label(
-                                        armed,
-                                        egui::RichText::new("R").color(if armed {
-                                            egui::Color32::RED
-                                        } else {
-                                            ui.visuals().text_color()
-                                        }),
-                                    )
-                                    .on_hover_text("Arm")
-                                    .clicked()
-                                {
-                                    track_actions.push(TrackAction::ToggleArm(i));
-                                }
-                            });
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                                let btn = egui::vec2(20.0, 16.0);
 
-                            // Show take count and fold/unfold button
-                            if num_lanes > 1 {
-                                ui.horizontal(|ui| {
-                                    let arrow = if track.lanes_expanded {
-                                        "▼"
-                                    } else {
-                                        "▶"
-                                    };
-                                    if ui
-                                        .small_button(arrow)
-                                        .on_hover_text(if track.lanes_expanded {
-                                            "Collapse take lanes"
-                                        } else {
-                                            "Expand take lanes"
-                                        })
-                                        .clicked()
-                                    {
+                                let m_bg = if track.muted { egui::Color32::from_rgb(180, 140, 20) } else { egui::Color32::from_rgb(50, 50, 55) };
+                                if ui.add_sized(btn, egui::Button::new(egui::RichText::new("M").small().color(egui::Color32::WHITE)).fill(m_bg))
+                                    .on_hover_text("Mute").clicked() { track_actions.push(TrackAction::ToggleMute(i)); }
+
+                                let s_bg = if track.solo { egui::Color32::from_rgb(30, 130, 30) } else { egui::Color32::from_rgb(50, 50, 55) };
+                                if ui.add_sized(btn, egui::Button::new(egui::RichText::new("S").small().color(egui::Color32::WHITE)).fill(s_bg))
+                                    .on_hover_text("Solo").clicked() { track_actions.push(TrackAction::ToggleSolo(i)); }
+
+                                let r_bg = if track.armed { egui::Color32::from_rgb(160, 30, 30) } else { egui::Color32::from_rgb(50, 50, 55) };
+                                if ui.add_sized(btn, egui::Button::new(egui::RichText::new("R").small().color(egui::Color32::WHITE)).fill(r_bg))
+                                    .on_hover_text("Arm for recording").clicked() { track_actions.push(TrackAction::ToggleArm(i)); }
+
+                                // Takes fold/unfold — only when there are takes
+                                if num_lanes > 1 {
+                                    ui.add_space(4.0);
+                                    let arrow = if track.lanes_expanded { "▼" } else { "▶" };
+                                    let takes_text = format!("{arrow} {num_lanes}");
+                                    if ui.add_sized(egui::vec2(30.0, 16.0),
+                                        egui::Button::new(egui::RichText::new(takes_text).small().color(egui::Color32::from_rgb(200, 180, 100)))
+                                            .fill(egui::Color32::from_rgb(55, 50, 40)))
+                                        .on_hover_text(if track.lanes_expanded { "Collapse takes" } else { "Expand takes — click to see all recordings" })
+                                        .clicked() {
                                         track_actions.push(TrackAction::ToggleLanes(i));
                                     }
-                                    ui.label(
-                                        egui::RichText::new(format!("{num_lanes} takes"))
-                                            .small()
-                                            .color(egui::Color32::from_rgb(180, 160, 100)),
-                                    );
-                                });
-                            }
+                                }
+                            });
 
+                            // Row 3: Volume slider (compact)
                             ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new("Vol")
-                                        .small()
-                                        .color(egui::Color32::GRAY),
-                                );
                                 let mut vol = track.volume;
-                                if ui
-                                    .add(
-                                        egui::Slider::new(&mut vol, 0.0..=1.5)
-                                            .show_value(false),
-                                    )
-                                    .changed()
-                                {
+                                if ui.add(egui::Slider::new(&mut vol, 0.0..=1.5).show_value(false)).changed() {
                                     track_actions.push(TrackAction::SetVolume(i, vol));
                                 }
+                                ui.label(egui::RichText::new(format!("{:.0}%", vol * 100.0)).small().color(egui::Color32::GRAY));
                             });
                         });
                     });
-                    ui.separator();
+
+                    // Separator between tracks
+                    let sep_rect = ui.allocate_space(egui::vec2(HEADER_WIDTH, 1.0));
+                    ui.painter().rect_filled(sep_rect.1, 0.0, egui::Color32::from_rgb(55, 55, 60));
                 });
             }
 

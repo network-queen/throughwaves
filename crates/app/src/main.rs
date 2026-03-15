@@ -1046,35 +1046,24 @@ impl eframe::App for DawApp {
         // Status bar
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // Status message
                 if let Some((msg, time)) = &self.status_message {
-                    if time.elapsed().as_secs() < 8 {
-                        ui.label(msg);
+                    if time.elapsed().as_secs() < 6 {
+                        ui.label(egui::RichText::new(msg).small());
                     }
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Keyboard hint
-                    ui.label(
-                        egui::RichText::new("Space:play  R:rec  S:split  M:metro  L:loop  I:monitor  ↑↓:tracks  Cmd+B:bounce")
-                            .small()
-                            .color(egui::Color32::from_rgb(100, 100, 110)),
-                    );
-                    ui.separator();
-                    if self.snap_to_grid {
-                        ui.label(
-                            egui::RichText::new("SNAP")
-                                .small()
-                                .color(egui::Color32::from_rgb(100, 180, 255)),
-                        );
-                        ui.label("|");
-                    }
                     let sr = self.sample_rate();
-                    let sr_khz = sr as f64 / 1000.0;
-                    ui.label(format!(
-                        "Sample rate: {sr_khz:.1}kHz | Tracks: {}",
-                        self.project.tracks.len()
-                    ));
+                    ui.label(egui::RichText::new(format!("{:.1}kHz", sr as f64 / 1000.0))
+                        .small().color(egui::Color32::from_rgb(90, 90, 100)));
+                    ui.label(egui::RichText::new("|").small().color(egui::Color32::from_rgb(50, 50, 60)));
+
+                    if self.snap_to_grid {
+                        ui.label(egui::RichText::new("SNAP").small().color(egui::Color32::from_rgb(100, 160, 220)));
+                        ui.label(egui::RichText::new("|").small().color(egui::Color32::from_rgb(50, 50, 60)));
+                    }
+
+                    ui.label(egui::RichText::new("? Help > Shortcuts").small().color(egui::Color32::from_rgb(80, 80, 90)));
                 });
             });
         });
