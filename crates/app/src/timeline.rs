@@ -3,20 +3,18 @@ use jamhub_model::{ClipSource, TrackKind};
 
 use crate::DawApp;
 
-const MIN_TRACK_HEIGHT: f32 = 40.0;
 const BASE_LANE_HEIGHT: f32 = 60.0;
 const TAKE_LANE_HEIGHT: f32 = 40.0;
 const HEADER_WIDTH: f32 = 180.0;
 const RULER_HEIGHT: f32 = 24.0;
 const PIXELS_PER_SECOND_BASE: f32 = 100.0;
-const RESIZE_HANDLE_PX: f32 = 8.0;
 
 /// Compute the height of a track.
 /// If user has dragged a custom height, use that.
 /// Otherwise auto-compute from take lanes.
 fn track_height(track: &jamhub_model::Track) -> f32 {
     if track.custom_height > 0.0 {
-        return track.custom_height.max(MIN_TRACK_HEIGHT);
+        return track.custom_height.max(40.0);
     }
     if !track.lanes_expanded {
         return BASE_LANE_HEIGHT;
@@ -121,37 +119,27 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     let color = egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]);
                     let is_selected = app.selected_track == Some(i);
 
-                    // Allocate: header content + resize handle together
-                    let total_h = h + RESIZE_HANDLE_PX;
-                    ui.allocate_ui(egui::vec2(HEADER_WIDTH, total_h), |ui| {
-                        let full_rect = ui.max_rect();
+                    ui.allocate_ui(egui::vec2(HEADER_WIDTH, h), |ui| {
+                        let header_rect = ui.max_rect();
 
-                        // Split into header area and resize handle area
-                        let header_rect = egui::Rect::from_min_max(
-                            full_rect.min,
-                            egui::pos2(full_rect.max.x, full_rect.max.y - RESIZE_HANDLE_PX),
-                        );
-                        let handle_rect = egui::Rect::from_min_max(
-                            egui::pos2(full_rect.min.x, full_rect.max.y - RESIZE_HANDLE_PX),
-                            full_rect.max,
-                        );
-
-                        // Resize handle — MUST be registered first to get priority over bg
-                        let handle_response = ui.interact(
-                            handle_rect,
-                            ui.id().with("resize").with(i),
-                            egui::Sense::click_and_drag(),
-                        );
-
-                        // Header click area (excluding handle)
+                        // Click area for entire header
                         let bg_response = ui.interact(header_rect, ui.id().with("tbg").with(i), egui::Sense::click());
                         if bg_response.clicked() { track_actions.push(TrackAction::Select(i)); }
-                        if bg_response.double_clicked() { track_actions.push(TrackAction::StartRename(i)); }
+                        // Double-click toggles take lanes (if there are takes)
+                        if bg_response.double_clicked() {
+                            if num_lanes > 1 {
+                                track_actions.push(TrackAction::ToggleLanes(i));
+                            }
+                        }
                         bg_response.context_menu(|ui| {
                             if ui.button("Rename").clicked() { track_actions.push(TrackAction::StartRename(i)); ui.close_menu(); }
                             if ui.button("Duplicate").clicked() { track_actions.push(TrackAction::Duplicate(i)); ui.close_menu(); }
-                            if ui.button("Bounce (bake FX)").clicked() { /* handled in main */ ui.close_menu(); }
                             ui.separator();
+                            if num_lanes > 1 {
+                                let label = if track.lanes_expanded { "Collapse Takes" } else { "Expand Takes" };
+                                if ui.button(label).clicked() { track_actions.push(TrackAction::ToggleLanes(i)); ui.close_menu(); }
+                                ui.separator();
+                            }
                             if ui.button("Delete").clicked() { track_actions.push(TrackAction::Delete(i)); ui.close_menu(); }
                         });
 
@@ -166,9 +154,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         }
 
                         ui.vertical(|ui| {
-                            // Row 1: Track number + name + armed indicator
+                            // Row 1: Track number + name + armed
                             ui.horizontal(|ui| {
-                                // Track number badge
                                 ui.label(egui::RichText::new(format!("{}", i + 1)).small().color(egui::Color32::from_rgb(100, 100, 110)));
                                 ui.colored_label(color, "■");
 
@@ -190,7 +177,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 }
                             });
 
-                            // Row 2: M S R buttons + takes fold
+                            // Row 2: M S R buttons + takes indicator
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 2.0;
                                 let btn = egui::vec2(20.0, 16.0);
@@ -207,22 +194,22 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 if ui.add_sized(btn, egui::Button::new(egui::RichText::new("R").small().color(egui::Color32::WHITE)).fill(r_bg))
                                     .on_hover_text("Arm for recording").clicked() { track_actions.push(TrackAction::ToggleArm(i)); }
 
-                                // Takes fold/unfold — only when there are takes
+                                // Takes indicator (click to toggle, or double-click header)
                                 if num_lanes > 1 {
                                     ui.add_space(4.0);
                                     let arrow = if track.lanes_expanded { "▼" } else { "▶" };
-                                    let takes_text = format!("{arrow} {num_lanes}");
-                                    if ui.add_sized(egui::vec2(30.0, 16.0),
+                                    let takes_text = format!("{arrow} {num_lanes} takes");
+                                    if ui.add_sized(egui::vec2(52.0, 16.0),
                                         egui::Button::new(egui::RichText::new(takes_text).small().color(egui::Color32::from_rgb(200, 180, 100)))
                                             .fill(egui::Color32::from_rgb(55, 50, 40)))
-                                        .on_hover_text(if track.lanes_expanded { "Collapse takes" } else { "Expand takes — click to see all recordings" })
+                                        .on_hover_text("Toggle take lanes (or double-click track header)")
                                         .clicked() {
                                         track_actions.push(TrackAction::ToggleLanes(i));
                                     }
                                 }
                             });
 
-                            // Row 3: Volume slider (compact)
+                            // Row 3: Volume slider
                             ui.horizontal(|ui| {
                                 let mut vol = track.volume;
                                 if ui.add(egui::Slider::new(&mut vol, 0.0..=1.5).show_value(false)).changed() {
@@ -231,37 +218,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 ui.label(egui::RichText::new(format!("{:.0}%", vol * 100.0)).small().color(egui::Color32::GRAY));
                             });
                         });
-
-                        // Draw resize handle at bottom
-                        let handle_color = if handle_response.hovered() || handle_response.dragged() {
-                            egui::Color32::from_rgb(100, 180, 255)
-                        } else {
-                            egui::Color32::from_rgb(60, 60, 65)
-                        };
-                        ui.painter().rect_filled(handle_rect, 0.0, handle_color);
-
-                        if handle_response.hovered() || handle_response.dragged() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-                        }
-
-                        if handle_response.dragged() {
-                            let delta = handle_response.drag_delta().y;
-                            let current = track_height(&app.project.tracks[i]);
-                            let new_h = (current + delta).max(MIN_TRACK_HEIGHT).min(400.0);
-                            track_actions.push(TrackAction::SetHeight(i, new_h));
-
-                            if new_h > BASE_LANE_HEIGHT && !app.project.tracks[i].lanes_expanded {
-                                track_actions.push(TrackAction::ToggleLanes(i));
-                            }
-                            if new_h <= MIN_TRACK_HEIGHT + 5.0 && app.project.tracks[i].lanes_expanded {
-                                track_actions.push(TrackAction::ToggleLanes(i));
-                            }
-                        }
-
-                        if handle_response.double_clicked() {
-                            track_actions.push(TrackAction::SetHeight(i, 0.0));
-                        }
                     });
+
+                    // Thin separator line
+                    let (_, sep) = ui.allocate_space(egui::vec2(HEADER_WIDTH, 1.0));
+                    ui.painter().rect_filled(sep, 0.0, egui::Color32::from_rgb(55, 55, 60));
                 });
             }
 
@@ -323,11 +284,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     TrackAction::ToggleLanes(i) => {
                         app.project.tracks[i].lanes_expanded =
                             !app.project.tracks[i].lanes_expanded;
-                        // Reset custom height when toggling so auto-height takes over
                         app.project.tracks[i].custom_height = 0.0;
-                    }
-                    TrackAction::SetHeight(i, h) => {
-                        app.project.tracks[i].custom_height = h;
                     }
                 }
             }
@@ -974,5 +931,4 @@ enum TrackAction {
     StartRename(usize),
     FinishRename(usize, String),
     ToggleLanes(usize),
-    SetHeight(usize, f32),
 }
