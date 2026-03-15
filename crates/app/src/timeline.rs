@@ -436,8 +436,34 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         });
 
-        // Left click or double-click: select track, select/activate take, set playhead
-        if response.clicked_by(egui::PointerButton::Primary) || response.double_clicked() {
+        // Double-click on clip: move playhead to clip start
+        if response.double_clicked() {
+            if let Some(pos) = response.interact_pointer_pos {
+                let mut dbl_clip = None;
+                for &(ti, ci, _, cr) in &clip_rects {
+                    if cr.contains(pos) {
+                        dbl_clip = Some((ti, ci));
+                    }
+                }
+                if let Some((ti, ci)) = dbl_clip {
+                    let clip_start = app.project.tracks[ti].clips[ci].start_sample;
+                    app.send_command(jamhub_engine::EngineCommand::SetPosition(clip_start));
+                    app.selected_clip = Some((ti, ci));
+                    app.selected_track = Some(ti);
+                } else {
+                    // Double-click on empty: set playhead
+                    let x_offset = pos.x - rect.min.x + app.scroll_x;
+                    let seconds = x_offset as f64 / pixels_per_second as f64;
+                    let sample_pos = (seconds * sample_rate) as u64;
+                    app.send_command(jamhub_engine::EngineCommand::SetPosition(
+                        app.snap_to_beat(sample_pos),
+                    ));
+                }
+            }
+        }
+
+        // Single click: select track, select/activate take, set playhead
+        if response.clicked_by(egui::PointerButton::Primary) {
             if let Some(pos) = response.interact_pointer_pos {
                 // Select track under cursor
                 if let Some(ti) = track_at_y(app, pos.y, tracks_y_start) {

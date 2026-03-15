@@ -438,114 +438,88 @@ impl DawApp {
     }
 
     /// Split the selected clip at the current playhead position.
+    /// Split ALL clips on the selected track at the playhead position.
     pub fn split_clip_at_playhead(&mut self) {
         let pos = self.position_samples();
-        let (track_idx, clip_idx) = match self.selected_clip {
-            Some(tc) => tc,
-            None => {
-                // Try to find a clip under the playhead on the selected track
-                let ti = self.selected_track.unwrap_or(0);
-                if ti >= self.project.tracks.len() {
-                    self.set_status("No clip to split");
-                    return;
-                }
-                let mut found = None;
-                for (ci, clip) in self.project.tracks[ti].clips.iter().enumerate() {
-                    let end = clip.start_sample + clip.duration_samples;
-                    if pos > clip.start_sample && pos < end {
-                        found = Some((ti, ci));
-                        break;
-                    }
-                }
-                match found {
-                    Some(tc) => tc,
-                    None => {
-                        self.set_status("No clip at playhead");
-                        return;
-                    }
-                }
-            }
-        };
-
-        if track_idx >= self.project.tracks.len()
-            || clip_idx >= self.project.tracks[track_idx].clips.len()
-        {
+        let track_idx = self.selected_track.unwrap_or(0);
+        if track_idx >= self.project.tracks.len() {
+            self.set_status("No track selected");
             return;
         }
 
-        // Extract clip data before any mutation
-        let clip_start = self.project.tracks[track_idx].clips[clip_idx].start_sample;
-        let clip_duration = self.project.tracks[track_idx].clips[clip_idx].duration_samples;
-        let clip_end = clip_start + clip_duration;
-        let clip_name = self.project.tracks[track_idx].clips[clip_idx].name.clone();
-        let clip_source = self.project.tracks[track_idx].clips[clip_idx].source.clone();
-        let clip_muted = self.project.tracks[track_idx].clips[clip_idx].muted;
-
-        if pos <= clip_start || pos >= clip_end {
-            self.set_status("Playhead not inside clip");
-            return;
-        }
-
-        self.push_undo("Split clip");
-
-        let split_offset = pos - clip_start;
-
-        // Create the right half
-        let mut right_clip = Clip {
-            id: Uuid::new_v4(),
-            name: format!("{} (R)", clip_name),
-            start_sample: pos,
-            duration_samples: clip_duration - split_offset,
-            source: clip_source.clone(),
-            muted: clip_muted,
-        };
-
-        // If it's an audio buffer, split the buffer into left and right
-        if let ClipSource::AudioBuffer { buffer_id } = &clip_source {
-            // Clone the buffer data to avoid borrow issues
-            let buf_data = self.audio_buffers.get(buffer_id).cloned();
-            if let Some(buf) = buf_data {
-                let right_samples: Vec<f32> =
-                    buf[split_offset as usize..].to_vec();
-                let left_samples: Vec<f32> =
-                    buf[..split_offset as usize].to_vec();
-
-                let right_id = Uuid::new_v4();
-                let left_id = Uuid::new_v4();
-
-                right_clip.source = ClipSource::AudioBuffer { buffer_id: right_id };
-                right_clip.duration_samples = right_samples.len() as u64;
-
-                self.waveform_cache.insert(right_id, &right_samples);
-                self.waveform_cache.insert(left_id, &left_samples);
-
-                self.send_command(EngineCommand::LoadAudioBuffer {
-                    id: right_id,
-                    samples: right_samples.clone(),
-                });
-                self.send_command(EngineCommand::LoadAudioBuffer {
-                    id: left_id,
-                    samples: left_samples.clone(),
-                });
-
-                self.audio_buffers.insert(right_id, right_samples);
-                self.audio_buffers.insert(left_id, left_samples);
-
-                self.project.tracks[track_idx].clips[clip_idx].source =
-                    ClipSource::AudioBuffer { buffer_id: left_id };
+        // Find all clips that the playhead crosses
+        let mut to_split: Vec<usize> = Vec::new();
+        for (ci, clip) in self.project.tracks[track_idx].clips.iter().enumerate() {
+            let clip_end = clip.start_sample + clip.duration_samples;
+            if pos > clip.start_sample && pos < clip_end {
+                to_split.push(ci);
             }
         }
 
-        // Trim the left clip
-        self.project.tracks[track_idx].clips[clip_idx].duration_samples = split_offset;
-        self.project.tracks[track_idx].clips[clip_idx].name =
-            format!("{} (L)", self.project.tracks[track_idx].clips[clip_idx].name);
+        if to_split.is_empty() {
+            self.set_status("No clips at playhead on this track");
+            return;
+        }
 
-        // Add right clip
-        self.project.tracks[track_idx].clips.push(right_clip);
+        self.push_undo("Split clips");
+
+        // Process in reverse order so indices stay valid
+        let mut new_clips: Vec<Clip> = Vec::new();
+
+        for &ci in to_split.iter().rev() {
+            let clip_start = self.project.tracks[track_idx].clips[ci].start_sample;
+            let clip_duration = self.project.tracks[track_idx].clips[ci].duration_samples;
+            let clip_name = self.project.tracks[track_idx].clips[ci].name.clone();
+            let clip_source = self.project.tracks[track_idx].clips[ci].source.clone();
+            let clip_muted = self.project.tracks[track_idx].clips[ci].muted;
+            let split_offset = pos - clip_start;
+
+            let mut right_clip = Clip {
+                id: Uuid::new_v4(),
+                name: clip_name.clone(),
+                start_sample: pos,
+                duration_samples: clip_duration - split_offset,
+                source: clip_source.clone(),
+                muted: clip_muted,
+            };
+
+            if let ClipSource::AudioBuffer { buffer_id } = &clip_source {
+                let buf_data = self.audio_buffers.get(buffer_id).cloned();
+                if let Some(buf) = buf_data {
+                    let split_at = (split_offset as usize).min(buf.len());
+                    let right_samples = buf[split_at..].to_vec();
+                    let left_samples = buf[..split_at].to_vec();
+
+                    let right_id = Uuid::new_v4();
+                    let left_id = Uuid::new_v4();
+
+                    right_clip.source = ClipSource::AudioBuffer { buffer_id: right_id };
+                    right_clip.duration_samples = right_samples.len() as u64;
+
+                    self.waveform_cache.insert(right_id, &right_samples);
+                    self.waveform_cache.insert(left_id, &left_samples);
+                    self.send_command(EngineCommand::LoadAudioBuffer { id: right_id, samples: right_samples.clone() });
+                    self.send_command(EngineCommand::LoadAudioBuffer { id: left_id, samples: left_samples.clone() });
+                    self.audio_buffers.insert(right_id, right_samples);
+                    self.audio_buffers.insert(left_id, left_samples);
+
+                    self.project.tracks[track_idx].clips[ci].source =
+                        ClipSource::AudioBuffer { buffer_id: left_id };
+                }
+            }
+
+            self.project.tracks[track_idx].clips[ci].duration_samples = split_offset;
+            new_clips.push(right_clip);
+        }
+
+        // Add all right halves
+        for clip in new_clips {
+            self.project.tracks[track_idx].clips.push(clip);
+        }
+
         self.selected_clip = None;
         self.sync_project();
-        self.set_status("Clip split at playhead");
+        self.set_status(&format!("Split {} clip(s) at playhead", to_split.len()));
     }
 
     /// Bounce/freeze selected track: render all effects to a new audio buffer.
