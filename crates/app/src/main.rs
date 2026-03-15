@@ -540,12 +540,12 @@ impl DawApp {
             new_clips.push(right_clip);
         }
 
-        // Add all right halves
+        // Add all right halves — preserve everything, change nothing about selection
         for clip in new_clips {
             self.project.tracks[track_idx].clips.push(clip);
         }
 
-        self.selected_clip = None;
+        // Don't change selection — user's current state stays as-is
         self.sync_project();
         self.set_status(&format!("Split {} clip(s) at playhead", to_split.len()));
     }
