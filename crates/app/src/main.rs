@@ -1,5 +1,7 @@
+mod about;
 mod effects_panel;
 mod mixer_view;
+mod piano_roll;
 mod session_panel;
 mod timeline;
 mod transport_bar;
@@ -62,6 +64,8 @@ pub struct DawApp {
     pub loop_end: u64,
     pub master_volume: f32,
     pub renaming_track: Option<(usize, String)>,
+    pub show_piano_roll: bool,
+    pub show_about: bool,
 }
 
 pub struct ClipDragState {
@@ -126,6 +130,8 @@ impl DawApp {
             loop_end: 0,
             master_volume: 1.0,
             renaming_track: None,
+            show_piano_roll: false,
+            show_about: false,
         }
     }
 
@@ -338,7 +344,7 @@ impl DawApp {
 
             // 8. Scroll view to show the recorded clip
             self.scroll_x = 0.0; // Reset to start since clip starts at rec_start
-            let clip_end_sec = (rec_start + duration) as f64 / engine_sr as f64;
+            let _clip_end_sec = (rec_start + duration) as f64 / engine_sr as f64;
             // Ensure zoom shows the whole clip — adjust if clip doesn't fit in view
             let min_zoom = 0.3;
             if self.zoom < min_zoom {
@@ -595,6 +601,10 @@ impl eframe::App for DawApp {
             if i.modifiers.command && i.key_pressed(egui::Key::I) {
                 actions.push("import".into());
             }
+            // Cmd+P for piano roll
+            if i.modifiers.command && i.key_pressed(egui::Key::P) {
+                actions.push("piano_roll".into());
+            }
         });
 
         for action in &actions {
@@ -658,6 +668,9 @@ impl eframe::App for DawApp {
                 }
                 "import" => {
                     self.open_import_dialog();
+                }
+                "piano_roll" => {
+                    self.show_piano_roll = !self.show_piano_roll;
                 }
                 a if a.starts_with("select_track_") => {
                     if let Ok(idx) = a[13..].parse::<usize>() {
@@ -768,6 +781,10 @@ impl eframe::App for DawApp {
                         self.show_effects = true;
                         ui.close_menu();
                     }
+                    if ui.button("Piano Roll...    Cmd+P").clicked() {
+                        self.show_piano_roll = true;
+                        ui.close_menu();
+                    }
                 });
                 ui.menu_button("Session", |ui| {
                     let connected = self.session.is_connected();
@@ -797,11 +814,30 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                     }
                     ui.separator();
+                    if ui.button("Piano Roll       Cmd+P").clicked() {
+                        self.show_piano_roll = !self.show_piano_roll;
+                        ui.close_menu();
+                    }
+                    if ui.button("Effects          Cmd+E").clicked() {
+                        self.show_effects = !self.show_effects;
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui
                         .selectable_label(self.snap_to_grid, "Snap to Grid")
                         .clicked()
                     {
                         self.snap_to_grid = !self.snap_to_grid;
+                    }
+                });
+                ui.menu_button("Help", |ui| {
+                    if ui.button("About JamHub").clicked() {
+                        self.show_about = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("Keyboard Shortcuts").clicked() {
+                        self.show_about = true;
+                        ui.close_menu();
                     }
                 });
             });
@@ -910,8 +946,10 @@ impl eframe::App for DawApp {
         // Session panel (right side)
         session_panel::show(self, ctx);
 
-        // Effects panel (floating window)
+        // Floating panels
         effects_panel::show(self, ctx);
+        piano_roll::show(self, ctx);
+        about::show(self, ctx);
 
         // Main content
         egui::CentralPanel::default().show(ctx, |ui| match self.view {

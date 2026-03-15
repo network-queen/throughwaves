@@ -28,7 +28,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]);
                     let is_selected = app.selected_track == Some(i);
 
-                    let header_response =
+                    let _header_response =
                         ui.allocate_ui(egui::vec2(HEADER_WIDTH, TRACK_HEIGHT), |ui| {
                             let header_rect = ui.max_rect();
                             // Invisible click area behind everything for track selection
@@ -684,7 +684,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         if app.transport_state() == jamhub_model::TransportState::Playing {
             let playhead_px = pos_sec as f32 * pixels_per_second;
             let view_left = app.scroll_x;
-            let view_right = app.scroll_x + available.x;
+            let _view_right = app.scroll_x + available.x;
 
             // Only scroll if playhead goes past 80% of the visible area
             if playhead_px > view_left + available.x * 0.8 {
