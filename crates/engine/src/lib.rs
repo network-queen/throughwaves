@@ -1,5 +1,7 @@
 mod audio;
 mod audio_file;
+pub mod effects;
+mod export;
 mod metronome;
 mod mixer;
 mod project_io;
@@ -9,9 +11,10 @@ pub mod waveform;
 
 pub use audio::AudioBackend;
 pub use audio_file::{load_wav, save_wav, AudioFileData};
+pub use export::export_wav;
+pub use metronome::Metronome;
 pub use mixer::Mixer;
 pub use project_io::{load_project, save_project};
 pub use recorder::Recorder;
 pub use transport::{EngineCommand, EngineHandle};
-pub use metronome::Metronome;
 pub use waveform::WaveformCache;

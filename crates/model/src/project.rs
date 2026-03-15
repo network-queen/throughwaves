@@ -38,6 +38,7 @@ impl Project {
             solo: false,
             armed: false,
             color: random_track_color(),
+            effects: Vec::new(),
         });
         id
     }
@@ -55,6 +56,31 @@ pub struct Track {
     pub solo: bool,
     pub armed: bool,
     pub color: [u8; 3],
+    #[serde(default)]
+    pub effects: Vec<TrackEffect>,
+}
+
+/// Effect types that can be applied to a track.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum TrackEffect {
+    Gain { db: f32 },
+    LowPass { cutoff_hz: f32 },
+    HighPass { cutoff_hz: f32 },
+    Delay { time_ms: f32, feedback: f32, mix: f32 },
+    Reverb { decay: f32, mix: f32 },
+}
+
+impl TrackEffect {
+    pub fn name(&self) -> &str {
+        match self {
+            TrackEffect::Gain { .. } => "Gain",
+            TrackEffect::LowPass { .. } => "Low Pass",
+            TrackEffect::HighPass { .. } => "High Pass",
+            TrackEffect::Delay { .. } => "Delay",
+            TrackEffect::Reverb { .. } => "Reverb",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

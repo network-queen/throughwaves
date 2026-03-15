@@ -1,3 +1,4 @@
+mod effects_panel;
 mod mixer_view;
 mod session_panel;
 mod timeline;
@@ -42,6 +43,7 @@ pub struct DawApp {
     pub scroll_x: f32,
     recorder: Recorder,
     pub is_recording: bool,
+    recording_start_pos: u64,
     pub status_message: Option<(String, std::time::Instant)>,
     pub selected_track: Option<usize>,
     pub selected_clip: Option<(usize, usize)>, // (track_idx, clip_idx)
@@ -54,6 +56,7 @@ pub struct DawApp {
     pub snap_to_grid: bool,
     // Clip dragging state
     pub dragging_clip: Option<ClipDragState>,
+    pub show_effects: bool,
 }
 
 pub struct ClipDragState {
@@ -100,6 +103,7 @@ impl DawApp {
             scroll_x: 0.0,
             recorder: Recorder::new(),
             is_recording: false,
+            recording_start_pos: 0,
             status_message: None,
             selected_track: Some(0),
             selected_clip: None,
@@ -111,6 +115,7 @@ impl DawApp {
             metronome_enabled: false,
             snap_to_grid: true,
             dragging_clip: None,
+            show_effects: false,
         }
     }
 
@@ -217,6 +222,8 @@ impl DawApp {
         if self.is_recording {
             self.is_recording = false;
             let samples = self.recorder.stop();
+            self.send_command(EngineCommand::Stop);
+
             if samples.is_empty() {
                 self.set_status("Recording was empty");
                 return;
@@ -231,7 +238,8 @@ impl DawApp {
 
             let buffer_id = Uuid::new_v4();
             let duration = samples.len() as u64;
-            let rec_start = self.position_samples().saturating_sub(duration);
+            // Use the stored start position, not a backwards calculation
+            let rec_start = self.recording_start_pos;
 
             let clip = Clip {
                 id: Uuid::new_v4(),
@@ -248,18 +256,25 @@ impl DawApp {
             self.audio_buffers.insert(buffer_id, samples.clone());
 
             self.project.tracks[track_idx].clips.push(clip);
+            // Send buffer FIRST, then project update (order matters)
             self.send_command(EngineCommand::LoadAudioBuffer {
                 id: buffer_id,
                 samples,
             });
             self.sync_project();
-            self.send_command(EngineCommand::Stop);
-            self.set_status("Recording saved");
+
+            self.set_status(&format!(
+                "Recording saved ({:.1}s)",
+                duration as f64 / self.sample_rate() as f64
+            ));
         } else {
             let track_idx = self.selected_track.unwrap_or(0);
             if track_idx < self.project.tracks.len() {
                 self.project.tracks[track_idx].armed = true;
             }
+
+            // Store the current position as recording start
+            self.recording_start_pos = self.position_samples();
 
             match self.recorder.start() {
                 Ok(()) => {
@@ -311,6 +326,32 @@ impl DawApp {
                 self.project.tracks.insert(track_idx + 1, new_track);
                 self.selected_track = Some(track_idx + 1);
                 self.sync_project();
+            }
+        }
+    }
+
+    pub fn export_mixdown(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("Export Mixdown")
+            .add_filter("WAV Audio", &["wav"])
+            .set_file_name("mixdown.wav")
+            .save_file()
+        {
+            let sr = self.sample_rate();
+            let channels = self
+                .engine
+                .as_ref()
+                .map(|e| e.state.read().sample_rate) // just need to know channels
+                .unwrap_or(44100);
+            match jamhub_engine::export_wav(
+                &path,
+                &self.project,
+                &self.audio_buffers,
+                sr,
+                2, // stereo
+            ) {
+                Ok(()) => self.set_status(&format!("Exported: {}", path.display())),
+                Err(e) => self.set_status(&format!("Export failed: {e}")),
             }
         }
     }
@@ -502,6 +543,11 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                         self.open_import_dialog();
                     }
+                    ui.separator();
+                    if ui.button("Export Mixdown...").clicked() {
+                        ui.close_menu();
+                        self.export_mixdown();
+                    }
                 });
                 ui.menu_button("Edit", |ui| {
                     let undo_label = self
@@ -562,6 +608,11 @@ impl eframe::App for DawApp {
                     ui.separator();
                     if ui.button("Delete Selected Track").clicked() {
                         self.delete_selected_track();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Effects...").clicked() {
+                        self.show_effects = true;
                         ui.close_menu();
                     }
                 });
@@ -691,6 +742,9 @@ impl eframe::App for DawApp {
 
         // Session panel (right side)
         session_panel::show(self, ctx);
+
+        // Effects panel (floating window)
+        effects_panel::show(self, ctx);
 
         // Main content
         egui::CentralPanel::default().show(ctx, |ui| match self.view {

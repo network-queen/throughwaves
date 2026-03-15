@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Stream;
-use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
 
 pub struct Recorder {
@@ -25,15 +24,24 @@ impl Recorder {
         let device = host
             .default_input_device()
             .ok_or("No input device available")?;
-        let config = device
+
+        let supported = device
             .default_input_config()
             .map_err(|e| format!("Failed to get input config: {e}"))?;
-        let config: cpal::StreamConfig = config.into();
+
+        println!(
+            "Recording input: {:?}, {} channels, {}Hz, {:?}",
+            device.name().unwrap_or_default(),
+            supported.channels(),
+            supported.sample_rate().0,
+            supported.sample_format(),
+        );
+
+        let config: cpal::StreamConfig = supported.into();
+        let channels = config.channels as usize;
 
         let buffer = self.recording_buffer.clone();
         buffer.lock().clear();
-
-        let channels = config.channels as usize;
 
         let stream = device
             .build_input_stream(
@@ -63,14 +71,18 @@ impl Recorder {
 
         self.stream = Some(stream);
         self.is_recording = true;
+        println!("Recording started");
         Ok(())
     }
 
     pub fn stop(&mut self) -> Vec<f32> {
+        // Drop the stream to stop capturing
         self.stream = None;
         self.is_recording = false;
         let mut buf = self.recording_buffer.lock();
-        std::mem::take(&mut *buf)
+        let samples = std::mem::take(&mut *buf);
+        println!("Recording stopped: {} samples captured", samples.len());
+        samples
     }
 
     pub fn is_recording(&self) -> bool {

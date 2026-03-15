@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::RwLock;
 use jamhub_model::{ClipBufferId, Project, TransportState};
 
@@ -23,6 +23,8 @@ pub enum EngineCommand {
 pub struct EngineHandle {
     cmd_tx: Sender<EngineCommand>,
     pub state: Arc<RwLock<EngineState>>,
+    // CRITICAL: keep the backend alive so the audio output stream isn't dropped
+    _backend: AudioBackend,
 }
 
 pub struct EngineState {
@@ -38,7 +40,6 @@ impl EngineHandle {
         let channels = backend.channels();
 
         let (cmd_tx, cmd_rx) = bounded::<EngineCommand>(256);
-        // Larger buffer to allow pre-filling
         let (audio_tx, audio_rx) = bounded::<Vec<f32>>(128);
 
         backend.start(audio_rx)?;
@@ -58,7 +59,11 @@ impl EngineHandle {
             })
             .map_err(|e| format!("Failed to spawn engine thread: {e}"))?;
 
-        Ok(Self { cmd_tx, state })
+        Ok(Self {
+            cmd_tx,
+            state,
+            _backend: backend,
+        })
     }
 
     pub fn send(&self, cmd: EngineCommand) {
@@ -74,7 +79,7 @@ fn engine_loop(
     channels: u16,
 ) {
     let block_size: usize = 256;
-    let mixer = Mixer::new(sample_rate, channels);
+    let mut mixer = Mixer::new(sample_rate, channels);
     let mut project = Project::default();
     let mut audio_buffers: HashMap<ClipBufferId, Vec<f32>> = HashMap::new();
     let mut transport = TransportState::Stopped;
@@ -114,10 +119,8 @@ fn engine_loop(
         }
 
         if transport == TransportState::Playing {
-            // Render a block
             let mut block = mixer.render_block(&project, position, block_size, &audio_buffers);
 
-            // Add metronome clicks
             metronome.render(
                 &mut block,
                 position,
@@ -130,18 +133,14 @@ fn engine_loop(
 
             position += block_size as u64;
 
-            // Send to audio output — use blocking send with timeout so we naturally
-            // pace to real-time via backpressure. If the channel is full, the audio
-            // output hasn't consumed yet, so we wait.
+            // Blocking send with timeout — backpressure naturally paces to real-time.
             match audio_tx.send_timeout(block, Duration::from_millis(100)) {
                 Ok(()) => {}
                 Err(_) => {
-                    // Timeout or disconnected — audio output may have stalled
                     thread::sleep(Duration::from_millis(1));
                 }
             }
         } else {
-            // When stopped, sleep to avoid burning CPU
             thread::sleep(Duration::from_millis(5));
         }
     }
