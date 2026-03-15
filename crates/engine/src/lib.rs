@@ -1,4 +1,5 @@
 mod audio;
+pub mod audio_devices;
 mod audio_file;
 pub mod effects;
 mod export;
@@ -13,6 +14,7 @@ pub mod vst_host;
 pub mod waveform;
 
 pub use audio::AudioBackend;
+pub use audio_devices::{list_devices, AudioDeviceInfo};
 pub use audio_file::{load_audio, load_wav, save_wav, AudioFileData};
 pub use export::{bounce_track, export_wav, export_wav_with_options, ExportOptions};
 pub use input_monitor::InputMonitor;

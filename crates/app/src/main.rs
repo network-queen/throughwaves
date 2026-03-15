@@ -1,4 +1,5 @@
 mod about;
+mod audio_settings;
 mod effects_panel;
 mod fx_browser;
 mod mixer_view;
@@ -70,6 +71,7 @@ pub struct DawApp {
     input_monitor: InputMonitor,
     pub resizing_track: Option<usize>,
     pub fx_browser: fx_browser::FxBrowser,
+    pub audio_settings: audio_settings::AudioSettings,
 }
 
 pub struct ClipDragState {
@@ -167,6 +169,7 @@ impl DawApp {
             input_monitor: InputMonitor::new(),
             resizing_track: None,
             fx_browser: fx_browser::FxBrowser::default(),
+            audio_settings: audio_settings::AudioSettings::default(),
         }
     }
 
@@ -964,6 +967,11 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                         self.export_mixdown();
                     }
+                    ui.separator();
+                    if ui.button("Audio Settings...").clicked() {
+                        self.audio_settings.show = true;
+                        ui.close_menu();
+                    }
                 });
                 ui.menu_button("Edit", |ui| {
                     let undo_label = self
@@ -1198,6 +1206,7 @@ impl eframe::App for DawApp {
         effects_panel::show(self, ctx);
         piano_roll::show(self, ctx);
         fx_browser::show(self, ctx);
+        audio_settings::show(self, ctx);
         about::show(self, ctx);
 
         // Main content
