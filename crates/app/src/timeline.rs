@@ -360,6 +360,27 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 if ui.button("Move Down [Alt+Down]").clicked() { track_actions.push(TrackAction::MoveDown(i)); ui.close_menu(); }
                             }
                             ui.separator();
+                            // Track height presets
+                            ui.menu_button("Track Height", |ui| {
+                                let presets: &[(f32, &str)] = &[
+                                    (40.0, "Small (40px)"),
+                                    (80.0, "Medium (80px)"),
+                                    (120.0, "Large (120px)"),
+                                    (200.0, "Extra Large (200px)"),
+                                ];
+                                for &(height, label) in presets {
+                                    if ui.button(label).clicked() {
+                                        track_actions.push(TrackAction::SetHeight(i, height));
+                                        ui.close_menu();
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button("Auto").clicked() {
+                                    track_actions.push(TrackAction::SetHeight(i, 0.0));
+                                    ui.close_menu();
+                                }
+                            });
+                            ui.separator();
                             if ui.button("Delete").clicked() { track_actions.push(TrackAction::Delete(i)); ui.close_menu(); }
                         });
 
@@ -725,6 +746,13 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     TrackAction::FlattenComp(i) => {
                         app.flatten_comp(i);
                     }
+                    TrackAction::SetHeight(i, height) => {
+                        if i < app.project.tracks.len() {
+                            app.project.tracks[i].custom_height = height;
+                            let label = if height == 0.0 { "Auto".to_string() } else { format!("{}px", height as u32) };
+                            app.set_status(&format!("Track height: {}", label));
+                        }
+                    }
                 }
             }
 
@@ -735,6 +763,34 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 app.project
                     .add_track(&format!("Track {n}"), TrackKind::Audio);
                 app.sync_project();
+            }
+
+            ui.add_space(4.0);
+            let locator_label = if app.show_locators { "Locators [-]" } else { "Locators [+]" };
+            if ui.small_button(locator_label).on_hover_text("Show/hide locator memory positions (Shift+1-9 save, 1-9 recall)").clicked() {
+                app.show_locators = !app.show_locators;
+            }
+            if app.show_locators {
+                ui.separator();
+                let sr = app.sample_rate() as f64;
+                for slot in 0..9 {
+                    ui.horizontal(|ui| {
+                        let label = if let Some(pos) = app.locators[slot] {
+                            let sec = pos as f64 / sr;
+                            format!("{}: {:.2}s", slot + 1, sec)
+                        } else {
+                            format!("{}: ---", slot + 1)
+                        };
+                        let btn = ui.small_button(&label);
+                        if btn.clicked() {
+                            if let Some(pos) = app.locators[slot] {
+                                app.send_command(jamhub_engine::EngineCommand::SetPosition(pos));
+                                app.set_status(&format!("Jumped to locator {}", slot + 1));
+                            }
+                        }
+                        btn.on_hover_text(format!("Click to jump | Shift+{} to save | {} to recall", slot + 1, slot + 1));
+                    });
+                }
             }
         });
 
@@ -1247,6 +1303,31 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                 }
 
+                // Slip editing: Ctrl+drag on a clip to shift content within boundaries
+                if !action_taken {
+                    let mods = ui.input(|i| i.modifiers);
+                    if mods.ctrl && !mods.command {
+                        for &(ti, ci, _, cr) in &clip_rects {
+                            if !cr.contains(pos) {
+                                continue;
+                            }
+                            if app.project.tracks[ti].clips[ci].muted {
+                                continue;
+                            }
+                            app.push_undo("Slip edit");
+                            let orig_offset = app.project.tracks[ti].clips[ci].content_offset;
+                            app.slip_editing = Some(crate::SlipEditState {
+                                track_idx: ti,
+                                clip_idx: ci,
+                                start_x: pos.x,
+                                original_content_offset: orig_offset,
+                            });
+                            action_taken = true;
+                            break;
+                        }
+                    }
+                }
+
                 // Check for Alt+right-edge stretch or normal edge trim
                 if !action_taken {
                 let modifiers = ui.input(|i| i.modifiers);
@@ -1706,6 +1787,33 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                 }
             }
+            // Handle slip editing drag — shift audio content within clip boundaries
+            else if let Some(ref slip) = app.slip_editing {
+                if let Some(pos) = response.interact_pointer_pos {
+                    let ti = slip.track_idx;
+                    let ci = slip.clip_idx;
+                    let dx = pos.x - slip.start_x;
+                    let d_seconds = dx as f64 / pixels_per_second as f64;
+                    let d_samples = (d_seconds * sample_rate) as i64;
+                    if ti < app.project.tracks.len()
+                        && ci < app.project.tracks[ti].clips.len()
+                    {
+                        // Get the source buffer length to clamp offset
+                        let max_offset = if let jamhub_model::ClipSource::AudioBuffer { buffer_id } =
+                            &app.project.tracks[ti].clips[ci].source
+                        {
+                            app.audio_buffers.get(buffer_id).map(|b| b.len() as u64).unwrap_or(u64::MAX)
+                        } else {
+                            u64::MAX
+                        };
+                        let clip_dur = app.project.tracks[ti].clips[ci].duration_samples;
+                        let new_offset = (slip.original_content_offset as i64 - d_samples).max(0) as u64;
+                        let new_offset = new_offset.min(max_offset.saturating_sub(clip_dur));
+                        app.project.tracks[ti].clips[ci].content_offset = new_offset;
+                    }
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                }
+            }
             // Handle rubber-band selection drag
             else if app.rubber_band_active {
                 if let Some(pos) = response.interact_pointer_pos {
@@ -1750,6 +1858,10 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
             if app.swipe_comping.is_some() {
                 app.swipe_comping = None;
+                app.sync_project();
+            }
+            if app.slip_editing.is_some() {
+                app.slip_editing = None;
                 app.sync_project();
             }
             if app.rubber_band_active {
@@ -1982,6 +2094,116 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
+        // === Saved regions — colored bars above the ruler ===
+        {
+            let region_bar_height = 8.0;
+            for (ri, region) in app.project.regions.iter().enumerate() {
+                let rc = egui::Color32::from_rgb(region.color[0], region.color[1], region.color[2]);
+                let rx1 = rect.min.x + (region.start as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+                let rx2 = rect.min.x + (region.end as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+                if rx2 < rect.min.x || rx1 > rect.max.x {
+                    continue;
+                }
+                let ry = ruler_rect.min.y - region_bar_height - 2.0 - (ri % 2) as f32 * (region_bar_height + 1.0);
+                let region_rect = egui::Rect::from_min_max(
+                    egui::pos2(rx1.max(rect.min.x), ry.max(rect.min.y)),
+                    egui::pos2(rx2.min(rect.max.x), (ry + region_bar_height).max(rect.min.y)),
+                );
+                painter.rect_filled(region_rect, 3.0, rc.gamma_multiply(0.35));
+                painter.rect_stroke(region_rect, 3.0, egui::Stroke::new(1.0, rc.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+                // Region name
+                painter.with_clip_rect(region_rect).text(
+                    egui::pos2(rx1.max(rect.min.x) + 3.0, ry.max(rect.min.y) + 0.5),
+                    egui::Align2::LEFT_TOP,
+                    &region.name,
+                    egui::FontId::proportional(7.5),
+                    rc,
+                );
+            }
+
+            // Click on a region bar to activate it as the loop
+            if response.clicked_by(egui::PointerButton::Primary) {
+                if let Some(click_pos) = response.interact_pointer_pos {
+                    let region_area_top = ruler_rect.min.y - (region_bar_height + 2.0) * 2.0;
+                    if click_pos.y >= region_area_top && click_pos.y < ruler_rect.min.y {
+                        for region in &app.project.regions {
+                            let rx1 = rect.min.x + (region.start as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+                            let rx2 = rect.min.x + (region.end as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+                            if click_pos.x >= rx1 && click_pos.x <= rx2 {
+                                app.loop_start = region.start;
+                                app.loop_end = region.end;
+                                app.loop_enabled = true;
+                                app.send_command(jamhub_engine::EngineCommand::SetLoop {
+                                    enabled: true,
+                                    start: region.start,
+                                    end: region.end,
+                                });
+                                app.set_status(&format!("Loop: {}", region.name));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Right-click on the loop bar area to save current loop as named region
+            if response.secondary_clicked() {
+                if let Some(click_pos) = response.interact_pointer_pos {
+                    if click_pos.y >= ruler_rect.min.y - 20.0 && click_pos.y < ruler_rect.min.y
+                        && app.loop_enabled && app.loop_end > app.loop_start
+                    {
+                        app.region_name_input = Some(crate::RegionNameInput {
+                            name: format!("Region {}", app.project.regions.len() + 1),
+                            start: app.loop_start,
+                            end: app.loop_end,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Region name input dialog
+        if app.region_name_input.is_some() {
+            let mut apply = false;
+            let mut cancel = false;
+            egui::Window::new("Save Region")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ui.ctx(), |ui| {
+                    ui.label("Region name:");
+                    if let Some(ref mut state) = app.region_name_input {
+                        let resp = ui.text_edit_singleline(&mut state.name);
+                        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            apply = true;
+                        }
+                        ui.horizontal(|ui| {
+                            if ui.button("Save").clicked() { apply = true; }
+                            if ui.button("Cancel").clicked() { cancel = true; }
+                        });
+                    }
+                });
+            if apply {
+                if let Some(state) = app.region_name_input.take() {
+                    let region_colors: &[[u8; 3]] = &[
+                        [80, 160, 220], [160, 100, 200], [200, 140, 60],
+                        [80, 200, 120], [200, 80, 120], [140, 200, 200],
+                    ];
+                    let color = region_colors[app.project.regions.len() % region_colors.len()];
+                    app.project.regions.push(jamhub_model::Region {
+                        id: uuid::Uuid::new_v4(),
+                        name: state.name,
+                        start: state.start,
+                        end: state.end,
+                        color,
+                    });
+                    app.set_status("Region saved");
+                }
+            } else if cancel {
+                app.region_name_input = None;
+            }
+        }
+
         // Track lanes with take sub-lanes
         for (i, track) in app.project.tracks.iter().enumerate() {
             // Skip collapsed group tracks
@@ -2139,7 +2361,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             let lighten = |c: u8| -> u8 { ((c as u16 * 3 / 4) + 64).min(255) as u8 };
                             egui::Color32::from_rgb(lighten(color.r()), lighten(color.g()), lighten(color.b()))
                         };
-                        draw_waveform(painter, &peaks, cr, clip.duration_samples, wc);
+                        draw_waveform(painter, &peaks, cr, clip.duration_samples, wc, clip.content_offset, app.zoom);
                     }
                 }
 
@@ -2267,6 +2489,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 }
 
                 // Clip label — small tag with background at top-left
+                // When zoomed out far, show clip names more prominently
+                let zoomed_out = app.zoom < 0.3;
                 let speed_suffix = if (clip.playback_rate - 1.0).abs() > 0.01 {
                     format!(" [{:.2}x]", clip.playback_rate)
                 } else {
@@ -2282,22 +2506,36 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 } else {
                     egui::Color32::from_rgb(240, 238, 234)
                 };
+                let font_size = if zoomed_out { 12.0 } else { 10.0 };
                 // Draw tag background behind clip name
                 if !is_clip_muted {
-                    let tag_w = (label.len() as f32 * 5.5 + 8.0).min(cr.width() - 4.0);
+                    let tag_w = (label.len() as f32 * (if zoomed_out { 6.5 } else { 5.5 }) + 8.0).min(cr.width() - 4.0);
+                    let tag_h = if zoomed_out { 17.0 } else { 14.0 };
                     let tag_rect = egui::Rect::from_min_size(
                         egui::pos2(cr.left() + 2.0, cr.top() + 1.0),
-                        egui::vec2(tag_w, 14.0),
+                        egui::vec2(tag_w, tag_h),
                     );
-                    painter.with_clip_rect(cr).rect_filled(tag_rect, 3.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, 100));
+                    painter.with_clip_rect(cr).rect_filled(tag_rect, 3.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, if zoomed_out { 140 } else { 100 }));
                 }
                 painter.with_clip_rect(cr.shrink(2.0)).text(
                     egui::pos2(cr.left() + 5.0, cr.top() + 2.0),
                     egui::Align2::LEFT_TOP,
-                    label,
-                    egui::FontId::proportional(10.0),
+                    &label,
+                    egui::FontId::proportional(font_size),
                     text_color,
                 );
+
+                // Slip edit indicator: show content offset when non-zero
+                if clip.content_offset > 0 && !is_clip_muted {
+                    let offset_label = format!("offset: {}s", clip.content_offset as f64 / sample_rate);
+                    painter.with_clip_rect(cr).text(
+                        egui::pos2(cr.left() + 5.0, cr.bottom() - 11.0),
+                        egui::Align2::LEFT_TOP,
+                        offset_label,
+                        egui::FontId::proportional(8.0),
+                        egui::Color32::from_rgb(180, 180, 200),
+                    );
+                }
 
                 // Active indicator dot
                 if !is_clip_muted && num_lanes > 1 {
@@ -2964,31 +3202,46 @@ fn draw_waveform(
     clip_rect: egui::Rect,
     total_samples: u64,
     color: egui::Color32,
+    content_offset: u64,
+    zoom: f32,
 ) {
     let width = clip_rect.width();
     if width < 2.0 {
         return;
     }
 
+    // When zoomed out far (zoom < 0.3), show simplified waveform
+    let zoomed_out = zoom < 0.3;
+
     let samples_per_pixel = total_samples as f64 / width as f64;
     let peak_data = peaks.get_peaks_for_resolution(samples_per_pixel);
     let rms_data = peaks.get_rms_for_resolution(samples_per_pixel);
     let block_size = peaks.block_size_for_level(samples_per_pixel) as f64;
 
+    // Calculate content_offset in peak-data indices
+    let offset_blocks = if content_offset > 0 {
+        (content_offset as f64 / block_size) as usize
+    } else {
+        0
+    };
+
     let center_y = clip_rect.center().y;
     let half_height = clip_rect.height() * 0.4;
 
+    // When zoomed out far, reduce number of pixels sampled for performance
+    let step = if zoomed_out { 2 } else { 1 };
     let num_pixels = (width as usize).min(2000);
-    let mut peak_top: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
-    let mut peak_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
-    let mut rms_top: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
-    let mut rms_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
+    let mut peak_top: Vec<egui::Pos2> = Vec::with_capacity(num_pixels / step + 2);
+    let mut peak_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_pixels / step + 2);
+    let mut rms_top: Vec<egui::Pos2> = Vec::with_capacity(num_pixels / step + 2);
+    let mut rms_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_pixels / step + 2);
 
-    for px in 0..num_pixels {
+    let mut px = 0;
+    while px < num_pixels {
         let sample_start = px as f64 * samples_per_pixel;
-        let sample_end = (px + 1) as f64 * samples_per_pixel;
-        let peak_start = (sample_start / block_size) as usize;
-        let peak_end = ((sample_end / block_size) as usize + 1).min(peak_data.len());
+        let sample_end = ((px + step) as f64 * samples_per_pixel).min(total_samples as f64);
+        let peak_start = ((sample_start / block_size) as usize + offset_blocks).min(peak_data.len());
+        let peak_end = (((sample_end / block_size) as usize + 1 + offset_blocks)).min(peak_data.len());
 
         if peak_start >= peak_data.len() {
             break;
@@ -3011,6 +3264,7 @@ fn draw_waveform(
         peak_bottom.push(egui::pos2(x, center_y - min * half_height));
         rms_top.push(egui::pos2(x, center_y - rms_max * half_height));
         rms_bottom.push(egui::pos2(x, center_y + rms_max * half_height));
+        px += step;
     }
 
     let clipped = painter.with_clip_rect(clip_rect);
@@ -3025,36 +3279,57 @@ fn draw_waveform(
     );
 
     if peak_top.len() >= 2 {
-        // Peak envelope — semi-transparent filled area
-        let mut peak_polygon = peak_top.clone();
-        let mut bottom_rev = peak_bottom.clone();
-        bottom_rev.reverse();
-        peak_polygon.extend(bottom_rev);
-        clipped.add(egui::Shape::convex_polygon(
-            peak_polygon,
-            color.gamma_multiply(0.3),
-            egui::Stroke::NONE,
-        ));
+        if zoomed_out {
+            // Simplified waveform: envelope only, thicker line, no individual detail
+            let envelope_color = color.gamma_multiply(0.5);
+            let mut envelope_polygon = peak_top.clone();
+            let mut bottom_rev = peak_bottom.clone();
+            bottom_rev.reverse();
+            envelope_polygon.extend(bottom_rev);
+            clipped.add(egui::Shape::convex_polygon(
+                envelope_polygon,
+                color.gamma_multiply(0.35),
+                egui::Stroke::NONE,
+            ));
+            // Thicker envelope edge lines
+            let thick_stroke = egui::Stroke::new(1.5, envelope_color);
+            for w in peak_top.windows(2) {
+                clipped.line_segment([w[0], w[1]], thick_stroke);
+            }
+            for w in peak_bottom.windows(2) {
+                clipped.line_segment([w[0], w[1]], thick_stroke);
+            }
+        } else {
+            // Peak envelope — semi-transparent filled area
+            let mut peak_polygon = peak_top.clone();
+            let mut bottom_rev = peak_bottom.clone();
+            bottom_rev.reverse();
+            peak_polygon.extend(bottom_rev);
+            clipped.add(egui::Shape::convex_polygon(
+                peak_polygon,
+                color.gamma_multiply(0.3),
+                egui::Stroke::NONE,
+            ));
 
-        // RMS envelope — darker filled area inside the peak envelope
-        let mut rms_polygon = rms_top.clone();
-        let mut rms_bot_rev = rms_bottom.clone();
-        rms_bot_rev.reverse();
-        rms_polygon.extend(rms_bot_rev);
-        clipped.add(egui::Shape::convex_polygon(
-            rms_polygon,
-            color.gamma_multiply(0.55),
-            egui::Stroke::NONE,
-        ));
+            // RMS envelope — darker filled area inside the peak envelope
+            let mut rms_polygon = rms_top.clone();
+            let mut rms_bot_rev = rms_bottom.clone();
+            rms_bot_rev.reverse();
+            rms_polygon.extend(rms_bot_rev);
+            clipped.add(egui::Shape::convex_polygon(
+                rms_polygon,
+                color.gamma_multiply(0.55),
+                egui::Stroke::NONE,
+            ));
 
-        // Anti-aliased waveform edge lines (top and bottom outlines)
-        // Use PathStroke for smooth anti-aliased rendering
-        let top_stroke = egui::Stroke::new(1.0, color.gamma_multiply(0.7));
-        for w in peak_top.windows(2) {
-            clipped.line_segment([w[0], w[1]], top_stroke);
-        }
-        for w in peak_bottom.windows(2) {
-            clipped.line_segment([w[0], w[1]], top_stroke);
+            // Anti-aliased waveform edge lines (top and bottom outlines)
+            let top_stroke = egui::Stroke::new(1.0, color.gamma_multiply(0.7));
+            for w in peak_top.windows(2) {
+                clipped.line_segment([w[0], w[1]], top_stroke);
+            }
+            for w in peak_bottom.windows(2) {
+                clipped.line_segment([w[0], w[1]], top_stroke);
+            }
         }
     }
 }
@@ -3207,4 +3482,6 @@ enum TrackAction {
     Unfreeze(usize),
     /// Flatten comp — remove inactive takes, keep only active clips
     FlattenComp(usize),
+    /// Set track height preset (0.0 = auto)
+    SetHeight(usize, f32),
 }

@@ -2,6 +2,8 @@ mod about;
 mod audio_settings;
 mod effects_panel;
 mod fx_browser;
+mod media_browser;
+mod midi_mapping;
 mod midi_panel;
 mod mixer_view;
 mod piano_roll;
@@ -248,6 +250,7 @@ pub struct DawApp {
     input_monitor: InputMonitor,
     pub resizing_track: Option<usize>,
     pub fx_browser: fx_browser::FxBrowser,
+    pub media_browser: media_browser::MediaBrowser,
     pub audio_settings: audio_settings::AudioSettings,
     // Time selection range (for export selection, loop-to-selection, delete range)
     pub selection_start: Option<u64>,
@@ -370,6 +373,35 @@ pub struct DawApp {
     pub swipe_comping: Option<SwipeCompState>,
     /// Session clip launcher state
     pub session_view_state: session_view::SessionViewState,
+    /// MIDI learn mode — waiting for CC input to map a parameter
+    pub midi_learn_state: Option<midi_mapping::MidiLearnState>,
+    /// Show MIDI Mapping Manager window
+    pub show_midi_mappings: bool,
+    /// Show Macro Controls panel below transport
+    pub show_macros: bool,
+    /// Locator memory positions (9 slots, Shift+1..9 to save, 1..9 to recall)
+    pub locators: [Option<u64>; 9],
+    /// Whether the locators panel is visible
+    pub show_locators: bool,
+    /// Slip editing state: Ctrl+drag to shift audio content within clip boundaries
+    pub slip_editing: Option<SlipEditState>,
+    /// Region naming dialog state
+    pub region_name_input: Option<RegionNameInput>,
+}
+
+/// State for slip-editing: shifting audio content within clip boundaries.
+pub struct SlipEditState {
+    pub track_idx: usize,
+    pub clip_idx: usize,
+    pub start_x: f32,
+    pub original_content_offset: u64,
+}
+
+/// State for the region naming dialog.
+pub struct RegionNameInput {
+    pub name: String,
+    pub start: u64,
+    pub end: u64,
 }
 
 /// State for an ongoing swipe-comp drag gesture.
@@ -852,6 +884,7 @@ impl DawApp {
                 fb.scan_and_load_all(sample_rate);
                 fb
             },
+            media_browser: media_browser::MediaBrowser::default(),
             audio_settings: audio_settings::AudioSettings::default(),
             selection_start: None,
             selection_end: None,
@@ -930,6 +963,13 @@ impl DawApp {
             tempo_change_input: None,
             swipe_comping: None,
             session_view_state: session_view::SessionViewState::default(),
+            midi_learn_state: None,
+            show_midi_mappings: false,
+            show_macros: true,
+            locators: [None; 9],
+            show_locators: false,
+            slip_editing: None,
+            region_name_input: None,
         }
     }
 
@@ -954,6 +994,10 @@ impl DawApp {
             .unwrap_or(44100)
     }
 
+
+    pub fn pdc_info(&self) -> Option<&jamhub_engine::PdcInfo> {
+        self.engine.as_ref().map(|e| &e.pdc_info)
+    }
     pub fn levels(&self) -> Option<&LevelMeters> {
         self.engine.as_ref().map(|e| &e.levels)
     }
@@ -1047,7 +1091,7 @@ impl DawApp {
                     start_sample: position,
                     duration_samples: data.duration_samples,
                     source: ClipSource::AudioBuffer { buffer_id },
-                    muted: false,
+                    muted: false, content_offset: 0,
                     fade_in_samples: 0,
                     fade_out_samples: 0,
                     color: None,
@@ -1210,7 +1254,7 @@ impl DawApp {
                 start_sample: rec_start,
                 duration_samples: duration,
                 source: ClipSource::AudioBuffer { buffer_id },
-                muted: false,
+                muted: false, content_offset: 0,
                 fade_in_samples: 0,
                 fade_out_samples: 0,
                 color: None,
@@ -1350,7 +1394,7 @@ impl DawApp {
                     start_sample: rec_start,
                     duration_samples: 1, // will grow
                     source: ClipSource::AudioBuffer { buffer_id: live_id },
-                    muted: false,
+                    muted: false, content_offset: 0,
                     fade_in_samples: 0,
                     fade_out_samples: 0,
                     color: None,
@@ -1541,6 +1585,7 @@ impl DawApp {
                 loop_count: 1,
                 gain_db: 0.0,
                 take_index: 0,
+                content_offset: 0,
             };
 
             if let ClipSource::AudioBuffer { buffer_id } = &clip_source {
@@ -1655,7 +1700,7 @@ impl DawApp {
                     start_sample: 0,
                     duration_samples: duration,
                     source: ClipSource::AudioBuffer { buffer_id },
-                    muted: false,
+                    muted: false, content_offset: 0,
                     fade_in_samples: 0,
                     fade_out_samples: 0,
                     color: None,
@@ -1717,7 +1762,7 @@ impl DawApp {
                     start_sample: 0, duration_samples: duration,
                     source: ClipSource::AudioBuffer { buffer_id },
                     muted: false, fade_in_samples: 0, fade_out_samples: 0,
-                    color: None, playback_rate: 1.0, preserve_pitch: false, loop_count: 1, gain_db: 0.0, take_index: 0,
+                    color: None, playback_rate: 1.0, preserve_pitch: false, loop_count: 1, gain_db: 0.0, take_index: 0, content_offset: 0,
                 });
                 self.project.tracks[track_idx].frozen = true;
                 self.project.tracks[track_idx].frozen_buffer_id = Some(buffer_id);
@@ -1782,7 +1827,7 @@ impl DawApp {
                     start_sample: range_start, duration_samples: duration,
                     source: ClipSource::AudioBuffer { buffer_id },
                     muted: false, fade_in_samples: 0, fade_out_samples: 0,
-                    color: None, playback_rate: 1.0, preserve_pitch: false, loop_count: 1, gain_db: 0.0, take_index: 0,
+                    color: None, playback_rate: 1.0, preserve_pitch: false, loop_count: 1, gain_db: 0.0, take_index: 0, content_offset: 0,
                 });
                 self.sync_project();
                 self.set_status(&format!("Selection bounced ({:.1}s)", duration as f64 / sr as f64));
@@ -2381,7 +2426,7 @@ impl DawApp {
             start_sample: overall_start,
             duration_samples: duration,
             source: ClipSource::AudioBuffer { buffer_id },
-            muted: false,
+            muted: false, content_offset: 0,
             fade_in_samples: 0,
             fade_out_samples: 0,
             color: None,
@@ -2662,6 +2707,10 @@ impl eframe::App for DawApp {
         }
 
         // Live waveform update during recording (every 100ms)
+
+        // Process MIDI CC for learn/mapping and macro updates
+        midi_mapping::process_midi_cc(self);
+
         if self.is_recording && self.live_rec_last_update.elapsed().as_millis() > 100 {
             self.live_rec_last_update = std::time::Instant::now();
             if let Some(live_id) = self.live_rec_buffer_id {
@@ -2784,6 +2833,7 @@ impl eframe::App for DawApp {
                 if i.key_pressed(egui::Key::Z) && !i.modifiers.command { actions.push("zoom_fit".into()); }
                 if i.key_pressed(egui::Key::C) && !i.modifiers.command { actions.push("toggle_count_in".into()); }
                 if i.key_pressed(egui::Key::P) && !i.modifiers.command { actions.push("toggle_punch".into()); }
+                if i.key_pressed(egui::Key::B) && !i.modifiers.command { actions.push("media_browser".into()); }
                 if i.key_pressed(egui::Key::Q) && !i.modifiers.command { actions.push("spectrum".into()); }
                 if i.key_pressed(egui::Key::F) && i.modifiers.shift && !i.modifiers.command { actions.push("flatten_comp".into()); }
                 if i.key_pressed(egui::Key::Tab) && !i.modifiers.command { actions.push("cycle_view".into()); }
@@ -2805,7 +2855,16 @@ impl eframe::App for DawApp {
                     egui::Key::Num7, egui::Key::Num8, egui::Key::Num9,
                 ].iter().enumerate() {
                     if i.key_pressed(*key) && !i.modifiers.command {
-                        actions.push(format!("select_track_{}", idx));
+                        if i.modifiers.shift {
+                            // Shift+1-9: save current playhead to locator slot
+                            actions.push(format!("save_locator_{}", idx));
+                        } else if i.modifiers.ctrl {
+                            // Ctrl+1-9: select track
+                            actions.push(format!("select_track_{}", idx));
+                        } else {
+                            // 1-9: recall locator (jump to saved position)
+                            actions.push(format!("recall_locator_{}", idx));
+                        }
                     }
                 }
             }
@@ -3019,6 +3078,9 @@ impl eframe::App for DawApp {
                 "fx_browser" => {
                     self.fx_browser.show = !self.fx_browser.show;
                 }
+                "media_browser" => {
+                    self.media_browser.show = !self.media_browser.show;
+                }
                 "spectrum" => {
                     self.spectrum_analyzer.show = !self.spectrum_analyzer.show;
                     if self.spectrum_analyzer.show {
@@ -3192,6 +3254,27 @@ impl eframe::App for DawApp {
                         if idx < self.project.tracks.len() {
                             self.selected_track = Some(idx);
                             self.selected_clips.clear();
+                        }
+                    }
+                }
+                a if a.starts_with("save_locator_") => {
+                    if let Ok(idx) = a[13..].parse::<usize>() {
+                        if idx < 9 {
+                            let pos = self.position_samples();
+                            self.locators[idx] = Some(pos);
+                            self.set_status(&format!("Locator {} saved at playhead", idx + 1));
+                        }
+                    }
+                }
+                a if a.starts_with("recall_locator_") => {
+                    if let Ok(idx) = a[15..].parse::<usize>() {
+                        if idx < 9 {
+                            if let Some(pos) = self.locators[idx] {
+                                self.send_command(EngineCommand::SetPosition(pos));
+                                self.set_status(&format!("Jumped to locator {}", idx + 1));
+                            } else {
+                                self.set_status(&format!("Locator {} not set (Shift+{} to save)", idx + 1, idx + 1));
+                            }
                         }
                     }
                 }
@@ -3376,6 +3459,15 @@ impl eframe::App for DawApp {
                                 self.set_status(&format!("Selected {} clip(s)", count));
                             }
                         }
+                    ui.separator();
+                    if ui.button("MIDI Mappings...").clicked() {
+                        self.show_midi_mappings = !self.show_midi_mappings;
+                        ui.close_menu();
+                    }
+                    if ui.button("Macro Controls...").clicked() {
+                        self.show_macros = !self.show_macros;
+                        ui.close_menu();
+                    }
                         ui.close_menu();
                     }
                     ui.separator();
@@ -3522,6 +3614,10 @@ impl eframe::App for DawApp {
                         self.spectrum_analyzer.show = !self.spectrum_analyzer.show;
                         ui.close_menu();
                     }
+                    if ui.button("Media Browser        B").clicked() {
+                        self.media_browser.show = !self.media_browser.show;
+                        ui.close_menu();
+                    }
                     ui.separator();
                     ui.label(egui::RichText::new("Snap Mode:").small().color(egui::Color32::GRAY));
                     for mode in SnapMode::all() {
@@ -3566,6 +3662,9 @@ impl eframe::App for DawApp {
             .frame(egui::Frame::default().fill(egui::Color32::from_rgb(18, 18, 22)).inner_margin(0.0))
             .exact_height(1.0)
             .show(ctx, |_ui| {});
+
+        // Macro controls panel (below transport)
+        midi_mapping::show_macro_panel(self, ctx);
 
         // Status bar
         egui::TopBottomPanel::bottom("status_bar")
@@ -3732,6 +3831,7 @@ impl eframe::App for DawApp {
         effects_panel::show(self, ctx);
         piano_roll::show(self, ctx);
         fx_browser::show(self, ctx);
+        media_browser::show(self, ctx);
         audio_settings::show(self, ctx);
         midi_panel::show(self, ctx);
         undo_panel::show(self, ctx);
@@ -3740,6 +3840,7 @@ impl eframe::App for DawApp {
         shortcuts_panel::show(self, ctx);
         spectrum::show(self, ctx);
         self.show_audio_pool_window(ctx);
+        midi_mapping::show_mapping_manager(self, ctx);
 
         // Cleanup closed plugin editor windows
         self.plugin_windows.cleanup_closed();

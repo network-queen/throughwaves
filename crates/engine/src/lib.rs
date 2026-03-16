@@ -27,7 +27,7 @@ pub use input_monitor::InputMonitor;
 pub use levels::LevelMeters;
 pub use lufs::LufsMeter;
 pub use metronome::Metronome;
-pub use mixer::Mixer;
+pub use mixer::{Mixer, PdcInfo, PdcState};
 pub use project_io::{load_project, save_project};
 pub use recorder::{resample, Recorder, RecordingResult};
 pub use transport::{EngineCommand, EngineHandle};

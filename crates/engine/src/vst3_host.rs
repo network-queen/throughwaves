@@ -4,7 +4,6 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Arc;
 
 use crossbeam_channel::{bounded, Sender, Receiver};
 use vst3::Steinberg::Vst::*;
@@ -116,6 +115,8 @@ pub struct Vst3Plugin {
     pub error: Option<String>,
     pub num_params: i32,
     pub has_editor: bool,
+    /// Plugin-reported latency in samples (from IAudioProcessor::getLatencySamples).
+    pub latency_samples: u32,
     _lib: Option<libloading::Library>,
     component: Option<*mut IComponent>,
     processor: Option<*mut IAudioProcessor>,
@@ -252,6 +253,7 @@ impl Vst3Plugin {
         };
 
         // Setup processing if we got a processor
+        let mut latency_samples: u32 = 0;
         let processing = if let Some(proc) = processor {
             let mut setup = ProcessSetup {
                 processMode: ProcessModes_::kRealtime as i32,
@@ -261,6 +263,14 @@ impl Vst3Plugin {
             };
             unsafe { ((*(*proc).vtbl).setupProcessing)(proc, &mut setup); }
             unsafe { ((*(*proc).vtbl).setProcessing)(proc, 1); }
+
+            // Query plugin-reported latency
+            latency_samples = unsafe { ((*(*proc).vtbl).getLatencySamples)(proc) };
+            if latency_samples > 0 {
+                println!("VST3: '{found_name}' — latency: {latency_samples} samples ({:.1}ms)",
+                    latency_samples as f64 / sample_rate * 1000.0);
+            }
+
             println!("VST3: '{found_name}' — processing active!");
             true
         } else {
@@ -375,6 +385,7 @@ impl Vst3Plugin {
             error: if processor.is_none() { Some("No audio processor interface".into()) } else { None },
             num_params,
             has_editor,
+            latency_samples,
             _lib: Some(lib),
             component: Some(component),
             processor,
@@ -391,6 +402,7 @@ impl Vst3Plugin {
             loaded: false, processing: false,
             error: Some(error.to_string()),
             num_params: 0, has_editor: false,
+            latency_samples: 0,
             _lib: None, component: None, processor: None, controller: None,
             sample_rate: 44100.0, block_size: 256,
             param_change_rx: None,

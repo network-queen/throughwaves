@@ -1,5 +1,5 @@
 use eframe::egui;
-use jamhub_model::{EqBandParams, EqBandType, TrackEffect, MAX_EQ_BANDS};
+use jamhub_model::{EqBandParams, EqBandType, MidiMappingTarget, TrackEffect, MAX_EQ_BANDS};
 
 use crate::DawApp;
 
@@ -401,7 +401,7 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
                 .resizable(is_peq)
                 .show(ctx, |ui| {
                     let effect = &mut app.project.tracks[track_idx].effects[slot_idx].effect;
-                    show_effect_controls(ui, effect, &mut needs_sync);
+                    show_effect_controls(ui, effect, &mut needs_sync, Some((track_idx, slot_idx)));
                 });
         }
 
@@ -414,51 +414,97 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
     if needs_sync {
         app.sync_project();
     }
+
+    // Process any MIDI learn requests collected during effect controls rendering
+    MIDI_LEARN_REQUESTS.with(|r| {
+        let requests: Vec<MidiMappingTarget> = std::mem::take(&mut *r.borrow_mut());
+        for target in requests {
+            app.midi_learn_state = Some(crate::midi_mapping::MidiLearnState { target });
+            app.set_status("MIDI Learn: move a knob/slider on your controller...");
+        }
+    });
 }
 
 /// Parameter controls for built-in effects.
-fn show_effect_controls(ui: &mut egui::Ui, effect: &mut TrackEffect, needs_sync: &mut bool) {
+/// `slot_ctx` is `Some((track_idx, slot_idx))` when MIDI learn context menus should be added.
+fn show_effect_controls(
+    ui: &mut egui::Ui,
+    effect: &mut TrackEffect,
+    needs_sync: &mut bool,
+    slot_ctx: Option<(usize, usize)>,
+) {
+    // Helper: add a slider with optional MIDI learn context menu
+    macro_rules! slider_with_learn {
+        ($ui:expr, $slider:expr, $param_name:expr, $needs_sync:expr, $slot_ctx:expr) => {{
+            let resp = $ui.add($slider);
+            if resp.changed() {
+                *$needs_sync = true;
+            }
+            if let Some((ti, si)) = $slot_ctx {
+                resp.context_menu(|ui| {
+                    if ui.button("MIDI Learn").clicked() {
+                        MIDI_LEARN_REQUESTS.with(|r| {
+                            r.borrow_mut().push(MidiMappingTarget::EffectParam {
+                                track_idx: ti,
+                                slot_idx: si,
+                                param_name: $param_name.to_string(),
+                            });
+                        });
+                        ui.close_menu();
+                    }
+                });
+            }
+        }};
+    }
+
     match effect {
         TrackEffect::Gain { db } => {
-            if ui.add(egui::Slider::new(db, -24.0..=24.0).suffix(" dB")).changed() { *needs_sync = true; }
+            slider_with_learn!(ui, egui::Slider::new(db, -24.0..=24.0).suffix(" dB"), "Gain dB", needs_sync, slot_ctx);
         }
         TrackEffect::LowPass { cutoff_hz } | TrackEffect::HighPass { cutoff_hz } => {
-            if ui.add(egui::Slider::new(cutoff_hz, 20.0..=20000.0).logarithmic(true).text("Cutoff").suffix(" Hz")).changed() { *needs_sync = true; }
+            slider_with_learn!(ui, egui::Slider::new(cutoff_hz, 20.0..=20000.0).logarithmic(true).text("Cutoff").suffix(" Hz"), "Cutoff Hz", needs_sync, slot_ctx);
         }
         TrackEffect::Delay { time_ms, feedback, mix } => {
-            if ui.add(egui::Slider::new(time_ms, 1.0..=2000.0).text("Time").suffix(" ms")).changed() { *needs_sync = true; }
-            if ui.add(egui::Slider::new(feedback, 0.0..=0.95).text("Feedback")).changed() { *needs_sync = true; }
-            if ui.add(egui::Slider::new(mix, 0.0..=1.0).text("Mix")).changed() { *needs_sync = true; }
+            slider_with_learn!(ui, egui::Slider::new(time_ms, 1.0..=2000.0).text("Time").suffix(" ms"), "Time ms", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(feedback, 0.0..=0.95).text("Feedback"), "Feedback", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(mix, 0.0..=1.0).text("Mix"), "Mix", needs_sync, slot_ctx);
         }
         TrackEffect::Reverb { decay, mix } => {
-            if ui.add(egui::Slider::new(decay, 0.0..=0.99).text("Decay")).changed() { *needs_sync = true; }
-            if ui.add(egui::Slider::new(mix, 0.0..=1.0).text("Mix")).changed() { *needs_sync = true; }
+            slider_with_learn!(ui, egui::Slider::new(decay, 0.0..=0.99).text("Decay"), "Decay", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(mix, 0.0..=1.0).text("Mix"), "Mix", needs_sync, slot_ctx);
         }
         TrackEffect::Compressor { threshold_db, ratio, attack_ms, release_ms } => {
-            if ui.add(egui::Slider::new(threshold_db, -60.0..=0.0).text("Thresh").suffix(" dB")).changed() { *needs_sync = true; }
-            if ui.add(egui::Slider::new(ratio, 1.0..=20.0).text("Ratio").suffix(":1")).changed() { *needs_sync = true; }
-            if ui.add(egui::Slider::new(attack_ms, 0.1..=100.0).text("Atk").suffix(" ms")).changed() { *needs_sync = true; }
-            if ui.add(egui::Slider::new(release_ms, 10.0..=1000.0).text("Rel").suffix(" ms")).changed() { *needs_sync = true; }
+            slider_with_learn!(ui, egui::Slider::new(threshold_db, -60.0..=0.0).text("Thresh").suffix(" dB"), "Threshold dB", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(ratio, 1.0..=20.0).text("Ratio").suffix(":1"), "Ratio", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(attack_ms, 0.1..=100.0).text("Atk").suffix(" ms"), "Attack ms", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(release_ms, 10.0..=1000.0).text("Rel").suffix(" ms"), "Release ms", needs_sync, slot_ctx);
         }
         TrackEffect::EqBand { freq_hz, gain_db, q } => {
-            if ui.add(egui::Slider::new(freq_hz, 20.0..=20000.0).logarithmic(true).text("Freq").suffix(" Hz")).changed() { *needs_sync = true; }
-            if ui.add(egui::Slider::new(gain_db, -24.0..=24.0).text("Gain").suffix(" dB")).changed() { *needs_sync = true; }
-            if ui.add(egui::Slider::new(q, 0.1..=10.0).text("Q")).changed() { *needs_sync = true; }
+            slider_with_learn!(ui, egui::Slider::new(freq_hz, 20.0..=20000.0).logarithmic(true).text("Freq").suffix(" Hz"), "Freq Hz", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(gain_db, -24.0..=24.0).text("Gain").suffix(" dB"), "Gain dB (EQ)", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(q, 0.1..=10.0).text("Q"), "Q", needs_sync, slot_ctx);
         }
         TrackEffect::ParametricEq { bands } => {
             show_parametric_eq_ui(ui, bands, needs_sync);
         }
         TrackEffect::Chorus { rate_hz, depth, mix } => {
-            if ui.add(egui::Slider::new(rate_hz, 0.1..=5.0).text("Rate").suffix(" Hz")).changed() { *needs_sync = true; }
-            if ui.add(egui::Slider::new(depth, 0.0..=1.0).text("Depth")).changed() { *needs_sync = true; }
-            if ui.add(egui::Slider::new(mix, 0.0..=1.0).text("Mix")).changed() { *needs_sync = true; }
+            slider_with_learn!(ui, egui::Slider::new(rate_hz, 0.1..=5.0).text("Rate").suffix(" Hz"), "Rate Hz", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(depth, 0.0..=1.0).text("Depth"), "Depth", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(mix, 0.0..=1.0).text("Mix"), "Mix", needs_sync, slot_ctx);
         }
         TrackEffect::Distortion { drive, mix } => {
-            if ui.add(egui::Slider::new(drive, 0.0..=40.0).text("Drive").suffix(" dB")).changed() { *needs_sync = true; }
-            if ui.add(egui::Slider::new(mix, 0.0..=1.0).text("Mix")).changed() { *needs_sync = true; }
+            slider_with_learn!(ui, egui::Slider::new(drive, 0.0..=40.0).text("Drive").suffix(" dB"), "Drive", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(mix, 0.0..=1.0).text("Mix"), "Mix", needs_sync, slot_ctx);
         }
         TrackEffect::Vst3Plugin { .. } => {}
     }
+}
+
+/// Thread-local to collect MIDI learn requests from within effect control rendering.
+/// Processed after the effects panel rendering is complete.
+thread_local! {
+    static MIDI_LEARN_REQUESTS: std::cell::RefCell<Vec<MidiMappingTarget>> =
+        std::cell::RefCell::new(Vec::new());
 }
 
 /// Full parametric EQ UI with frequency response curve and band controls.

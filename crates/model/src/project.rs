@@ -28,6 +28,25 @@ pub struct Project {
     /// Scenes for session/clip launcher view
     #[serde(default)]
     pub scenes: Vec<Scene>,
+    /// MIDI CC learn/mapping table
+    #[serde(default)]
+    pub midi_mappings: Vec<MidiMapping>,
+    /// Macro controls (up to 8 assignable knobs)
+    #[serde(default)]
+    pub macros: Vec<MacroControl>,
+    /// Saved loop regions (named, colored loop areas)
+    #[serde(default)]
+    pub regions: Vec<Region>,
+}
+
+/// A saved loop region on the timeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Region {
+    pub id: Uuid,
+    pub name: String,
+    pub start: u64,
+    pub end: u64,
+    pub color: [u8; 3],
 }
 
 /// A scene in session view — a row of clip slots across all tracks.
@@ -81,8 +100,21 @@ impl Default for Project {
             created_at: String::new(),
             master_effects: Vec::new(),
             scenes: Vec::new(),
+            midi_mappings: Vec::new(),
+            macros: default_macros(),
+            regions: Vec::new(),
         }
     }
+}
+
+fn default_macros() -> Vec<MacroControl> {
+    (1..=8)
+        .map(|i| MacroControl {
+            name: format!("Macro {i}"),
+            value: 0.0,
+            assignments: Vec::new(),
+        })
+        .collect()
 }
 
 impl Project {
@@ -532,6 +564,10 @@ pub struct Clip {
     /// Higher index = recorded later. 0 = original, 1 = first re-record, etc.
     #[serde(default)]
     pub take_index: u32,
+    /// Content offset: how many samples into the source buffer to start reading.
+    /// Used for slip editing — the clip boundaries stay fixed but the audio content shifts.
+    #[serde(default)]
+    pub content_offset: u64,
 }
 
 fn default_playback_rate() -> f32 {
@@ -659,4 +695,192 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
         ((g + m) * 255.0) as u8,
         ((b + m) * 255.0) as u8,
     ]
+}
+
+// ── MIDI Mapping & Macro Types ───────────────────────────────────────
+
+/// Target for a MIDI CC mapping or macro assignment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum MidiMappingTarget {
+    /// Track volume fader (track index)
+    TrackVolume(usize),
+    /// Track pan knob (track index)
+    TrackPan(usize),
+    /// Built-in effect parameter
+    EffectParam {
+        track_idx: usize,
+        slot_idx: usize,
+        param_name: String,
+    },
+    /// Master volume fader
+    MasterVolume,
+}
+
+impl MidiMappingTarget {
+    /// Human-readable label for this target.
+    pub fn label(&self, tracks: &[Track]) -> String {
+        match self {
+            MidiMappingTarget::TrackVolume(i) => {
+                let name = tracks.get(*i).map(|t| t.name.as_str()).unwrap_or("?");
+                format!("{name} — Volume")
+            }
+            MidiMappingTarget::TrackPan(i) => {
+                let name = tracks.get(*i).map(|t| t.name.as_str()).unwrap_or("?");
+                format!("{name} — Pan")
+            }
+            MidiMappingTarget::EffectParam { track_idx, slot_idx, param_name } => {
+                let tname = tracks.get(*track_idx).map(|t| t.name.as_str()).unwrap_or("?");
+                let ename = tracks.get(*track_idx)
+                    .and_then(|t| t.effects.get(*slot_idx))
+                    .map(|s| s.name())
+                    .unwrap_or("?");
+                format!("{tname} > {ename} > {param_name}")
+            }
+            MidiMappingTarget::MasterVolume => "Master Volume".to_string(),
+        }
+    }
+
+    /// Get the current value of this target from a project + master_volume.
+    pub fn get_value(&self, project: &Project, master_volume: f32) -> f32 {
+        match self {
+            MidiMappingTarget::TrackVolume(i) => {
+                project.tracks.get(*i).map(|t| t.volume).unwrap_or(1.0)
+            }
+            MidiMappingTarget::TrackPan(i) => {
+                project.tracks.get(*i).map(|t| t.pan).unwrap_or(0.0)
+            }
+            MidiMappingTarget::EffectParam { track_idx, slot_idx, param_name } => {
+                project.tracks.get(*track_idx)
+                    .and_then(|t| t.effects.get(*slot_idx))
+                    .and_then(|s| s.effect.get_param(param_name))
+                    .unwrap_or(0.0)
+            }
+            MidiMappingTarget::MasterVolume => master_volume,
+        }
+    }
+
+    /// The natural (min, max) range for this target.
+    pub fn range(&self, project: &Project) -> (f32, f32) {
+        match self {
+            MidiMappingTarget::TrackVolume(_) => (0.0, 1.5),
+            MidiMappingTarget::TrackPan(_) => (-1.0, 1.0),
+            MidiMappingTarget::EffectParam { track_idx, slot_idx, param_name } => {
+                project.tracks.get(*track_idx)
+                    .and_then(|t| t.effects.get(*slot_idx))
+                    .map(|_| effect_param_range(param_name))
+                    .unwrap_or((0.0, 1.0))
+            }
+            MidiMappingTarget::MasterVolume => (0.0, 1.5),
+        }
+    }
+}
+
+/// A single MIDI CC-to-parameter mapping.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MidiMapping {
+    pub cc_number: u8,
+    pub channel: u8,
+    pub target: MidiMappingTarget,
+}
+
+/// A macro control knob with multiple parameter assignments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MacroControl {
+    pub name: String,
+    /// Current value 0.0-1.0
+    pub value: f32,
+    pub assignments: Vec<MacroAssignment>,
+}
+
+/// One assignment from a macro to a parameter target with independent range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MacroAssignment {
+    pub target: MidiMappingTarget,
+    /// Value when macro is at 0.0
+    pub min_value: f32,
+    /// Value when macro is at 1.0
+    pub max_value: f32,
+}
+
+/// Apply a MIDI CC value (0-127) to a mapping target.
+/// Returns true if a value was changed.
+pub fn apply_midi_cc_to_target(
+    target: &MidiMappingTarget,
+    cc_value: u8,
+    project: &mut Project,
+    master_volume: &mut f32,
+) -> bool {
+    let (min, max) = target.range(project);
+    let normalized = cc_value as f32 / 127.0;
+    let value = min + normalized * (max - min);
+
+    match target {
+        MidiMappingTarget::TrackVolume(i) => {
+            if let Some(t) = project.tracks.get_mut(*i) {
+                t.volume = value;
+                return true;
+            }
+        }
+        MidiMappingTarget::TrackPan(i) => {
+            if let Some(t) = project.tracks.get_mut(*i) {
+                t.pan = value;
+                return true;
+            }
+        }
+        MidiMappingTarget::EffectParam { track_idx, slot_idx, param_name } => {
+            if let Some(track) = project.tracks.get_mut(*track_idx) {
+                if let Some(slot) = track.effects.get_mut(*slot_idx) {
+                    slot.effect = slot.effect.with_param(param_name, value);
+                    return true;
+                }
+            }
+        }
+        MidiMappingTarget::MasterVolume => {
+            *master_volume = value;
+            return true;
+        }
+    }
+    false
+}
+
+/// Apply a macro's current value to all its assignments.
+/// Returns true if any parameter was changed.
+pub fn apply_macro_value(
+    macro_ctrl: &MacroControl,
+    project: &mut Project,
+    master_volume: &mut f32,
+) -> bool {
+    let t = macro_ctrl.value.clamp(0.0, 1.0);
+    let mut changed = false;
+
+    for assign in &macro_ctrl.assignments {
+        let value = assign.min_value + t * (assign.max_value - assign.min_value);
+        match &assign.target {
+            MidiMappingTarget::TrackVolume(i) => {
+                if let Some(tr) = project.tracks.get_mut(*i) {
+                    tr.volume = value;
+                    changed = true;
+                }
+            }
+            MidiMappingTarget::TrackPan(i) => {
+                if let Some(tr) = project.tracks.get_mut(*i) {
+                    tr.pan = value;
+                    changed = true;
+                }
+            }
+            MidiMappingTarget::EffectParam { track_idx, slot_idx, param_name } => {
+                if let Some(track) = project.tracks.get_mut(*track_idx) {
+                    if let Some(slot) = track.effects.get_mut(*slot_idx) {
+                        slot.effect = slot.effect.with_param(param_name, value);
+                        changed = true;
+                    }
+                }
+            }
+            MidiMappingTarget::MasterVolume => {
+                *master_volume = value;
+                changed = true;
+            }
+        }
+    }
+    changed
 }

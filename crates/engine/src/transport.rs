@@ -41,6 +41,7 @@ pub struct EngineHandle {
     pub levels: LevelMeters,
     pub lufs: LufsMeter,
     pub spectrum: SpectrumBuffer,
+    pub pdc_info: crate::mixer::PdcInfo,
     _backend: AudioBackend,
 }
 
@@ -77,10 +78,13 @@ impl EngineHandle {
         let spectrum = SpectrumBuffer::new();
         let spectrum_clone = spectrum.clone();
 
+        let pdc_info = crate::mixer::PdcInfo::new();
+        let pdc_info_clone = pdc_info.clone();
+
         thread::Builder::new()
             .name("engine-thread".into())
             .spawn(move || {
-                engine_loop(cmd_rx, audio_tx, state_clone, levels_clone, lufs_clone, spectrum_clone, sample_rate, channels);
+                engine_loop(cmd_rx, audio_tx, state_clone, levels_clone, lufs_clone, spectrum_clone, pdc_info_clone, sample_rate, channels);
             })
             .map_err(|e| format!("Failed to spawn engine thread: {e}"))?;
 
@@ -90,6 +94,7 @@ impl EngineHandle {
             levels,
             lufs,
             spectrum,
+            pdc_info,
             _backend: backend,
         })
     }
@@ -106,11 +111,14 @@ fn engine_loop(
     levels: LevelMeters,
     lufs_meter: LufsMeter,
     spectrum: SpectrumBuffer,
+    pdc_info: crate::mixer::PdcInfo,
     sample_rate: u32,
     channels: u16,
 ) {
     let block_size: usize = 256;
     let mut mixer = Mixer::new(sample_rate, channels);
+    // Share the PdcInfo handle so the mixer writes to it and the UI reads from it
+    mixer.pdc_info = pdc_info;
     let mut project = Project::default();
     let mut audio_buffers: HashMap<ClipBufferId, Vec<f32>> = HashMap::new();
     let mut transport = TransportState::Stopped;

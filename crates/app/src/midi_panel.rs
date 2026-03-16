@@ -129,6 +129,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                         loop_count: 1,
                                         gain_db: 0.0,
                                         take_index: 0,
+                                        content_offset: 0,
                                     });
                                 }
                                 app.sync_project();

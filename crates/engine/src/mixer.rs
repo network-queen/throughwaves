@@ -1,12 +1,91 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use parking_lot::RwLock;
 use uuid::Uuid;
 
 use jamhub_model::{ClipBufferId, Project, TrackKind};
 
 use crate::effects::EffectProcessor;
 use crate::vst3_host::Vst3Plugin;
+
+/// PDC (Plugin Delay Compensation) information shared with the UI.
+#[derive(Clone, Default, Debug)]
+pub struct PdcState {
+    /// Per-track total latency in samples (from VST3 plugins in the chain).
+    pub track_latency: HashMap<Uuid, u32>,
+    /// Maximum latency across all tracks — used to compute per-track compensation.
+    pub max_latency: u32,
+    /// Sample rate for converting samples to milliseconds in the UI.
+    pub sample_rate: u32,
+}
+
+/// Thread-safe handle to PDC information, readable from the UI thread.
+#[derive(Clone)]
+pub struct PdcInfo {
+    inner: Arc<RwLock<PdcState>>,
+}
+
+impl PdcInfo {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(PdcState::default())),
+        }
+    }
+
+    pub fn read(&self) -> parking_lot::RwLockReadGuard<'_, PdcState> {
+        self.inner.read()
+    }
+
+    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, PdcState> {
+        self.inner.write()
+    }
+}
+
+/// Simple ring-buffer delay line for PDC compensation.
+struct DelayBuffer {
+    buffer: Vec<f32>,
+    write_pos: usize,
+    delay: usize,
+}
+
+impl DelayBuffer {
+    fn new(max_delay: usize) -> Self {
+        Self {
+            buffer: vec![0.0; max_delay.max(1)],
+            write_pos: 0,
+            delay: 0,
+        }
+    }
+
+    /// Set the current delay in samples. If the delay changes, the buffer is
+    /// resized (and cleared) to avoid stale data.
+    fn set_delay(&mut self, delay: usize) {
+        if delay != self.delay || delay > self.buffer.len() {
+            let capacity = delay.max(1);
+            if capacity != self.buffer.len() {
+                self.buffer = vec![0.0; capacity];
+                self.write_pos = 0;
+            }
+            self.delay = delay;
+        }
+    }
+
+    /// Process an entire block in-place: delay it by `self.delay` samples.
+    fn process(&mut self, samples: &mut [f32]) {
+        if self.delay == 0 {
+            return;
+        }
+        for s in samples.iter_mut() {
+            let read_pos = (self.write_pos + self.buffer.len() - self.delay) % self.buffer.len();
+            let delayed = self.buffer[read_pos];
+            self.buffer[self.write_pos] = *s;
+            *s = delayed;
+            self.write_pos = (self.write_pos + 1) % self.buffer.len();
+        }
+    }
+}
 
 pub struct Mixer {
     sample_rate: u32,
@@ -16,6 +95,10 @@ pub struct Mixer {
     vst_instances: HashMap<Uuid, Vst3Plugin>,
     /// Dedicated effect processor for the master bus effects chain.
     master_processor: EffectProcessor,
+    /// Per-track delay buffers for PDC compensation, keyed by track ID.
+    pdc_delays: HashMap<Uuid, DelayBuffer>,
+    /// Shared PDC information for the UI.
+    pub pdc_info: PdcInfo,
 }
 
 impl Mixer {
@@ -26,6 +109,8 @@ impl Mixer {
             processors: HashMap::new(),
             vst_instances: HashMap::new(),
             master_processor: EffectProcessor::new(sample_rate),
+            pdc_delays: HashMap::new(),
+            pdc_info: PdcInfo::new(),
         }
     }
 
@@ -59,6 +144,55 @@ impl Mixer {
         }
     }
 
+    /// Compute the total VST3 plugin latency for a track's effect chain.
+    fn track_vst3_latency(&self, track: &jamhub_model::Track) -> u32 {
+        let mut total: u32 = 0;
+        for slot in &track.effects {
+            if !slot.enabled {
+                continue;
+            }
+            if let jamhub_model::TrackEffect::Vst3Plugin { .. } = &slot.effect {
+                if let Some(vst) = self.vst_instances.get(&slot.id) {
+                    total = total.saturating_add(vst.latency_samples);
+                }
+            }
+        }
+        total
+    }
+
+    /// Recalculate PDC delay values for all tracks and update shared state.
+    fn update_pdc(&mut self, project: &Project) {
+        let mut track_latency: HashMap<Uuid, u32> = HashMap::new();
+        let mut max_latency: u32 = 0;
+
+        for track in &project.tracks {
+            let lat = self.track_vst3_latency(track);
+            if lat > 0 {
+                track_latency.insert(track.id, lat);
+            }
+            if lat > max_latency {
+                max_latency = lat;
+            }
+        }
+
+        // Update per-track delay buffers
+        for track in &project.tracks {
+            let lat = track_latency.get(&track.id).copied().unwrap_or(0);
+            let compensation = (max_latency - lat) as usize;
+
+            let delay_buf = self.pdc_delays.entry(track.id).or_insert_with(|| {
+                DelayBuffer::new(compensation.max(1))
+            });
+            delay_buf.set_delay(compensation);
+        }
+
+        // Write shared state for UI
+        let mut pdc = self.pdc_info.write();
+        pdc.track_latency = track_latency;
+        pdc.max_latency = max_latency;
+        pdc.sample_rate = self.sample_rate;
+    }
+
     pub fn render_block(
         &mut self,
         project: &Project,
@@ -68,6 +202,9 @@ impl Mixer {
     ) -> Vec<f32> {
         let num_samples = block_size * self.channels as usize;
         let mut output = vec![0.0f32; num_samples];
+
+        // Recalculate PDC compensation values
+        self.update_pdc(project);
 
         let any_solo = project.tracks.iter().any(|t| t.solo);
 
@@ -173,6 +310,11 @@ impl Mixer {
                         }
                     }
                 }
+            }
+
+            // Apply PDC delay compensation (aligns tracks with lower latency)
+            if let Some(delay_buf) = self.pdc_delays.get_mut(&track.id) {
+                delay_buf.process(&mut track_mono);
             }
 
             // Read automation at current position
@@ -318,6 +460,11 @@ impl Mixer {
                         }
                     }
                 }
+            }
+
+            // Apply PDC delay compensation for bus tracks
+            if let Some(delay_buf) = self.pdc_delays.get_mut(&track.id) {
+                delay_buf.process(&mut track_mono);
             }
 
             // Bus volume and pan

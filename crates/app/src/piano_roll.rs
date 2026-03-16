@@ -1336,6 +1336,7 @@ fn find_or_create_midi_clip(app: &mut DawApp, track_idx: usize) -> Option<usize>
         loop_count: 1,
         gain_db: 0.0,
         take_index: 0,
+        content_offset: 0,
     };
     app.project.tracks[track_idx].clips.push(clip);
     Some(app.project.tracks[track_idx].clips.len() - 1)

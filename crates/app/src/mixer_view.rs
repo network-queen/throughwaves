@@ -1,7 +1,8 @@
 use eframe::egui;
-use jamhub_model::TrackKind;
+use jamhub_model::{MidiMappingTarget, TrackKind};
 
 use crate::DawApp;
+use crate::midi_mapping;
 
 const CHANNEL_WIDTH: f32 = 74.0;
 const METER_HEIGHT: f32 = 120.0;
@@ -64,6 +65,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
             let selected_track = app.selected_track;
             let levels_ref = app.levels().cloned();
+            let pdc_snapshot = app.pdc_info().map(|p| p.read().clone());
+            let mut midi_learn_requests: Vec<MidiMappingTarget> = Vec::new();
             for (i, track) in app.project.tracks.iter_mut().enumerate() {
                 ui.push_id(i, |ui| {
                     let color =
@@ -234,6 +237,23 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     );
                                 }
 
+
+                                // PDC latency indicator
+                                if let Some(ref pdc_state) = pdc_snapshot {
+                                    if let Some(&lat) = pdc_state.track_latency.get(&track.id) {
+                                        if lat > 0 {
+                                            let ms = lat as f64 / pdc_state.sample_rate.max(1) as f64 * 1000.0;
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "PDC: {} samples ({:.1}ms)", lat, ms
+                                                ))
+                                                .size(7.0)
+                                                .color(egui::Color32::from_rgb(120, 180, 220)),
+                                            );
+                                        }
+                                    }
+                                }
+
                                 // Sidechain selector (if track has compressor)
                                 {
                                     let has_compressor = track.effects.iter().any(|slot| {
@@ -307,17 +327,22 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     ui.spacing_mut().item_spacing.x = 2.0;
 
                                     // Volume fader
-                                    if ui
+                                    let vol_resp = ui
                                         .add(
                                             egui::Slider::new(&mut track.volume, 0.0..=1.5)
                                                 .vertical()
                                                 .show_value(false),
                                         )
-                                        .on_hover_text("Track volume fader")
-                                        .changed()
-                                    {
+                                        .on_hover_text("Track volume fader — right-click to MIDI learn");
+                                    if vol_resp.changed() {
                                         needs_sync = true;
                                     }
+                                    vol_resp.context_menu(|ui| {
+                                        if ui.button("MIDI Learn").clicked() {
+                                            midi_learn_requests.push(MidiMappingTarget::TrackVolume(i));
+                                            ui.close_menu();
+                                        }
+                                    });
 
                                     // Stereo level meter with peak hold
                                     draw_stereo_meter(
@@ -378,18 +403,23 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     ui.painter().circle_filled(center, 2.5, egui::Color32::from_rgb(180, 178, 174));
 
                                     // DragValue next to the knob
-                                    if ui
+                                    let pan_resp = ui
                                         .add(
                                             egui::DragValue::new(&mut track.pan)
                                                 .range(-1.0..=1.0)
                                                 .speed(0.01)
                                                 .fixed_decimals(2),
                                         )
-                                        .on_hover_text("Pan position (L/R)")
-                                        .changed()
-                                    {
+                                        .on_hover_text("Pan position — right-click to MIDI learn");
+                                    if pan_resp.changed() {
                                         needs_sync = true;
                                     }
+                                    pan_resp.context_menu(|ui| {
+                                        if ui.button("MIDI Learn").clicked() {
+                                            midi_learn_requests.push(MidiMappingTarget::TrackPan(i));
+                                            ui.close_menu();
+                                        }
+                                    });
                                 });
 
                                 ui.add_space(2.0);
@@ -601,6 +631,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 });
             }
 
+            // Process deferred MIDI learn requests from the track loop
+            for target in midi_learn_requests {
+                app.midi_learn_state = Some(midi_mapping::MidiLearnState {
+                    target,
+                });
+                app.set_status("MIDI Learn: move a knob/slider on your controller...");
+            }
+
             // ============================================================
             // Master channel — wider strip with LUFS metering & FX chain
             // ============================================================
@@ -714,18 +752,22 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                             // Volume fader
                             let mut vol = app.master_volume;
-                            if ui
+                            let master_resp = ui
                                 .add(
                                     egui::Slider::new(&mut vol, 0.0..=1.5)
                                         .vertical()
                                         .show_value(false),
                                 )
-                                .on_hover_text("Master volume fader")
-                                .changed()
-                            {
+                                .on_hover_text("Master volume — right-click to MIDI learn");
+                            if master_resp.changed() {
                                 app.master_volume = vol;
                                 app.send_command(jamhub_engine::EngineCommand::SetMasterVolume(vol));
                             }
+                            midi_mapping::midi_learn_context_menu(
+                                app,
+                                &master_resp,
+                                MidiMappingTarget::MasterVolume,
+                            );
 
                             // Stereo peak meter
                             if let Some(levels) = &levels_ref {
