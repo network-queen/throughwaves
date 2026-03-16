@@ -256,6 +256,8 @@ pub struct DawApp {
     pub selection_start: Option<u64>,
     pub selection_end: Option<u64>,
     pub selecting: bool,
+    /// Which selection edge is being dragged: 0 = none, 1 = left, 2 = right
+    pub dragging_selection_edge: u8,
     // Automation editing
     pub show_automation: bool,
     pub automation_param: jamhub_model::AutomationParam,
@@ -889,6 +891,7 @@ impl DawApp {
             selection_start: None,
             selection_end: None,
             selecting: false,
+            dragging_selection_edge: 0,
             show_automation: false,
             automation_param: jamhub_model::AutomationParam::Volume,
             trimming_clip: None,

@@ -1515,13 +1515,33 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.rubber_band_origin = Some(pos);
                         app.rubber_band_active = true;
                     } else {
-                        // Normal drag on empty area: time selection range
-                        let x_offset = pos.x - rect.min.x + app.scroll_x;
-                        let sample =
-                            (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
-                        app.selection_start = Some(app.snap_position(sample));
-                        app.selection_end = app.selection_start;
-                        app.selecting = true;
+                        // Check if dragging near a selection edge (Reaper-style resize)
+                        // Use a generous hit zone (12px) so it's easy to grab
+                        let edge_zone = 7.0;
+                        let mut started_edge_drag = false;
+                        if let (Some(sel_s), Some(sel_e)) = (app.selection_start, app.selection_end) {
+                            let s1 = sel_s.min(sel_e);
+                            let s2 = sel_s.max(sel_e);
+                            let sx1 = rect.min.x + (s1 as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+                            let sx2 = rect.min.x + (s2 as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+                            // Check left edge first, then right
+                            if (pos.x - sx1).abs() < edge_zone && pos.y >= rect.min.y && pos.y <= rect.max.y {
+                                app.dragging_selection_edge = 1;
+                                started_edge_drag = true;
+                            } else if (pos.x - sx2).abs() < edge_zone && pos.y >= rect.min.y && pos.y <= rect.max.y {
+                                app.dragging_selection_edge = 2;
+                                started_edge_drag = true;
+                            }
+                        }
+                        if !started_edge_drag {
+                            // Normal drag on empty area: start new time selection
+                            let x_offset = pos.x - rect.min.x + app.scroll_x;
+                            let sample =
+                                (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
+                            app.selection_start = Some(app.snap_position(sample));
+                            app.selection_end = app.selection_start;
+                            app.selecting = true;
+                        }
                     }
                 }
             }
@@ -1701,7 +1721,23 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                 }
             }
-            // Handle selection range dragging
+            // Handle selection edge dragging (resize selection)
+            else if app.dragging_selection_edge > 0 {
+                if let Some(pos) = response.interact_pointer_pos {
+                    let x_offset = pos.x - rect.min.x + app.scroll_x;
+                    let sample = (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
+                    let snapped = app.snap_position(sample);
+                    if app.dragging_selection_edge == 1 {
+                        // Dragging left edge
+                        app.selection_start = Some(snapped);
+                    } else {
+                        // Dragging right edge
+                        app.selection_end = Some(snapped);
+                    }
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                }
+            }
+            // Handle selection range dragging (creating new selection)
             else if app.selecting {
                 if let Some(pos) = response.interact_pointer_pos {
                     let x_offset = pos.x - rect.min.x + app.scroll_x;
@@ -1863,6 +1899,24 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             if app.slip_editing.is_some() {
                 app.slip_editing = None;
                 app.sync_project();
+            }
+            if app.dragging_selection_edge > 0 {
+                app.dragging_selection_edge = 0;
+                // Normalize and update loop
+                if let (Some(s), Some(e)) = (app.selection_start, app.selection_end) {
+                    let s1 = s.min(e);
+                    let s2 = s.max(e);
+                    app.selection_start = Some(s1);
+                    app.selection_end = Some(s2);
+                    if s2 > s1 + 100 {
+                        app.loop_start = s1;
+                        app.loop_end = s2;
+                        app.loop_enabled = true;
+                        app.send_command(jamhub_engine::EngineCommand::SetLoop {
+                            enabled: true, start: s1, end: s2,
+                        });
+                    }
+                }
             }
             if app.rubber_band_active {
                 app.rubber_band_active = false;
@@ -2679,22 +2733,49 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 painter.rect_filled(
                     sel_rect,
                     0.0,
-                    egui::Color32::from_rgba_premultiplied(80, 130, 255, 18),
+                    egui::Color32::from_rgba_premultiplied(80, 130, 255, 8),
                 );
             }
 
-            // Selection edges
+            // Selection edges — thicker lines that serve as drag handles
             let edge_color = if app.punch_recording {
                 egui::Color32::from_rgb(220, 70, 70)
             } else {
                 egui::Color32::from_rgb(100, 150, 255)
             };
-            for sx in [sx1, sx2] {
-                if sx >= rect.min.x && sx <= rect.max.x {
+            let hover_pos = ui.ctx().pointer_hover_pos();
+            for (idx, sx) in [sx1, sx2].iter().enumerate() {
+                if *sx >= rect.min.x && *sx <= rect.max.x {
+                    // Check if mouse is near this edge (for drag handle highlight)
+                    let near_edge = hover_pos.map_or(false, |p| {
+                        (p.x - sx).abs() < 7.0 && p.y >= rect.min.y && p.y <= rect.max.y
+                    });
+                    let dragging_this = app.dragging_selection_edge == (idx as u8 + 1);
+                    let thickness = if near_edge || dragging_this { 3.0 } else { 1.0 };
+                    let color = if near_edge || dragging_this {
+                        egui::Color32::from_rgb(180, 210, 255)
+                    } else {
+                        edge_color
+                    };
                     painter.line_segment(
-                        [egui::pos2(sx, rect.min.y), egui::pos2(sx, rect.max.y)],
-                        egui::Stroke::new(1.0, edge_color),
+                        [egui::pos2(*sx, rect.min.y), egui::pos2(*sx, rect.max.y)],
+                        egui::Stroke::new(thickness, color),
                     );
+                    // Draw small triangular handle at top of edge
+                    if near_edge || dragging_this {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                        let tri_size = 6.0;
+                        let tri_y = rect.min.y;
+                        painter.add(egui::Shape::convex_polygon(
+                            vec![
+                                egui::pos2(*sx, tri_y),
+                                egui::pos2(sx - tri_size, tri_y + tri_size),
+                                egui::pos2(sx + tri_size, tri_y + tri_size),
+                            ],
+                            color,
+                            egui::Stroke::NONE,
+                        ));
+                    }
                 }
             }
         }
