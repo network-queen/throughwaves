@@ -712,7 +712,6 @@ impl ProjectTemplate {
         match self {
             ProjectTemplate::Empty => {
                 project.add_track("Track 1", TrackKind::Audio);
-                project.add_track("Track 2", TrackKind::Audio);
             }
             ProjectTemplate::SingerSongwriter => {
                 project.add_track("Vocals", TrackKind::Audio);
@@ -848,7 +847,6 @@ impl DawApp {
         let mut project = Project::default();
         project.created_at = chrono::Local::now().to_rfc3339();
         project.add_track("Track 1", TrackKind::Audio);
-        project.add_track("Track 2", TrackKind::Audio);
 
         let sample_rate = engine.as_ref()
             .map(|e| e.state.read().sample_rate)
