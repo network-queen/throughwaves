@@ -152,6 +152,8 @@ impl Project {
             synth_release: default_synth_release(),
             synth_cutoff: default_synth_cutoff(),
             instrument_plugin: None,
+            phase_inverted: false,
+            mono: false,
         });
         id
     }
@@ -234,6 +236,12 @@ pub struct Track {
     /// When set, MIDI notes are routed to this plugin instead of the built-in synth.
     #[serde(default)]
     pub instrument_plugin: Option<EffectSlot>,
+    /// Phase invert: when true, all audio samples are multiplied by -1.0
+    #[serde(default)]
+    pub phase_inverted: bool,
+    /// Mono summing: when true, L+R channels are summed before processing
+    #[serde(default)]
+    pub mono: bool,
 }
 
 /// A send routes audio from this track to another track at a given level.

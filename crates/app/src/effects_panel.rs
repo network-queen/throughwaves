@@ -418,6 +418,10 @@ struct Vst3ParamCache {
 thread_local! {
     static VST3_PARAM_CACHES: std::cell::RefCell<std::collections::HashMap<uuid::Uuid, Vst3ParamCache>>
         = std::cell::RefCell::new(std::collections::HashMap::new());
+
+    /// Per-slot preset name input state for the "Save Preset" dialog.
+    static VST3_PRESET_NAME_INPUT: std::cell::RefCell<std::collections::HashMap<uuid::Uuid, String>>
+        = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// Access the VST3 parameter caches safely (UI thread only).
@@ -497,12 +501,125 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
                 }
             }
 
+            let plugin_name_for_presets = name.clone();
             egui::Window::new(format!("{name}##{slot_id}"))
                 .title_bar(true)
                 .open(&mut is_open)
                 .default_width(300.0)
                 .resizable(true)
                 .show(ctx, |ui| {
+                    // --- Preset Save/Load bar ---
+                    ui.horizontal(|ui| {
+                        // Save Preset button
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new("Save Preset")
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(140, 180, 140)),
+                        )).on_hover_text("Save current parameters as a preset").clicked() {
+                            VST3_PRESET_NAME_INPUT.with(|r| {
+                                r.borrow_mut().insert(slot_id, String::new());
+                            });
+                        }
+
+                        // Load Preset dropdown
+                        let presets = crate::templates::load_plugin_presets(&plugin_name_for_presets);
+                        ui.menu_button(
+                            egui::RichText::new("Load Preset")
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(140, 160, 200)),
+                            |ui| {
+                                if presets.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new("No saved presets")
+                                            .size(10.0)
+                                            .color(egui::Color32::from_rgb(100, 100, 110)),
+                                    );
+                                } else {
+                                    let mut del_name: Option<String> = None;
+                                    for preset in &presets {
+                                        ui.horizontal(|ui| {
+                                            if ui.button(&preset.name).clicked() {
+                                                // Apply preset params to the cache
+                                                with_param_caches(|caches| {
+                                                    if let Some(cache) = caches.get_mut(&slot_id) {
+                                                        for (id, _pname, value) in &mut cache.params {
+                                                            if let Some(&pval) = preset.params.get(id) {
+                                                                *value = pval;
+                                                                cache.plugin.set_param_normalized(*id, pval);
+                                                            }
+                                                        }
+                                                    }
+                                                });
+                                                ui.close_menu();
+                                            }
+                                            if ui.add(
+                                                egui::Button::new(
+                                                    egui::RichText::new("x")
+                                                        .size(9.0)
+                                                        .color(egui::Color32::from_rgb(160, 60, 60)),
+                                                ).frame(false),
+                                            ).on_hover_text("Delete preset").clicked() {
+                                                del_name = Some(preset.name.clone());
+                                                ui.close_menu();
+                                            }
+                                        });
+                                    }
+                                    if let Some(dn) = del_name {
+                                        crate::templates::delete_plugin_preset(&plugin_name_for_presets, &dn);
+                                    }
+                                }
+                            },
+                        );
+                    });
+
+                    // --- Preset name input dialog (inline) ---
+                    let mut save_action: Option<String> = None;
+                    let mut cancel_save = false;
+                    VST3_PRESET_NAME_INPUT.with(|r| {
+                        let mut map = r.borrow_mut();
+                        if let Some(input_name) = map.get_mut(&slot_id) {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("Name:")
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(160, 160, 170)),
+                                );
+                                ui.text_edit_singleline(input_name);
+                                if ui.button("OK").clicked() && !input_name.trim().is_empty() {
+                                    save_action = Some(input_name.trim().to_string());
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    cancel_save = true;
+                                }
+                            });
+                        }
+                    });
+                    if let Some(preset_name) = save_action {
+                        // Collect params from cache and save
+                        with_param_caches(|caches| {
+                            if let Some(cache) = caches.get(&slot_id) {
+                                let mut params = std::collections::HashMap::new();
+                                for (id, _pname, value) in &cache.params {
+                                    params.insert(*id, *value);
+                                }
+                                let vst_path_str = vst_path.as_ref().map(|p| p.as_str()).unwrap_or("");
+                                let preset = crate::templates::PluginPreset {
+                                    name: preset_name,
+                                    plugin_path: vst_path_str.to_string(),
+                                    params,
+                                };
+                                let _ = crate::templates::save_plugin_preset(&plugin_name_for_presets, &preset);
+                            }
+                        });
+                        VST3_PRESET_NAME_INPUT.with(|r| { r.borrow_mut().remove(&slot_id); });
+                    }
+                    if cancel_save {
+                        VST3_PRESET_NAME_INPUT.with(|r| { r.borrow_mut().remove(&slot_id); });
+                    }
+
+                    ui.separator();
+
+                    // --- Parameter sliders ---
                     with_param_caches(|caches| {
                     if let Some(cache) = caches.get_mut(&slot_id) {
                         if cache.params.is_empty() {

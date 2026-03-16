@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use rayon::prelude::*;
 use uuid::Uuid;
 
 use jamhub_model::{ClipBufferId, Project};
@@ -280,35 +281,53 @@ impl Mixer {
         // this track's audio as their detection signal.
         let mut pre_effect_audio: HashMap<Uuid, Vec<f32>> = HashMap::new();
 
-        for track in &project.tracks {
-            if track.muted {
-                continue;
-            }
-            if any_solo && !track.solo {
-                continue;
-            }
+        let block_end = position_samples + block_size as u64;
 
-            // Skip tracks where no clips overlap the current block
-            let block_end = position_samples + block_size as u64;
+        // Collect audio tracks eligible for parallel rendering
+        let audio_tracks: Vec<&jamhub_model::Track> = project.tracks.iter().filter(|track| {
+            if track.muted { return false; }
+            if any_solo && !track.solo { return false; }
+            if track.kind == jamhub_model::TrackKind::Midi { return false; }
+            track.clips.iter().any(|clip| {
+                if clip.muted { return false; }
+                let clip_end = clip.start_sample + clip.visual_duration_samples();
+                clip.start_sample < block_end && clip_end > position_samples
+            })
+        }).collect();
+
+        // Parallel render: each audio track's clips are rendered independently
+        // using rayon, then results are collected back. We call the free function
+        // render_track_clips_impl directly to avoid capturing &self (Mixer is !Sync
+        // due to raw pointers in VST3 plugin fields).
+        let parallel_results: Vec<(Uuid, Vec<f32>)> = audio_tracks
+            .par_iter()
+            .filter_map(|track| {
+                let track_mono = render_track_clips_impl(track, position_samples, block_size, audio_buffers);
+                if track_mono.iter().any(|&s| s != 0.0) {
+                    Some((track.id, track_mono))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (id, buf) in parallel_results {
+            pre_effect_audio.insert(id, buf);
+        }
+
+        // MIDI tracks require &mut self (synths/VSTi), so render sequentially
+        for track in &project.tracks {
+            if track.muted { continue; }
+            if any_solo && !track.solo { continue; }
+            if track.kind != jamhub_model::TrackKind::Midi { continue; }
             let has_overlapping_clip = track.clips.iter().any(|clip| {
                 if clip.muted { return false; }
                 let clip_end = clip.start_sample + clip.visual_duration_samples();
                 clip.start_sample < block_end && clip_end > position_samples
             });
-            if !has_overlapping_clip {
-                continue;
-            }
+            if !has_overlapping_clip { continue; }
 
-            // Render MIDI tracks through the built-in synth
-            if track.kind == jamhub_model::TrackKind::Midi {
-                let track_mono = self.render_midi_track(track, position_samples, block_size, &project.tempo);
-                if track_mono.iter().any(|&s| s != 0.0) {
-                    pre_effect_audio.insert(track.id, track_mono);
-                }
-                continue;
-            }
-
-            let track_mono = self.render_track_clips(track, position_samples, block_size, audio_buffers);
+            let track_mono = self.render_midi_track(track, position_samples, block_size, &project.tempo);
             if track_mono.iter().any(|&s| s != 0.0) {
                 pre_effect_audio.insert(track.id, track_mono);
             }
@@ -351,6 +370,17 @@ impl Mixer {
             let has_audio = track_mono.iter().any(|&s| s != 0.0);
             if !has_audio {
                 continue;
+            }
+
+            // Mono summing: when enabled, average L+R channels before processing.
+            // In our current mono pipeline this is a no-op, but the flag is respected
+            // for future stereo expansion.
+
+            // Phase invert: multiply all samples by -1.0
+            if track.phase_inverted {
+                for s in track_mono.iter_mut() {
+                    *s = -*s;
+                }
             }
 
             // Frozen tracks: skip all effect processing (effects already baked into frozen audio)
@@ -687,15 +717,17 @@ impl Mixer {
 
         track_mono
     }
+}
 
-    /// Render the raw clip audio for a track (pre-effects) into a mono buffer.
-    fn render_track_clips(
-        &self,
-        track: &jamhub_model::Track,
-        position_samples: u64,
-        block_size: usize,
-        audio_buffers: &HashMap<ClipBufferId, Vec<f32>>,
-    ) -> Vec<f32> {
+/// Render the raw clip audio for a track (pre-effects) into a mono buffer.
+/// Free function so it can be called from rayon parallel iterators without
+/// requiring Mixer: Sync.
+fn render_track_clips_impl(
+    track: &jamhub_model::Track,
+    position_samples: u64,
+    block_size: usize,
+    audio_buffers: &HashMap<ClipBufferId, Vec<f32>>,
+) -> Vec<f32> {
         let mut track_mono = vec![0.0f32; block_size];
 
         let mut active_clips: Vec<usize> = Vec::new();
@@ -750,7 +782,7 @@ impl Mixer {
                 if let Some(buf) = audio_buffers.get(buffer_id) {
                     // If preserve_pitch is enabled and rate != 1.0, use OLA time-stretching
                     if clip.preserve_pitch && (rate - 1.0).abs() > 0.001 {
-                        self.render_clip_ola(
+                        render_clip_ola_impl(
                             clip, buf, rate, visual_duration, clip_visual_end,
                             position_samples, block_size,
                             crossfade_out_start, crossfade_out_len,
@@ -847,16 +879,14 @@ impl Mixer {
             }
         }
 
-        track_mono
-    }
+    track_mono
+}
 
-    /// Render a clip using Overlap-Add (OLA) time-stretching to preserve pitch.
-    /// Splits audio into overlapping windows, positions them at the output rate,
-    /// and crossfades between them.
-    #[allow(clippy::too_many_arguments)]
-    fn render_clip_ola(
-        &self,
-        clip: &jamhub_model::Clip,
+/// Render a clip using Overlap-Add (OLA) time-stretching to preserve pitch.
+/// Free function (no &self) so it can be called from parallel contexts.
+#[allow(clippy::too_many_arguments)]
+fn render_clip_ola_impl(
+    clip: &jamhub_model::Clip,
         buf: &[f32],
         rate: f32,
         _visual_duration: u64,
@@ -977,7 +1007,6 @@ impl Mixer {
 
             output[i] += sample_val * gain;
         }
-    }
 }
 
 /// Get interpolated automation value at a given sample position.

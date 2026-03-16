@@ -69,6 +69,74 @@ pub fn save_fx_presets(presets: &[FxPreset]) {
     }
 }
 
+// ── VST3 Plugin Presets ──────────────────────────────────────────────
+
+/// A saved VST3 plugin parameter preset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginPreset {
+    pub name: String,
+    pub plugin_path: String,
+    pub params: std::collections::HashMap<u32, f64>,
+}
+
+/// Directory for a specific plugin's presets: ~/.config/jamhub/plugin_presets/{plugin_name}/
+fn plugin_presets_dir(plugin_name: &str) -> std::path::PathBuf {
+    // Sanitize plugin name for filesystem
+    let safe_name: String = plugin_name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    crate::config_dir().join("plugin_presets").join(safe_name)
+}
+
+/// Load all presets for a given plugin.
+pub fn load_plugin_presets(plugin_name: &str) -> Vec<PluginPreset> {
+    let dir = plugin_presets_dir(plugin_name);
+    if !dir.exists() {
+        return Vec::new();
+    }
+    let mut presets = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                if let Ok(data) = std::fs::read_to_string(&path) {
+                    if let Ok(preset) = serde_json::from_str::<PluginPreset>(&data) {
+                        presets.push(preset);
+                    }
+                }
+            }
+        }
+    }
+    presets.sort_by(|a, b| a.name.cmp(&b.name));
+    presets
+}
+
+/// Save a plugin preset to disk.
+pub fn save_plugin_preset(plugin_name: &str, preset: &PluginPreset) -> Result<(), String> {
+    let dir = plugin_presets_dir(plugin_name);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create preset dir: {e}"))?;
+    let safe_preset_name: String = preset.name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+        .collect();
+    let file = dir.join(format!("{safe_preset_name}.json"));
+    let json = serde_json::to_string_pretty(preset).map_err(|e| format!("JSON error: {e}"))?;
+    std::fs::write(file, json).map_err(|e| format!("Write error: {e}"))?;
+    Ok(())
+}
+
+/// Delete a plugin preset from disk.
+pub fn delete_plugin_preset(plugin_name: &str, preset_name: &str) {
+    let dir = plugin_presets_dir(plugin_name);
+    let safe_preset_name: String = preset_name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+        .collect();
+    let file = dir.join(format!("{safe_preset_name}.json"));
+    let _ = std::fs::remove_file(file);
+}
+
 /// Built-in default FX chain presets that are always available.
 pub fn default_fx_presets() -> Vec<FxPreset> {
     vec![

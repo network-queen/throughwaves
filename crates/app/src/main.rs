@@ -2797,6 +2797,8 @@ impl DawApp {
                 synth_release: 200.0,
                 synth_cutoff: 8000.0,
                 instrument_plugin: None,
+                phase_inverted: false,
+                mono: false,
             };
             self.project.tracks.push(track);
             self.selected_track = Some(self.project.tracks.len() - 1);

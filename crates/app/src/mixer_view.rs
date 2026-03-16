@@ -559,6 +559,67 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     }
                                 });
 
+                                // Phase invert + Mono/Stereo toggle
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 3.0;
+                                    let btn_size = egui::vec2(22.0, 22.0);
+
+                                    // Phase invert button
+                                    let phase_bg = if track.phase_inverted {
+                                        egui::Color32::from_rgb(180, 60, 60)
+                                    } else {
+                                        egui::Color32::from_rgb(36, 37, 44)
+                                    };
+                                    let phase_tc = if track.phase_inverted {
+                                        egui::Color32::WHITE
+                                    } else {
+                                        egui::Color32::from_rgb(145, 142, 138)
+                                    };
+                                    if ui
+                                        .add_sized(
+                                            btn_size,
+                                            egui::Button::new(
+                                                egui::RichText::new("\u{00D8}").size(9.0).color(phase_tc),
+                                            )
+                                            .fill(phase_bg)
+                                            .corner_radius(11.0),
+                                        )
+                                        .on_hover_text("Phase invert — flip signal polarity")
+                                        .clicked()
+                                    {
+                                        track.phase_inverted = !track.phase_inverted;
+                                        needs_sync = true;
+                                    }
+
+                                    // Mono/Stereo toggle button
+                                    let mono_bg = if track.mono {
+                                        egui::Color32::from_rgb(60, 130, 180)
+                                    } else {
+                                        egui::Color32::from_rgb(36, 37, 44)
+                                    };
+                                    let mono_tc = if track.mono {
+                                        egui::Color32::WHITE
+                                    } else {
+                                        egui::Color32::from_rgb(145, 142, 138)
+                                    };
+                                    let mono_label = if track.mono { "M" } else { "S" };
+                                    if ui
+                                        .add_sized(
+                                            btn_size,
+                                            egui::Button::new(
+                                                egui::RichText::new(mono_label).size(9.0).color(mono_tc),
+                                            )
+                                            .fill(mono_bg)
+                                            .corner_radius(11.0),
+                                        )
+                                        .on_hover_text("Toggle Mono/Stereo — mono sums L+R channels")
+                                        .clicked()
+                                    {
+                                        track.mono = !track.mono;
+                                        needs_sync = true;
+                                    }
+                                });
+
                                 // ---- Sends section ----
                                 {
                                     ui.separator();
