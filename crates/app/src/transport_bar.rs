@@ -18,6 +18,19 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         let small_btn = egui::vec2(28.0, 28.0);
         let big_btn = egui::vec2(34.0, 34.0);
 
+        // RTZ — return to zero
+        let rtz_rect = ui.allocate_space(small_btn).1;
+        let rtz_resp = ui.interact(rtz_rect, ui.id().with("rtz"), egui::Sense::click());
+        ui.painter().circle_filled(rtz_rect.center(), 13.0, egui::Color32::from_rgb(36, 37, 44));
+        if rtz_resp.hovered() {
+            ui.painter().circle_stroke(rtz_rect.center(), 13.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(235, 180, 60)));
+        }
+        ui.painter().text(rtz_rect.center(), egui::Align2::CENTER_CENTER, "RTZ", egui::FontId::proportional(9.0), egui::Color32::from_rgb(200, 198, 194));
+        if rtz_resp.on_hover_text("Return to zero [Home]").clicked() {
+            app.send_command(EngineCommand::SetPosition(0));
+            app.scroll_x = 0.0;
+        }
+
         // Rewind — smaller circle
         let rewind_rect = ui.allocate_space(small_btn).1;
         let rewind_resp = ui.interact(rewind_rect, ui.id().with("rewind"), egui::Sense::click());

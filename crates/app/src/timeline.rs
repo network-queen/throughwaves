@@ -1279,7 +1279,24 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 let fade_handle_zone = 20.0; // pixels for fade handle hit area
                 let mut action_taken = false;
 
+                // Check for track separator drag (resize track height)
+                {
+                    let sep_zone = 4.0;
+                    for (i, track) in app.project.tracks.iter().enumerate() {
+                        if is_track_collapsed(app, i) {
+                            continue;
+                        }
+                        let sep_y = tracks_y_start + track_offsets[i] + track_height(track, app.track_height_zoom);
+                        if (pos.y - sep_y).abs() < sep_zone && pos.x >= rect.min.x && pos.x <= rect.max.x {
+                            app.dragging_separator = Some(i);
+                            action_taken = true;
+                            break;
+                        }
+                    }
+                }
+
                 // Check for fade handle drag first (top corners, highest priority)
+                if !action_taken {
                 // Pre-scan to find target (avoids borrow conflict with app.push_undo)
                 let mut fade_target: Option<(usize, usize, bool, u64)> = None; // (ti, ci, is_fade_in, orig_samples)
                 for &(ti, ci, _, cr) in &clip_rects {
@@ -1317,6 +1334,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         original_fade_samples: orig,
                     });
                     action_taken = true;
+                }
                 }
 
                 // Check for clip gain handle drag (Cmd/Ctrl+drag on gain line area)
@@ -1950,6 +1968,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 app.slip_editing = None;
                 app.sync_project();
             }
+            if app.dragging_separator.is_some() {
+                app.dragging_separator = None;
+            }
             if app.dragging_selection_edge > 0 {
                 app.dragging_selection_edge = 0;
                 // Normalize and update loop
@@ -2010,10 +2031,17 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     app.track_height_zoom = (app.track_height_zoom * (1.0 + scroll * 0.005)).clamp(0.5, 3.0);
                 }
             } else if i.modifiers.command {
-                // Cmd + scroll = horizontal time zoom
+                // Cmd + scroll = horizontal time zoom (anchored at mouse position)
                 let scroll = i.smooth_scroll_delta.y;
                 if scroll != 0.0 {
+                    let old_pps = PIXELS_PER_SECOND_BASE * app.zoom;
+                    let mouse_x = i.pointer.hover_pos().map_or(rect.center().x, |p| p.x);
+                    let mouse_time = (mouse_x - rect.min.x + app.scroll_x) / old_pps;
+
                     app.zoom = (app.zoom * (1.0 + scroll * 0.005)).clamp(0.1, 10.0);
+
+                    let new_pps = PIXELS_PER_SECOND_BASE * app.zoom;
+                    app.scroll_x = (mouse_time * new_pps - (mouse_x - rect.min.x)).max(0.0);
                 }
             } else {
                 let scroll_x = i.smooth_scroll_delta.x - i.smooth_scroll_delta.y;
@@ -2455,15 +2483,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     painter.rect_filled(bot_half, egui::CornerRadius { nw: 0, ne: 0, sw: 5, se: 5 }, grad_bottom);
                 }
 
-                // Waveform — lighter shade of track color
+                // Waveform — colored to match track
                 if let ClipSource::AudioBuffer { buffer_id } = &clip.source {
                     if let Some(peaks) = app.waveform_cache.get(buffer_id) {
                         let wc = if is_clip_muted {
                             egui::Color32::from_rgb(90, 90, 90)
                         } else {
-                            // Lighten the track color for waveform
-                            let lighten = |c: u8| -> u8 { ((c as u16 * 3 / 4) + 64).min(255) as u8 };
-                            egui::Color32::from_rgb(lighten(color.r()), lighten(color.g()), lighten(color.b()))
+                            // Use the track color directly — draw_waveform applies opacity levels
+                            egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2])
                         };
                         draw_waveform(painter, &peaks, cr, clip.duration_samples, wc, clip.content_offset, app.zoom, Some((rect.min.x, rect.max.x)));
                     }
@@ -2932,6 +2959,40 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 if near_interactive {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                 }
+
+                // Track separator hover — show vertical resize cursor near separator lines
+                if !near_interactive && app.dragging_separator.is_none() {
+                    let sep_zone = 4.0;
+                    for (i, track) in app.project.tracks.iter().enumerate() {
+                        if is_track_collapsed(app, i) {
+                            continue;
+                        }
+                        let sep_y = tracks_y_start + track_offsets[i] + track_height(track, app.track_height_zoom);
+                        if (hover_pos.y - sep_y).abs() < sep_zone && hover_pos.x >= rect.min.x && hover_pos.x <= rect.max.x {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Track separator drag — resize track height by dragging separator line
+        if app.dragging_separator.is_some() {
+            if response.dragged_by(egui::PointerButton::Primary) {
+                if let Some(pos) = response.interact_pointer_pos {
+                    if let Some(ti) = app.dragging_separator {
+                        if ti < app.project.tracks.len() {
+                            let track_top = tracks_y_start + track_offsets[ti];
+                            let new_height = (pos.y - track_top).clamp(30.0, 300.0);
+                            app.project.tracks[ti].custom_height = new_height / app.track_height_zoom;
+                        }
+                    }
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                }
+            }
+            if response.drag_stopped() {
+                app.dragging_separator = None;
             }
         }
 
@@ -3423,7 +3484,7 @@ fn draw_waveform(
             egui::pos2(clip_rect.min.x, center_y),
             egui::pos2(clip_rect.max.x, center_y),
         ],
-        egui::Stroke::new(0.5, color.gamma_multiply(0.15)),
+        egui::Stroke::new(0.5, color.gamma_multiply(0.20)),
     );
 
     if peak_top.len() >= 2 {
@@ -3455,7 +3516,7 @@ fn draw_waveform(
             peak_polygon.extend(bottom_rev);
             clipped.add(egui::Shape::convex_polygon(
                 peak_polygon,
-                color.gamma_multiply(0.3),
+                color.gamma_multiply(0.35),
                 egui::Stroke::NONE,
             ));
 

@@ -83,6 +83,84 @@ pub fn export_wav_with_options(
     export_with_options(path, project, audio_buffers, sample_rate, options)
 }
 
+/// Progress callback type for export operations: receives fraction 0.0..1.0.
+pub type ExportProgressFn<'a> = &'a mut dyn FnMut(f32);
+
+/// Render the project offline with progress reporting and write to the chosen format.
+pub fn export_with_progress(
+    path: &Path,
+    project: &Project,
+    audio_buffers: &HashMap<ClipBufferId, Vec<f32>>,
+    sample_rate: u32,
+    options: &ExportOptions,
+    progress: ExportProgressFn,
+) -> Result<(), String> {
+    let mut mixer = Mixer::new(sample_rate, options.channels);
+    let block_size: usize = 1024;
+
+    // Find the end of the last clip (only non-muted)
+    let end_sample = project
+        .tracks
+        .iter()
+        .flat_map(|t| t.clips.iter())
+        .filter(|c| !c.muted)
+        .map(|c| c.start_sample + c.duration_samples)
+        .max()
+        .unwrap_or(0);
+
+    if end_sample == 0 {
+        return Err("Nothing to export — no active clips in project".into());
+    }
+
+    let total_samples = end_sample + (sample_rate as f32 * options.tail_seconds) as u64;
+
+    // Render all audio with progress
+    let mut all_samples: Vec<f32> = Vec::new();
+    let mut position: u64 = 0;
+    while position < total_samples {
+        let block = mixer.render_block(project, position, block_size, audio_buffers);
+        all_samples.extend_from_slice(&block);
+        position += block_size as u64;
+
+        // Report progress during render phase (0% to 80%)
+        let frac = (position as f32 / total_samples as f32).min(1.0) * 0.8;
+        progress(frac);
+    }
+
+    // Normalize if requested
+    if options.normalize {
+        let peak = all_samples
+            .iter()
+            .map(|s| s.abs())
+            .fold(0.0f32, f32::max);
+        if peak > 0.001 {
+            let gain = 0.99 / peak;
+            for s in all_samples.iter_mut() {
+                *s *= gain;
+            }
+        }
+    }
+    progress(0.85);
+
+    // Resample if a different target sample rate is requested
+    let target_sr = if options.sample_rate > 0 && options.sample_rate != sample_rate {
+        let resampled = resample_linear(&all_samples, options.channels, sample_rate, options.sample_rate);
+        all_samples = resampled;
+        options.sample_rate
+    } else {
+        sample_rate
+    };
+    progress(0.90);
+
+    let result = match options.format {
+        ExportFormat::Wav => write_wav(path, &all_samples, target_sr, options),
+        ExportFormat::Flac => write_flac(path, &all_samples, target_sr, options),
+        ExportFormat::Aiff => write_aiff(path, &all_samples, target_sr, options),
+    };
+    progress(1.0);
+    result
+}
+
 /// Render the project offline and write to the chosen format.
 pub fn export_with_options(
     path: &Path,

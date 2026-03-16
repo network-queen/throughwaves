@@ -268,9 +268,12 @@ pub struct DawApp {
     pub dragging_fade: Option<FadeDragState>,
     // Clip gain drag state
     pub dragging_clip_gain: Option<ClipGainDragState>,
-    // Live recording waveform
-    live_rec_buffer_id: Option<uuid::Uuid>,
+    // Live recording waveform — one per armed track: (track_idx, live_buffer_id)
+    live_rec_buffer_ids: Vec<(usize, uuid::Uuid)>,
     live_rec_last_update: std::time::Instant,
+    // Recording input level (peak amplitude 0.0..1.0, updated during recording)
+    pub recording_input_level: f32,
+    pub recording_input_peak_db: f32,
     pub show_undo_history: bool,
     // Clipboard
     clipboard_clips: Vec<(jamhub_model::Clip, Option<Vec<f32>>)>,
@@ -348,6 +351,8 @@ pub struct DawApp {
     pub show_welcome: bool,
     /// Ripple editing mode — moving/deleting clips shifts subsequent clips
     pub ripple_mode: bool,
+    /// Playhead position when playback started (for return-to-start-on-stop)
+    pub play_start_position: u64,
     /// Project Info panel
     pub show_project_info: bool,
     pub project_info_name_buf: String,
@@ -404,6 +409,14 @@ pub struct DawApp {
     pub show_track_template_picker: bool,
     /// Track index for which the color palette popup is shown
     pub color_palette_track: Option<usize>,
+    /// Drag-and-drop state: info about files being hovered over the window from Finder
+    pub finder_drop_state: Option<FinderDropState>,
+    /// Whether layout has been loaded from disk on startup
+    pub layout_loaded: bool,
+    /// Track separator drag state: index of the track whose bottom edge is being dragged
+    pub dragging_separator: Option<usize>,
+    /// Timer for periodic layout persistence
+    pub last_layout_save: std::time::Instant,
 }
 
 /// State for slip-editing: shifting audio content within clip boundaries.
@@ -501,6 +514,16 @@ pub struct SpeedInputState {
     pub track_idx: usize,
     pub clip_idx: usize,
     pub input_buf: String,
+}
+
+/// State for files being dragged over the window from Finder
+pub struct FinderDropState {
+    /// Pointer position of the drag
+    pub pos: egui::Pos2,
+    /// File names being dragged
+    pub file_names: Vec<String>,
+    /// File paths being dragged
+    pub file_paths: Vec<PathBuf>,
 }
 
 #[derive(PartialEq)]
@@ -817,6 +840,54 @@ fn save_preferences(prefs: &UserPreferences) {
     }
 }
 
+/// Persisted panel layout state — saved to ~/.config/jamhub/layout.json
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LayoutState {
+    show_effects: bool,
+    show_piano_roll: bool,
+    show_automation: bool,
+    show_minimap: bool,
+    show_media_browser: bool,
+    show_spectrum: bool,
+    /// 0 = Arrange, 1 = Mixer, 2 = Session
+    view_mode: u8,
+    zoom: f32,
+    scroll_x: f32,
+}
+
+fn layout_path() -> PathBuf {
+    config_dir().join("layout.json")
+}
+
+fn load_layout() -> Option<LayoutState> {
+    let path = layout_path();
+    let data = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&data).ok()
+}
+
+fn save_layout(app: &DawApp) {
+    let state = LayoutState {
+        show_effects: app.show_effects,
+        show_piano_roll: app.show_piano_roll,
+        show_automation: app.show_automation,
+        show_minimap: app.show_minimap,
+        show_media_browser: app.media_browser.show,
+        show_spectrum: app.spectrum_analyzer.show,
+        view_mode: match app.view {
+            View::Arrange => 0,
+            View::Mixer => 1,
+            View::Session => 2,
+        },
+        zoom: app.zoom,
+        scroll_x: app.scroll_x,
+    };
+    let dir = config_dir();
+    let _ = fs::create_dir_all(&dir);
+    if let Ok(json) = serde_json::to_string_pretty(&state) {
+        let _ = fs::write(layout_path(), json);
+    }
+}
+
 /// Find autosave files to offer recovery on startup.
 fn find_autosave_recovery() -> Option<PathBuf> {
     let dir = autosave_dir();
@@ -856,7 +927,7 @@ impl DawApp {
             eng.send(EngineCommand::UpdateProject(project.clone()));
         }
 
-        Self {
+        let mut app = Self {
             project,
             engine_error: if engine.is_none() {
                 Some("Failed to initialize audio engine".into())
@@ -910,8 +981,10 @@ impl DawApp {
             trimming_clip: None,
             dragging_fade: None,
             dragging_clip_gain: None,
-            live_rec_buffer_id: None,
+            live_rec_buffer_ids: Vec::new(),
             live_rec_last_update: std::time::Instant::now(),
+            recording_input_level: 0.0,
+            recording_input_peak_db: -60.0,
             show_undo_history: false,
             clipboard_clips: Vec::new(),
             dirty: false,
@@ -964,6 +1037,7 @@ impl DawApp {
                 !prefs.dont_show_welcome && recent.is_empty()
             },
             ripple_mode: false,
+            play_start_position: 0,
             show_project_info: false,
             project_info_name_buf: String::new(),
             project_info_notes_buf: String::new(),
@@ -993,7 +1067,31 @@ impl DawApp {
             custom_color_input: None,
             show_track_template_picker: false,
             color_palette_track: None,
+            finder_drop_state: None,
+            layout_loaded: false,
+            dragging_separator: None,
+            last_layout_save: std::time::Instant::now(),
+        };
+
+        // Apply persisted layout
+        if let Some(layout) = load_layout() {
+            app.show_effects = layout.show_effects;
+            app.show_piano_roll = layout.show_piano_roll;
+            app.show_automation = layout.show_automation;
+            app.show_minimap = layout.show_minimap;
+            app.media_browser.show = layout.show_media_browser;
+            app.spectrum_analyzer.show = layout.show_spectrum;
+            app.view = match layout.view_mode {
+                1 => View::Mixer,
+                2 => View::Session,
+                _ => View::Arrange,
+            };
+            app.zoom = layout.zoom.clamp(0.1, 20.0);
+            app.scroll_x = layout.scroll_x.max(0.0);
+            app.layout_loaded = true;
         }
+
+        app
     }
 
     pub fn transport_state(&self) -> TransportState {
@@ -1143,22 +1241,91 @@ impl DawApp {
         }
     }
 
+    /// Import an audio file at a specific track and sample position.
+    /// If `track_idx` is None or out of range, a new track is created.
+    pub fn import_audio_file_at(&mut self, path: PathBuf, track_idx: Option<usize>, start_sample: u64) {
+        let target_track = match track_idx {
+            Some(idx) if idx < self.project.tracks.len() => idx,
+            _ => {
+                // Create a new track
+                let n = self.project.tracks.len() + 1;
+                self.project.add_track(&format!("Track {n}"), TrackKind::Audio);
+                self.project.tracks.len() - 1
+            }
+        };
+
+        match load_audio(&path) {
+            Ok(data) => {
+                self.push_undo("Import audio (drop)");
+
+                let buffer_id = Uuid::new_v4();
+                let file_name = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Audio".to_string());
+
+                let clip = Clip {
+                    id: Uuid::new_v4(),
+                    name: file_name.clone(),
+                    start_sample,
+                    duration_samples: data.duration_samples,
+                    source: ClipSource::AudioBuffer { buffer_id },
+                    muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
+                    fade_in_samples: 0,
+                    fade_out_samples: 0,
+                    color: None,
+                    playback_rate: 1.0,
+                    preserve_pitch: false,
+                    loop_count: 1,
+                    gain_db: 0.0,
+                    take_index: 0,
+                };
+
+                self.waveform_cache.insert(buffer_id, &data.samples);
+                self.audio_buffers.insert(buffer_id, data.samples.clone());
+
+                self.project.tracks[target_track].clips.push(clip);
+
+                self.send_command(EngineCommand::LoadAudioBuffer {
+                    id: buffer_id,
+                    samples: data.samples,
+                });
+                self.selected_track = Some(target_track);
+                self.sync_project();
+                self.set_status(&format!("Imported: {file_name}"));
+            }
+            Err(e) => {
+                self.set_status(&format!("Import failed: {e}"));
+            }
+        }
+    }
+
     pub fn toggle_recording(&mut self) {
         if self.is_recording {
             // === STOP RECORDING ===
             self.is_recording = false;
+            self.recording_input_level = 0.0;
+            self.recording_input_peak_db = -60.0;
+
+            // Collect armed track indices before mutating
+            let armed_tracks: Vec<usize> = self.project.tracks.iter().enumerate()
+                .filter(|(_, t)| t.armed)
+                .map(|(i, _)| i)
+                .collect();
 
             // If we were in count-in phase, just cancel without saving
             if self.count_in_beats_remaining.is_some() {
                 self.count_in_beats_remaining = None;
                 self.send_command(EngineCommand::Stop);
                 self.send_command(EngineCommand::SetMetronome(self.metronome_enabled));
-                let track_idx = self.selected_track.unwrap_or(0);
-                if track_idx < self.project.tracks.len() {
-                    self.project.tracks[track_idx].muted = false;
-                    self.project.tracks[track_idx].armed = false;
-                    self.sync_project();
+                for &ti in &armed_tracks {
+                    if ti < self.project.tracks.len() {
+                        self.project.tracks[ti].muted = false;
+                        self.project.tracks[ti].armed = false;
+                    }
                 }
+                self.live_rec_buffer_ids.clear();
+                self.sync_project();
                 self.set_status("Count-in cancelled");
                 return;
             }
@@ -1169,15 +1336,15 @@ impl DawApp {
             // 2. Stop the engine AFTER getting recording data
             self.send_command(EngineCommand::Stop);
 
-            // 3. Remove the live recording placeholder clip
-            let track_idx = self.selected_track.unwrap_or(0);
-            if let Some(live_id) = self.live_rec_buffer_id.take() {
-                if track_idx < self.project.tracks.len() {
-                    self.project.tracks[track_idx]
+            // 3. Remove the live recording placeholder clips from ALL armed tracks
+            let live_ids: Vec<(usize, uuid::Uuid)> = std::mem::take(&mut self.live_rec_buffer_ids);
+            for (ti, live_id) in &live_ids {
+                if *ti < self.project.tracks.len() {
+                    self.project.tracks[*ti]
                         .clips
                         .retain(|c| {
                             if let ClipSource::AudioBuffer { buffer_id } = &c.source {
-                                *buffer_id != live_id
+                                *buffer_id != *live_id
                             } else {
                                 true
                             }
@@ -1185,10 +1352,12 @@ impl DawApp {
                 }
             }
 
-            // Unmute the track we muted during recording, disarm it
-            if track_idx < self.project.tracks.len() {
-                self.project.tracks[track_idx].muted = false;
-                self.project.tracks[track_idx].armed = false;
+            // Unmute and disarm all armed tracks
+            for &ti in &armed_tracks {
+                if ti < self.project.tracks.len() {
+                    self.project.tracks[ti].muted = false;
+                    self.project.tracks[ti].armed = false;
+                }
             }
 
             if result.samples.is_empty() {
@@ -1197,7 +1366,8 @@ impl DawApp {
                 return;
             }
 
-            if track_idx >= self.project.tracks.len() {
+            if armed_tracks.is_empty() {
+                self.sync_project();
                 return;
             }
 
@@ -1221,9 +1391,6 @@ impl DawApp {
                     let punch_start = sel_s.min(sel_e);
                     let punch_end = sel_s.max(sel_e);
                     let punch_len = (punch_end - punch_start) as usize;
-                    // The recording started at pre-roll, but recording_start_pos
-                    // was set to punch_start. Calculate offset into buffer where
-                    // punch region audio begins (may be 0 if recorder started at punch start).
                     if samples.len() > punch_len {
                         samples[..punch_len].to_vec()
                     } else {
@@ -1237,12 +1404,15 @@ impl DawApp {
             };
 
             // Duration is the buffer length — this is the actual audio data
-            let buffer_id = Uuid::new_v4();
             let rec_start = self.recording_start_pos;
             let duration = samples.len() as u64;
 
+            // Load the shared audio buffer into the engine once
+            let shared_buffer_id = Uuid::new_v4();
+
             println!(
-                "Recording clip: start={}, duration={} ({:.2}s), buffer_len={}, engine_sr={}",
+                "Recording clip on {} tracks: start={}, duration={} ({:.2}s), buffer_len={}, engine_sr={}",
+                armed_tracks.len(),
                 rec_start,
                 duration,
                 duration as f64 / engine_sr as f64,
@@ -1250,70 +1420,73 @@ impl DawApp {
                 engine_sr,
             );
 
-            // Auto-mute older overlapping clips (takes behavior)
-            for existing_clip in &mut self.project.tracks[track_idx].clips {
-                let existing_end = existing_clip.start_sample + existing_clip.duration_samples;
-                let new_end = rec_start + duration;
-                // If clips overlap, mute the old one
-                if rec_start < existing_end && new_end > existing_clip.start_sample {
-                    existing_clip.muted = true;
-                }
-            }
+            // Build waveform for display (shared across all clips)
+            self.waveform_cache.insert(shared_buffer_id, &samples);
+            self.audio_buffers.insert(shared_buffer_id, samples.clone());
 
-            // Count overlapping takes for naming
-            let take_num = self.project.tracks[track_idx]
-                .clips
-                .iter()
-                .filter(|c| {
-                    let c_end = c.start_sample + c.duration_samples;
-                    rec_start < c_end && (rec_start + duration) > c.start_sample
-                })
-                .count()
-                + 1;
-
-            let clip = Clip {
-                id: Uuid::new_v4(),
-                name: format!("Take {}", take_num),
-                start_sample: rec_start,
-                duration_samples: duration,
-                source: ClipSource::AudioBuffer { buffer_id },
-                muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
-                fade_in_samples: 0,
-                fade_out_samples: 0,
-                color: None,
-                playback_rate: 1.0,
-                preserve_pitch: false,
-                loop_count: 1,
-                gain_db: 0.0,
-                take_index: take_num as u32 - 1,
-            };
-
-            // Auto-expand take lanes when recording creates overlapping takes
-            if take_num > 1 {
-                self.project.tracks[track_idx].lanes_expanded = true;
-            }
-
-            // 5. Build waveform for display
-            self.waveform_cache.insert(buffer_id, &samples);
-            self.audio_buffers.insert(buffer_id, samples.clone());
-
-            // 6. CRITICAL ORDER: Load buffer into engine FIRST, then update project.
-            //    The engine processes commands in order from a single channel.
-            //    If project arrives first, mixer would try to read a buffer that
-            //    doesn't exist yet.
+            // Load buffer into engine FIRST
             self.send_command(EngineCommand::LoadAudioBuffer {
-                id: buffer_id,
+                id: shared_buffer_id,
                 samples,
             });
 
-            // 7. Add clip to project and sync AFTER buffer is queued
-            self.project.tracks[track_idx].clips.push(clip);
+            // Create a clip on EACH armed track with the same shared buffer
+            let mut total_takes = 0u32;
+            for &track_idx in &armed_tracks {
+                if track_idx >= self.project.tracks.len() {
+                    continue;
+                }
+
+                // Auto-mute older overlapping clips (takes behavior)
+                for existing_clip in &mut self.project.tracks[track_idx].clips {
+                    let existing_end = existing_clip.start_sample + existing_clip.duration_samples;
+                    let new_end = rec_start + duration;
+                    if rec_start < existing_end && new_end > existing_clip.start_sample {
+                        existing_clip.muted = true;
+                    }
+                }
+
+                // Count overlapping takes for naming
+                let take_num = self.project.tracks[track_idx]
+                    .clips
+                    .iter()
+                    .filter(|c| {
+                        let c_end = c.start_sample + c.duration_samples;
+                        rec_start < c_end && (rec_start + duration) > c.start_sample
+                    })
+                    .count()
+                    + 1;
+
+                let clip = Clip {
+                    id: Uuid::new_v4(),
+                    name: format!("Take {}", take_num),
+                    start_sample: rec_start,
+                    duration_samples: duration,
+                    source: ClipSource::AudioBuffer { buffer_id: shared_buffer_id },
+                    muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
+                    fade_in_samples: 0,
+                    fade_out_samples: 0,
+                    color: None,
+                    playback_rate: 1.0,
+                    preserve_pitch: false,
+                    loop_count: 1,
+                    gain_db: 0.0,
+                    take_index: take_num as u32 - 1,
+                };
+
+                // Auto-expand take lanes when recording creates overlapping takes
+                if take_num > 1 {
+                    self.project.tracks[track_idx].lanes_expanded = true;
+                }
+
+                self.project.tracks[track_idx].clips.push(clip);
+                total_takes += 1;
+            }
+
             self.sync_project();
 
-            // 8. Scroll view to show the recorded clip
-            self.scroll_x = 0.0; // Reset to start since clip starts at rec_start
-            let _clip_end_sec = (rec_start + duration) as f64 / engine_sr as f64;
-            // Ensure zoom shows the whole clip — adjust if clip doesn't fit in view
+            // Scroll view to show the recorded clip
+            self.scroll_x = 0.0;
             let min_zoom = 0.3;
             if self.zoom < min_zoom {
                 self.zoom = min_zoom;
@@ -1322,21 +1495,33 @@ impl DawApp {
             // Rewind playhead to start of clip for immediate playback
             self.send_command(EngineCommand::SetPosition(rec_start));
 
+            let track_label = if armed_tracks.len() > 1 {
+                format!("{} tracks", armed_tracks.len())
+            } else {
+                "1 track".to_string()
+            };
             self.set_status(&format!(
-                "Take {} saved ({:.1}s) — press Space to play",
-                take_num,
+                "Recorded on {} ({:.1}s) — press Space to play",
+                track_label,
                 duration as f64 / engine_sr as f64
             ));
         } else {
             // === START RECORDING ===
+            // Arm the selected track if no tracks are armed yet
             let track_idx = self.selected_track.unwrap_or(0);
-            if track_idx < self.project.tracks.len() {
+            let any_armed = self.project.tracks.iter().any(|t| t.armed);
+            if !any_armed && track_idx < self.project.tracks.len() {
                 self.project.tracks[track_idx].armed = true;
-                // Mute this track while recording so old takes don't
-                // play back through speakers (prevents feedback/confusion)
-                self.project.tracks[track_idx].muted = true;
-                self.sync_project();
             }
+
+            // Mute all armed tracks while recording so old takes don't
+            // play back through speakers (prevents feedback/confusion)
+            for t in &mut self.project.tracks {
+                if t.armed {
+                    t.muted = true;
+                }
+            }
+            self.sync_project();
 
             // Pre-roll: if punch recording with a selection, start 1 bar before selection
             let mut start_pos = self.position_samples();
@@ -1347,7 +1532,6 @@ impl DawApp {
                     let beats_per_bar = self.project.time_signature.numerator as u64;
                     let samples_per_bar = self.project.tempo.samples_per_beat(sr) as u64
                         * beats_per_bar;
-                    // Pre-roll: 1 bar before punch start
                     start_pos = punch_start.saturating_sub(samples_per_bar);
                     self.send_command(EngineCommand::SetPosition(start_pos));
                 }
@@ -1401,7 +1585,7 @@ impl DawApp {
 
                 // Create a live placeholder clip for waveform display
                 let live_id = Uuid::new_v4();
-                self.live_rec_buffer_id = Some(live_id);
+                self.live_rec_buffer_ids = vec![(track_idx, live_id)];
                 let rec_start = if self.punch_recording {
                     if let (Some(sel_s), Some(sel_e)) = (self.selection_start, self.selection_end) {
                         sel_s.min(sel_e)
@@ -2975,6 +3159,12 @@ impl eframe::App for DawApp {
             self.perform_autosave();
         }
 
+        // Periodic layout persistence (every 30 seconds)
+        if self.last_layout_save.elapsed().as_secs() >= 30 {
+            save_layout(self);
+            self.last_layout_save = std::time::Instant::now();
+        }
+
         // Live waveform update during recording (every 100ms)
 
         // Process MIDI CC for learn/mapping and macro updates
@@ -2982,10 +3172,10 @@ impl eframe::App for DawApp {
 
         if self.is_recording && self.live_rec_last_update.elapsed().as_millis() > 100 {
             self.live_rec_last_update = std::time::Instant::now();
-            if let Some(live_id) = self.live_rec_buffer_id {
+            let live_ids = self.live_rec_buffer_ids.clone();
+            if !live_ids.is_empty() {
                 let (samples, rec_sr) = self.recorder.peek_buffer();
                 if !samples.is_empty() {
-                    // Resample if needed
                     let engine_sr = self.sample_rate();
                     let display_samples = if rec_sr != engine_sr {
                         jamhub_engine::resample(&samples, rec_sr, engine_sr)
@@ -2994,15 +3184,15 @@ impl eframe::App for DawApp {
                     };
 
                     let duration = display_samples.len() as u64;
-                    self.waveform_cache.insert(live_id, &display_samples);
-
-                    // Update the live clip's duration
-                    let track_idx = self.selected_track.unwrap_or(0);
-                    if track_idx < self.project.tracks.len() {
-                        for clip in &mut self.project.tracks[track_idx].clips {
-                            if let ClipSource::AudioBuffer { buffer_id } = &clip.source {
-                                if *buffer_id == live_id {
-                                    clip.duration_samples = duration;
+                    // Update waveform and clip duration for all armed tracks
+                    for &(track_idx, live_id) in &live_ids {
+                        self.waveform_cache.insert(live_id, &display_samples);
+                        if track_idx < self.project.tracks.len() {
+                            for clip in &mut self.project.tracks[track_idx].clips {
+                                if let ClipSource::AudioBuffer { buffer_id } = &clip.source {
+                                    if *buffer_id == live_id {
+                                        clip.duration_samples = duration;
+                                    }
                                 }
                             }
                         }
@@ -3167,12 +3357,17 @@ impl eframe::App for DawApp {
                 "toggle_play" => {
                     if self.transport_state() == TransportState::Playing {
                         self.send_command(EngineCommand::Stop);
+                        // Return playhead to where playback started
+                        self.send_command(EngineCommand::SetPosition(self.play_start_position));
                     } else {
+                        // Save current position so we can return on stop
+                        self.play_start_position = self.position_samples();
                         // If loop is enabled and playhead is outside the loop, jump to loop start
                         if self.loop_enabled && self.loop_end > self.loop_start {
                             let pos = self.position_samples();
                             if pos < self.loop_start || pos >= self.loop_end {
                                 self.send_command(EngineCommand::SetPosition(self.loop_start));
+                                self.play_start_position = self.loop_start;
                             }
                         }
                         self.send_command(EngineCommand::Play);
