@@ -80,6 +80,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         egui::Color32::from_rgb(40, 41, 48)
                     };
 
+                    // Channel strip with subtle gradient background
+                    let strip_bg = egui::Color32::from_rgb(24, 25, 30);
                     egui::Frame::default()
                         .inner_margin(egui::Margin::symmetric(5, 6))
                         .stroke(egui::Stroke::new(
@@ -87,7 +89,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             stroke_color,
                         ))
                         .corner_radius(6.0)
+                        .fill(strip_bg)
                         .show(ui, |ui| {
+                            // Subtle gradient overlay: lighter at top, darker at bottom
+                            let strip_rect = ui.max_rect();
+                            let top_grad = egui::Rect::from_min_max(strip_rect.min, egui::pos2(strip_rect.max.x, strip_rect.center().y));
+                            let bot_grad = egui::Rect::from_min_max(egui::pos2(strip_rect.min.x, strip_rect.center().y), strip_rect.max);
+                            ui.painter().rect_filled(top_grad, egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, egui::Color32::from_rgba_premultiplied(255, 255, 255, 3));
+                            ui.painter().rect_filled(bot_grad, egui::CornerRadius { nw: 0, ne: 0, sw: 6, se: 6 }, egui::Color32::from_rgba_premultiplied(0, 0, 0, 8));
                             ui.set_width(CHANNEL_WIDTH);
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 2.0;
@@ -422,28 +431,27 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         .color(egui::Color32::from_rgb(145, 142, 138)),
                                 );
 
-                                // Pan knob — arc visualization
+                                // Pan knob — prominent arc with position dot
                                 ui.horizontal(|ui| {
-                                    // Draw a small pan arc knob
-                                    let knob_size = 24.0;
+                                    let knob_size = 26.0;
                                     let (_, knob_rect) = ui.allocate_space(egui::vec2(knob_size, knob_size));
                                     let center = knob_rect.center();
-                                    let radius = knob_size * 0.4;
+                                    let radius = knob_size * 0.42;
 
-                                    // Background arc (full range)
-                                    let arc_segments = 32;
+                                    // Background arc (full range) — thicker, more visible
+                                    let arc_segments = 40;
                                     let start_angle = std::f32::consts::PI * 0.75;
                                     let end_angle = std::f32::consts::PI * 2.25;
-                                    let bg_color = egui::Color32::from_rgb(36, 37, 44);
+                                    let bg_color = egui::Color32::from_rgb(42, 43, 50);
                                     for seg in 0..arc_segments {
                                         let a1 = start_angle + (end_angle - start_angle) * seg as f32 / arc_segments as f32;
                                         let a2 = start_angle + (end_angle - start_angle) * (seg + 1) as f32 / arc_segments as f32;
                                         let p1 = egui::pos2(center.x + radius * a1.cos(), center.y + radius * a1.sin());
                                         let p2 = egui::pos2(center.x + radius * a2.cos(), center.y + radius * a2.sin());
-                                        ui.painter().line_segment([p1, p2], egui::Stroke::new(2.5, bg_color));
+                                        ui.painter().line_segment([p1, p2], egui::Stroke::new(3.5, bg_color));
                                     }
 
-                                    // Active arc (from center to pan position)
+                                    // Active arc (from center to pan position) — more prominent
                                     let pan_val = track.pan;
                                     let center_angle = (start_angle + end_angle) / 2.0;
                                     let pan_angle = center_angle + pan_val * (end_angle - start_angle) / 2.0;
@@ -459,11 +467,17 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         let a2 = arc_start + (arc_end - arc_start) * (seg + 1) as f32 / active_segs.max(1) as f32;
                                         let p1 = egui::pos2(center.x + radius * a1.cos(), center.y + radius * a1.sin());
                                         let p2 = egui::pos2(center.x + radius * a2.cos(), center.y + radius * a2.sin());
-                                        ui.painter().line_segment([p1, p2], egui::Stroke::new(2.5, arc_color));
+                                        ui.painter().line_segment([p1, p2], egui::Stroke::new(3.5, arc_color));
                                     }
 
-                                    // Center dot
-                                    ui.painter().circle_filled(center, 2.5, egui::Color32::from_rgb(180, 178, 174));
+                                    // Position dot at the pan angle on the arc
+                                    let dot_radius_outer = radius + 1.0;
+                                    let dot_x = center.x + dot_radius_outer * pan_angle.cos();
+                                    let dot_y = center.y + dot_radius_outer * pan_angle.sin();
+                                    ui.painter().circle_filled(egui::pos2(dot_x, dot_y), 3.0, egui::Color32::WHITE);
+
+                                    // Center dot — smaller, subtle
+                                    ui.painter().circle_filled(center, 2.0, egui::Color32::from_rgb(140, 138, 132));
 
                                     // DragValue next to the knob
                                     let pan_resp = ui
@@ -709,11 +723,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             egui::Frame::default()
                 .inner_margin(egui::Margin::symmetric(7, 6))
                 .stroke(egui::Stroke::new(
-                    1.5,
-                    egui::Color32::from_rgb(100, 90, 60),
+                    2.0,
+                    egui::Color32::from_rgb(160, 130, 50),
                 ))
-                .corner_radius(6.0)
-                .fill(egui::Color32::from_rgb(22, 23, 30))
+                .corner_radius(8.0)
+                .fill(egui::Color32::from_rgb(24, 24, 30))
                 .show(ui, |ui| {
                     ui.set_width(master_width);
                     ui.vertical(|ui| {

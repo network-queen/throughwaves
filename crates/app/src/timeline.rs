@@ -7,7 +7,7 @@ use crate::DawApp;
 const BASE_LANE_HEIGHT: f32 = 72.0;
 const TAKE_LANE_HEIGHT: f32 = 42.0;
 const HEADER_WIDTH: f32 = 200.0;
-const RULER_HEIGHT: f32 = 30.0;
+const RULER_HEIGHT: f32 = 34.0;
 const PIXELS_PER_SECOND_BASE: f32 = 100.0;
 const GROUP_HEADER_HEIGHT: f32 = 24.0;
 const GROUP_INDENT: f32 = 12.0;
@@ -2167,14 +2167,17 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         // Background
         painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(22, 22, 26));
 
-        // Ruler — cleaner with subtle gradient feel
+        // Ruler — premium gradient with clear hierarchy
         let ruler_rect =
             egui::Rect::from_min_size(rect.min, egui::vec2(available.x, RULER_HEIGHT));
-        painter.rect_filled(ruler_rect, 0.0, egui::Color32::from_rgb(28, 28, 36));
+        // Subtle vertical gradient: slightly lighter at top
+        painter.rect_filled(ruler_rect, 0.0, egui::Color32::from_rgb(30, 30, 38));
+        let ruler_top_half = egui::Rect::from_min_max(ruler_rect.min, egui::pos2(ruler_rect.max.x, ruler_rect.center().y));
+        painter.rect_filled(ruler_top_half, 0.0, egui::Color32::from_rgba_premultiplied(255, 255, 255, 4));
         // Bottom edge accent line
         painter.line_segment(
             [egui::pos2(ruler_rect.min.x, ruler_rect.max.y), egui::pos2(ruler_rect.max.x, ruler_rect.max.y)],
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 60)),
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 55, 65)),
         );
 
         // Beat/bar grid
@@ -2233,33 +2236,77 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 }
             }
 
+            // Beat tick marks on the ruler bottom edge
+            {
+                let tick_x = x;
+                if tick_x >= ruler_rect.min.x && tick_x <= ruler_rect.max.x {
+                    let tick_len = if is_bar { 10.0 } else { 5.0 };
+                    let tick_color = if is_bar {
+                        egui::Color32::from_rgb(100, 100, 115)
+                    } else {
+                        egui::Color32::from_rgb(60, 60, 70)
+                    };
+                    painter.line_segment(
+                        [egui::pos2(tick_x, ruler_rect.max.y - tick_len), egui::pos2(tick_x, ruler_rect.max.y)],
+                        egui::Stroke::new(if is_bar { 1.0 } else { 0.5 }, tick_color),
+                    );
+                }
+
+                // Subdivision tick marks within each beat
+                if grid_subdiv > 1.0 {
+                    let subdiv_count = grid_subdiv as i32;
+                    for sub in 1..subdiv_count {
+                        let sub_x = x + (sub as f32 / subdiv_count as f32) * pixels_per_beat;
+                        if sub_x >= ruler_rect.min.x && sub_x <= ruler_rect.max.x {
+                            painter.line_segment(
+                                [egui::pos2(sub_x, ruler_rect.max.y - 3.0), egui::pos2(sub_x, ruler_rect.max.y)],
+                                egui::Stroke::new(0.5, egui::Color32::from_rgb(48, 48, 56)),
+                            );
+                        }
+                    }
+                }
+            }
+
             if is_bar {
                 let bar = (b as f64 / beats_per_bar) as i32 + 1;
                 let bar_time_sec = b as f64 * seconds_per_beat;
                 let bar_min = (bar_time_sec / 60.0) as u32;
                 let bar_sec = bar_time_sec % 60.0;
 
-                // Bar number — prominent, bright
+                // Highlight current bar with subtle amber background
+                let current_pos = app.position_samples();
+                let current_beat = app.project.tempo.beat_at_sample(current_pos, app.sample_rate() as f64);
+                let current_bar = (current_beat / beats_per_bar).floor() as i32 + 1;
+                if bar == current_bar {
+                    let highlight_w = pixels_per_beat * beats_per_bar as f32;
+                    let highlight_rect = egui::Rect::from_min_size(
+                        egui::pos2(x, ruler_rect.min.y),
+                        egui::vec2(highlight_w.min(ruler_rect.max.x - x), ruler_rect.height()),
+                    );
+                    painter.rect_filled(highlight_rect, 0.0, egui::Color32::from_rgba_premultiplied(235, 180, 60, 12));
+                }
+
+                // Bar number — bold, bright, prominent
                 painter.text(
                     egui::pos2(x + 4.0, rect.min.y + 2.0),
                     egui::Align2::LEFT_TOP,
                     format!("{bar}"),
-                    egui::FontId::proportional(13.0),
-                    egui::Color32::from_rgb(200, 200, 215),
+                    egui::FontId::new(14.0, egui::FontFamily::Proportional),
+                    egui::Color32::from_rgb(220, 220, 235),
                 );
 
-                // Show minutes:seconds below bar number — cleaner mono-style
+                // Time display below bar number — dimmer, smaller, monospace feel
                 let time_str = if bar_min > 0 {
                     format!("{bar_min}:{bar_sec:04.1}")
                 } else {
                     format!("{bar_sec:.1}s")
                 };
                 painter.text(
-                    egui::pos2(x + 4.0, rect.min.y + 16.0),
+                    egui::pos2(x + 4.0, rect.min.y + 18.0),
                     egui::Align2::LEFT_TOP,
                     time_str,
-                    egui::FontId::proportional(9.0),
-                    egui::Color32::from_rgb(100, 105, 120),
+                    egui::FontId::new(8.5, egui::FontFamily::Monospace),
+                    egui::Color32::from_rgb(85, 88, 100),
                 );
             }
         }
@@ -2680,6 +2727,20 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     _ => {}
                 }
 
+                // Muted clips: diagonal hash lines pattern
+                if is_clip_muted {
+                    let hash_color = egui::Color32::from_rgba_premultiplied(120, 120, 120, 40);
+                    let spacing = 8.0;
+                    let mut hx = cr.left() - cr.height();
+                    while hx < cr.right() {
+                        painter.with_clip_rect(cr).line_segment(
+                            [egui::pos2(hx, cr.bottom()), egui::pos2(hx + cr.height(), cr.top())],
+                            egui::Stroke::new(0.8, hash_color),
+                        );
+                        hx += spacing;
+                    }
+                }
+
                 // Border — thicker amber glow for selected, teal for multi-select, with outer glow
                 let multi_selected = is_clip_selected && app.selected_clips.len() > 1;
                 let border_w = if is_clip_selected { 2.5 } else { 1.0 };
@@ -2699,19 +2760,27 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     egui::StrokeKind::Outside,
                 );
 
-                // Loop markers — thin vertical lines at each loop boundary
+                // Loop markers — white dashed lines at each loop boundary
                 if clip.loop_count > 1 && !is_clip_muted {
                     let single_loop_dur = clip.single_loop_visual_duration();
-                    let loop_marker_color = egui::Color32::from_rgba_premultiplied(255, 255, 255, 120);
+                    let loop_marker_color = egui::Color32::from_rgba_premultiplied(255, 255, 255, 130);
                     for lp in 1..clip.loop_count {
                         let marker_sample = single_loop_dur * lp as u64;
                         let marker_px = (marker_sample as f64 / sample_rate) as f32 * pixels_per_second;
                         let x = cr.left() + marker_px;
                         if x > cr.left() && x < cr.right() {
-                            painter.with_clip_rect(cr).line_segment(
-                                [egui::pos2(x, cr.top()), egui::pos2(x, cr.bottom())],
-                                egui::Stroke::new(1.0, loop_marker_color),
-                            );
+                            // Draw dashed line (segments)
+                            let dash_len = 4.0;
+                            let gap_len = 3.0;
+                            let mut dy = cr.top();
+                            while dy < cr.bottom() {
+                                let dash_end = (dy + dash_len).min(cr.bottom());
+                                painter.with_clip_rect(cr).line_segment(
+                                    [egui::pos2(x, dy), egui::pos2(x, dash_end)],
+                                    egui::Stroke::new(1.0, loop_marker_color),
+                                );
+                                dy += dash_len + gap_len;
+                            }
                             // Small loop repeat indicator at top
                             painter.with_clip_rect(cr).text(
                                 egui::pos2(x + 2.0, cr.top() + 1.0),
@@ -2803,8 +2872,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                 }
 
-                // Clip label — small tag with background at top-left
-                // When zoomed out far, show clip names more prominently
+                // Clip label — rounded pill tag at top-left with transparency
+                // When clip is too narrow, show just the first letter
                 let zoomed_out = app.zoom < 0.3;
                 let speed_suffix = if (clip.playback_rate - 1.0).abs() > 0.01 {
                     format!(" [{:.2}x]", clip.playback_rate)
@@ -2818,10 +2887,19 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     String::new()
                 };
                 let rev_suffix = if clip.reversed { " REV" } else { "" };
-                let label = if is_clip_muted {
+                let full_label = if is_clip_muted {
                     format!("{} (inactive){}{}{}", clip.name, speed_suffix, transpose_suffix, rev_suffix)
                 } else {
                     format!("{}{}{}{}", clip.name, speed_suffix, transpose_suffix, rev_suffix)
+                };
+                // Determine whether to show full name or abbreviated
+                let min_width_for_full = full_label.len() as f32 * 5.5 + 12.0;
+                let label = if cr.width() < 24.0 {
+                    String::new() // too narrow for anything
+                } else if cr.width() < min_width_for_full {
+                    clip.name.chars().next().map(|c| c.to_string()).unwrap_or_default()
+                } else {
+                    full_label.clone()
                 };
                 let text_color = if is_clip_muted {
                     egui::Color32::from_rgb(130, 130, 130)
@@ -2829,23 +2907,25 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     egui::Color32::from_rgb(240, 238, 234)
                 };
                 let font_size = if zoomed_out { 12.0 } else { 10.0 };
-                // Draw tag background behind clip name
-                if !is_clip_muted {
-                    let tag_w = (label.len() as f32 * (if zoomed_out { 6.5 } else { 5.5 }) + 8.0).min(cr.width() - 4.0);
-                    let tag_h = if zoomed_out { 17.0 } else { 14.0 };
-                    let tag_rect = egui::Rect::from_min_size(
-                        egui::pos2(cr.left() + 2.0, cr.top() + 1.0),
-                        egui::vec2(tag_w, tag_h),
+                // Draw rounded pill tag background behind clip name
+                if !label.is_empty() {
+                    if !is_clip_muted {
+                        let tag_w = (label.len() as f32 * (if zoomed_out { 6.5 } else { 5.5 }) + 10.0).min(cr.width() - 4.0);
+                        let tag_h = if zoomed_out { 17.0 } else { 15.0 };
+                        let tag_rect = egui::Rect::from_min_size(
+                            egui::pos2(cr.left() + 2.0, cr.top() + 2.0),
+                            egui::vec2(tag_w, tag_h),
+                        );
+                        painter.with_clip_rect(cr).rect_filled(tag_rect, 7.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, if zoomed_out { 150 } else { 110 }));
+                    }
+                    painter.with_clip_rect(cr.shrink(2.0)).text(
+                        egui::pos2(cr.left() + 6.0, cr.top() + 3.0),
+                        egui::Align2::LEFT_TOP,
+                        &label,
+                        egui::FontId::proportional(font_size),
+                        text_color,
                     );
-                    painter.with_clip_rect(cr).rect_filled(tag_rect, 3.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, if zoomed_out { 140 } else { 100 }));
                 }
-                painter.with_clip_rect(cr.shrink(2.0)).text(
-                    egui::pos2(cr.left() + 5.0, cr.top() + 2.0),
-                    egui::Align2::LEFT_TOP,
-                    &label,
-                    egui::FontId::proportional(font_size),
-                    text_color,
-                );
 
                 // Slip edit indicator: show content offset when non-zero
                 if clip.content_offset > 0 && !is_clip_muted {
@@ -2925,6 +3005,48 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         );
                     }
                 }
+            }
+        }
+
+        // Empty state — show centered message when project has no clips
+        {
+            let has_any_clips = app.project.tracks.iter().any(|t| !t.clips.is_empty());
+            if !has_any_clips && !app.project.tracks.is_empty() {
+                let center = egui::pos2(
+                    (rect.min.x + rect.max.x) * 0.5,
+                    tracks_y_start + (rect.max.y - tracks_y_start) * 0.5,
+                );
+                // Subtle circular backdrop
+                painter.circle_filled(center, 60.0, egui::Color32::from_rgba_premultiplied(40, 40, 50, 30));
+                // Icon-like circle with musical note hint
+                painter.circle_stroke(
+                    egui::pos2(center.x, center.y - 16.0),
+                    18.0,
+                    egui::Stroke::new(1.5, egui::Color32::from_rgba_premultiplied(120, 120, 140, 60)),
+                );
+                painter.text(
+                    egui::pos2(center.x, center.y - 16.0),
+                    egui::Align2::CENTER_CENTER,
+                    "\u{266B}",
+                    egui::FontId::proportional(18.0),
+                    egui::Color32::from_rgba_premultiplied(140, 140, 160, 80),
+                );
+                // Main message
+                painter.text(
+                    egui::pos2(center.x, center.y + 14.0),
+                    egui::Align2::CENTER_CENTER,
+                    "Drop audio files here or press R to record",
+                    egui::FontId::proportional(13.0),
+                    egui::Color32::from_rgb(100, 100, 115),
+                );
+                // Subtle hint
+                painter.text(
+                    egui::pos2(center.x, center.y + 32.0),
+                    egui::Align2::CENTER_CENTER,
+                    "Drag & drop WAV/MP3/OGG files onto the timeline",
+                    egui::FontId::proportional(10.0),
+                    egui::Color32::from_rgb(70, 70, 80),
+                );
             }
         }
 

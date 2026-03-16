@@ -61,6 +61,10 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
             let mut move_up: Option<usize> = None;
             let mut move_down: Option<usize> = None;
 
+            // Track color for the accent bar — read before mutable borrows in the loop
+            let tc = app.project.tracks[track_idx].color;
+            let track_color = egui::Color32::from_rgb(tc[0], tc[1], tc[2]);
+
             for i in 0..effects_len {
                 ui.push_id(i, |ui| {
                     let (slot_id, is_open, is_vst, ref vst_path) = slot_info[i];
@@ -76,18 +80,34 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                     let row_bg = if is_crashed {
                         egui::Color32::from_rgb(60, 25, 25)
                     } else if is_open {
-                        egui::Color32::from_rgb(35, 42, 52)
+                        egui::Color32::from_rgb(32, 38, 48)
                     } else {
-                        egui::Color32::from_rgb(36, 36, 42)
+                        egui::Color32::from_rgb(30, 30, 38)
                     };
 
                     egui::Frame::default()
-                        .inner_margin(egui::Margin::symmetric(6, 3))
+                        .inner_margin(egui::Margin::symmetric(6, 5))
                         .fill(row_bg)
-                        .corner_radius(3.0)
+                        .corner_radius(6.0)
+                        .stroke(egui::Stroke::new(0.5, egui::Color32::from_rgb(46, 46, 56)))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                // Move up/down arrows — bright so they're visible
+                                // Left color accent bar for active effects
+                                if is_enabled && !is_crashed {
+                                    let (accent_rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(3.0, 18.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(accent_rect, 1.5, track_color);
+                                } else {
+                                    let (accent_rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(3.0, 18.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(accent_rect, 1.5, egui::Color32::from_rgb(45, 45, 52));
+                                }
+
+                                // Move up/down arrows
                                 let arrow_dim = egui::Color32::from_rgb(55, 55, 62);
                                 let arrow_bright = egui::Color32::from_rgb(170, 170, 185);
                                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -115,33 +135,37 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                 }
                                 ui.spacing_mut().item_spacing.x = 4.0;
 
-                                // Bypass dot
-                                let dot_color = if is_enabled {
-                                    egui::Color32::from_rgb(80, 200, 80)
-                                } else {
-                                    egui::Color32::from_rgb(80, 80, 90)
-                                };
+                                // Bypass dot — animated pulse when active
                                 let (dot_rect, dot_resp) = ui.allocate_exact_size(
-                                    egui::vec2(8.0, 14.0),
+                                    egui::vec2(12.0, 18.0),
                                     egui::Sense::click(),
                                 );
-                                ui.painter().circle_filled(dot_rect.center(), 3.0, dot_color);
+                                if is_enabled {
+                                    // Pulsing glow for active effects
+                                    let pulse = (ui.input(|i| i.time) * 1.8).sin() as f32 * 0.15 + 0.85;
+                                    let glow_alpha = (40.0 * pulse) as u8;
+                                    ui.painter().circle_filled(dot_rect.center(), 5.5, egui::Color32::from_rgba_premultiplied(80, 200, 80, glow_alpha));
+                                    ui.painter().circle_filled(dot_rect.center(), 3.5, egui::Color32::from_rgb(80, 200, 80));
+                                    ui.ctx().request_repaint();
+                                } else {
+                                    ui.painter().circle_filled(dot_rect.center(), 3.5, egui::Color32::from_rgb(80, 80, 90));
+                                }
                                 if dot_resp.on_hover_text("Toggle bypass").clicked() {
                                     slot.enabled = !slot.enabled;
                                     needs_sync = true;
                                 }
 
-                                // Clickable name — opens UI
+                                // Clickable name — slightly larger for premium feel
                                 let name_color = if !is_enabled {
                                     egui::Color32::from_rgb(100, 100, 110)
                                 } else if is_open {
                                     egui::Color32::from_rgb(130, 190, 255)
                                 } else {
-                                    egui::Color32::from_rgb(210, 210, 215)
+                                    egui::Color32::from_rgb(215, 215, 220)
                                 };
                                 let resp = ui.add(
                                     egui::Button::new(
-                                        egui::RichText::new(&name).size(12.0).color(name_color),
+                                        egui::RichText::new(&name).size(12.5).color(name_color),
                                     )
                                     .frame(false),
                                 );
@@ -161,7 +185,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                 if ui
                                     .add(
                                         egui::Button::new(
-                                            egui::RichText::new("x")
+                                            egui::RichText::new("\u{2715}")
                                                 .size(10.0)
                                                 .color(egui::Color32::from_rgb(140, 60, 60)),
                                         )
@@ -191,13 +215,20 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
             }
 
             if effects_len == 0 {
-                ui.add_space(8.0);
-                ui.label(
-                    egui::RichText::new("Empty chain")
-                        .size(11.0)
-                        .color(egui::Color32::from_rgb(100, 100, 110)),
-                );
-                ui.add_space(8.0);
+                ui.add_space(12.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        egui::RichText::new("No effects")
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(90, 90, 100)),
+                    );
+                    ui.label(
+                        egui::RichText::new("Add effects to shape your sound")
+                            .size(9.0)
+                            .color(egui::Color32::from_rgb(65, 65, 75)),
+                    );
+                });
+                ui.add_space(12.0);
             }
 
             // --- Actions ---
@@ -262,19 +293,25 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                 }
             }
 
-            // --- Add FX ---
-            ui.add_space(4.0);
+            // --- Add FX --- prominent centered button
+            ui.add_space(6.0);
             ui.separator();
-            if ui.add_sized(
-                [ui.available_width(), 22.0],
-                egui::Button::new(
-                    egui::RichText::new("+ Add FX...")
-                        .size(12.0)
-                        .color(egui::Color32::from_rgb(160, 160, 175)),
-                ),
-            ).clicked() {
-                app.fx_browser.show = true;
-            }
+            ui.add_space(4.0);
+            ui.vertical_centered(|ui| {
+                if ui.add_sized(
+                    [ui.available_width() - 16.0, 28.0],
+                    egui::Button::new(
+                        egui::RichText::new("\u{2795}  Add FX")
+                            .size(12.5)
+                            .color(egui::Color32::from_rgb(180, 180, 200)),
+                    )
+                    .fill(egui::Color32::from_rgb(36, 38, 48))
+                    .corner_radius(8.0)
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 55, 68))),
+                ).clicked() {
+                    app.fx_browser.show = true;
+                }
+            });
 
             // --- FX Chain Presets ---
             ui.add_space(2.0);

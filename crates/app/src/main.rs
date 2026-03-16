@@ -31,6 +31,23 @@ use uuid::Uuid;
 use session_panel::SessionPanel;
 use undo::UndoManager;
 
+/// Draw a compact rounded info pill in the status bar.
+fn status_pill(ui: &mut egui::Ui, text: &str, color: egui::Color32, highlight: bool) {
+    let pill_bg = if highlight {
+        egui::Color32::from_rgba_premultiplied(color.r() / 4, color.g() / 4, color.b() / 4, 80)
+    } else {
+        egui::Color32::from_rgb(28, 28, 34)
+    };
+    egui::Frame::default()
+        .fill(pill_bg)
+        .inner_margin(egui::Margin::symmetric(6, 1))
+        .corner_radius(8.0)
+        .stroke(egui::Stroke::new(0.5, egui::Color32::from_rgb(44, 44, 52)))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(text).size(9.5).color(color));
+        });
+}
+
 fn setup_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
 
@@ -92,6 +109,14 @@ fn setup_theme(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(7.0, 6.0);
     style.spacing.button_padding = egui::vec2(12.0, 6.0);
     style.spacing.window_margin = egui::Margin::same(14);
+    style.spacing.scroll = egui::style::ScrollStyle {
+        bar_width: 6.0,
+        handle_min_length: 20.0,
+        bar_inner_margin: 2.0,
+        bar_outer_margin: 1.0,
+        floating: true,
+        ..style.spacing.scroll
+    };
 
     // Larger default font sizes
     use egui::FontId;
@@ -192,6 +217,18 @@ fn apply_theme(ctx: &egui::Context, theme: ThemeChoice) {
     visuals.window_stroke = egui::Stroke::new(1.0, win_stroke_col);
 
     ctx.set_visuals(visuals);
+
+    // Scrollbar styling — thin, floating, rounded
+    let mut style = (*ctx.style()).clone();
+    style.spacing.scroll = egui::style::ScrollStyle {
+        bar_width: 6.0,
+        handle_min_length: 20.0,
+        bar_inner_margin: 2.0,
+        bar_outer_margin: 1.0,
+        floating: true,
+        ..style.spacing.scroll
+    };
+    ctx.set_style(style);
 }
 
 fn main() -> eframe::Result<()> {
@@ -4744,43 +4781,62 @@ impl eframe::App for DawApp {
         // Macro controls panel (below transport)
         midi_mapping::show_macro_panel(self, ctx);
 
-        // Status bar
+        // Status bar — premium, spacious, with info pills
         egui::TopBottomPanel::bottom("status_bar")
-            .frame(egui::Frame::default().fill(egui::Color32::from_rgb(22, 22, 26)).inner_margin(egui::Margin::symmetric(8, 2)))
+            .frame(egui::Frame::default()
+                .fill(egui::Color32::from_rgb(20, 20, 25))
+                .inner_margin(egui::Margin::symmetric(10, 4))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(36, 36, 44)))
+            )
+            .exact_height(24.0)
             .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 // Bounce progress indicator
                 if let Some(progress) = self.bounce_progress {
                     let pct = (progress * 100.0) as u32;
                     ui.label(egui::RichText::new(format!("Bouncing... {}%", pct))
-                        .size(11.0).color(egui::Color32::from_rgb(100, 180, 255)));
+                        .size(10.5).color(egui::Color32::from_rgb(100, 180, 255)));
                     let bar_width = 80.0;
-                    let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(bar_width, 6.0), egui::Sense::hover());
-                    ui.painter().rect_filled(bar_rect, 3.0, egui::Color32::from_rgb(40, 40, 50));
-                    let filled = egui::Rect::from_min_size(bar_rect.min, egui::vec2(bar_width * progress, 6.0));
-                    ui.painter().rect_filled(filled, 3.0, egui::Color32::from_rgb(80, 160, 255));
+                    let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(bar_width, 4.0), egui::Sense::hover());
+                    ui.painter().rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(40, 40, 50));
+                    let filled = egui::Rect::from_min_size(bar_rect.min, egui::vec2(bar_width * progress, 4.0));
+                    ui.painter().rect_filled(filled, 2.0, egui::Color32::from_rgb(80, 160, 255));
                 }
 
-                // Status message with subtle styling
+                // Status message with fade-out animation (dims after 4 seconds)
                 if let Some((msg, time)) = &self.status_message {
-                    if time.elapsed().as_secs() < 6 {
-                        ui.label(egui::RichText::new(msg).size(11.0).color(egui::Color32::from_rgb(180, 180, 190)));
+                    let elapsed = time.elapsed().as_secs_f32();
+                    if elapsed < 7.0 {
+                        let alpha = if elapsed < 4.0 {
+                            1.0
+                        } else {
+                            1.0 - ((elapsed - 4.0) / 3.0).min(1.0)
+                        };
+                        let a = (190.0 * alpha) as u8;
+                        ui.label(egui::RichText::new(msg).size(10.5).color(egui::Color32::from_rgba_premultiplied(180, 180, 190, a)));
+                        if elapsed >= 4.0 && elapsed < 7.0 {
+                            ui.ctx().request_repaint(); // animate fade
+                        }
                     }
                 }
 
+                // Mode indicators inline (left side)
+                if self.ripple_mode {
+                    status_pill(ui, "RIPPLE", egui::Color32::from_rgb(255, 140, 60), true);
+                }
+                if self.show_automation {
+                    status_pill(ui, "AUTO", egui::Color32::from_rgb(200, 170, 60), false);
+                }
+
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    let dim = egui::Color32::from_rgb(80, 80, 90);
-                    let sep = egui::Color32::from_rgb(45, 45, 52);
+                    ui.spacing_mut().item_spacing.x = 4.0;
 
-                    let sr = self.sample_rate();
-                    ui.label(egui::RichText::new(format!("{:.1}kHz", sr as f64 / 1000.0)).size(10.0).color(dim));
-                    ui.label(egui::RichText::new("·").size(10.0).color(sep));
+                    // Memory pill
+                    let total_samples: usize = self.audio_buffers.values().map(|b| b.len()).sum();
+                    let mem_mb = (total_samples * 4) as f64 / (1024.0 * 1024.0);
+                    status_pill(ui, &format!("{mem_mb:.1}MB"), egui::Color32::from_rgb(120, 118, 112), false);
 
-                    ui.label(egui::RichText::new(format!("{} tracks", self.project.tracks.len())).size(10.0).color(dim));
-                    ui.label(egui::RichText::new("·").size(10.0).color(sep));
-
-                    // CPU usage indicator
+                    // CPU pill
                     let cpu_pct = self.cpu_usage * 100.0;
                     let cpu_color = if cpu_pct > 80.0 {
                         egui::Color32::from_rgb(255, 80, 80)
@@ -4789,41 +4845,26 @@ impl eframe::App for DawApp {
                     } else {
                         egui::Color32::from_rgb(80, 180, 100)
                     };
-                    ui.label(egui::RichText::new(format!("CPU {cpu_pct:.0}%")).size(10.0).color(cpu_color));
-                    ui.label(egui::RichText::new("·").size(10.0).color(sep));
+                    status_pill(ui, &format!("CPU {cpu_pct:.0}%"), cpu_color, false);
 
-                    // Memory usage — count audio buffers and total size
-                    let buf_count = self.audio_buffers.len();
-                    let total_samples: usize = self.audio_buffers.values().map(|b| b.len()).sum();
-                    let mem_mb = (total_samples * 4) as f64 / (1024.0 * 1024.0);
-                    ui.label(egui::RichText::new(format!("{buf_count} bufs {mem_mb:.1}MB")).size(10.0).color(dim));
-                    ui.label(egui::RichText::new("·").size(10.0).color(sep));
-
-                    // Snap mode — always visible, highlighted when active, with key hint
-                    let snap_icon = if self.snap_mode != SnapMode::Off { "[G] Snap: " } else { "[G] Snap: " };
-                    let snap_text = format!("{}{}", snap_icon, self.snap_mode.label());
+                    // Snap pill
+                    let snap_label = format!("Snap: {}", self.snap_mode.label());
                     let snap_color = if self.snap_mode != SnapMode::Off {
                         egui::Color32::from_rgb(100, 170, 255)
                     } else {
-                        dim
+                        egui::Color32::from_rgb(100, 98, 94)
                     };
-                    ui.label(egui::RichText::new(snap_text).size(10.0).strong().color(snap_color));
-                    ui.label(egui::RichText::new("·").size(10.0).color(sep));
+                    status_pill(ui, &snap_label, snap_color, self.snap_mode != SnapMode::Off);
 
-                    // Grid division indicator
-                    let grid_text = format!("Grid: {}", self.grid_division.label());
-                    ui.label(egui::RichText::new(grid_text).size(10.0).color(dim));
-                    ui.label(egui::RichText::new("·").size(10.0).color(sep));
+                    // Tracks pill
+                    status_pill(ui, &format!("{} tracks", self.project.tracks.len()), egui::Color32::from_rgb(120, 118, 112), false);
 
-                    if self.ripple_mode {
-                        ui.label(egui::RichText::new("RIPPLE").size(10.0).strong().color(egui::Color32::from_rgb(255, 140, 60)));
-                        ui.label(egui::RichText::new("·").size(10.0).color(sep));
-                    }
+                    // Sample rate pill
+                    let sr = self.sample_rate();
+                    status_pill(ui, &format!("{:.1}kHz", sr as f64 / 1000.0), egui::Color32::from_rgb(120, 118, 112), false);
 
-                    if self.show_automation {
-                        ui.label(egui::RichText::new("AUTO").size(10.0).color(egui::Color32::from_rgb(200, 170, 60)));
-                        ui.label(egui::RichText::new("·").size(10.0).color(sep));
-                    }
+                    // Grid pill
+                    status_pill(ui, &format!("Grid: {}", self.grid_division.label()), egui::Color32::from_rgb(120, 118, 112), false);
                 });
             });
         });
