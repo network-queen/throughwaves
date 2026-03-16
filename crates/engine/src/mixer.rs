@@ -626,7 +626,7 @@ impl Mixer {
                             let visual_offset = (global_sample - clip.start_sample) as f64;
                             // Map to source buffer position using playback rate
                             // For looped clips, wrap the source position using modulo
-                            let mut source_pos = visual_offset * rate as f64;
+                            let mut source_pos = visual_offset * rate as f64 + clip.content_offset as f64;
                             if clip.loop_count > 1 && buf_len > 0 {
                                 source_pos = source_pos % buf_len as f64;
                             }
@@ -749,7 +749,7 @@ impl Mixer {
 
                 let pos_in_win = visual_offset - win_output_start;
                 let source_start = w * hop_input;
-                let mut source_idx = source_start + pos_in_win;
+                let mut source_idx = source_start + pos_in_win + clip.content_offset as usize;
 
                 // For looped clips, wrap source index using modulo
                 if clip.loop_count > 1 && !buf.is_empty() {

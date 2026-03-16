@@ -2381,7 +2381,7 @@ impl DawApp {
                             if dst >= total_len {
                                 break;
                             }
-                            let src_pos = i as f64 * rate as f64;
+                            let src_pos = i as f64 * rate as f64 + clip.content_offset as f64;
                             let src_idx = src_pos.floor() as usize;
                             if src_idx >= buf.len() {
                                 break;
