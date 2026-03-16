@@ -717,9 +717,20 @@ impl Track {
 
 pub type ClipBufferId = Uuid;
 
+/// Predefined palette of 12 evenly-spaced hues for new tracks.
+/// Each call cycles through the palette using a global counter so
+/// consecutive tracks always get distinct, predictable colors.
 fn random_track_color() -> [u8; 3] {
-    let hue = (uuid::Uuid::new_v4().as_u128() % 360) as f32;
-    hsv_to_rgb(hue, 0.6, 0.85)
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static PALETTE_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+    const PALETTE_HUES: [f32; 12] = [
+        0.0, 30.0, 60.0, 90.0, 120.0, 150.0,
+        180.0, 210.0, 240.0, 270.0, 300.0, 330.0,
+    ];
+
+    let idx = PALETTE_INDEX.fetch_add(1, Ordering::Relaxed) % PALETTE_HUES.len();
+    hsv_to_rgb(PALETTE_HUES[idx], 0.6, 0.85)
 }
 
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {

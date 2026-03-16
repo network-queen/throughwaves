@@ -458,6 +458,24 @@ pub struct DawApp {
     pub last_layout_save: std::time::Instant,
     /// Insert Silence dialog state
     pub insert_silence_input: Option<InsertSilenceInput>,
+    // ── Metronome settings ──
+    /// Metronome volume (0.0 - 1.0)
+    pub metronome_volume: f32,
+    /// Accent the first beat of each bar
+    pub metronome_accent_first_beat: bool,
+    /// Count-in bars (1, 2, or 4)
+    pub metronome_count_in_bars: u32,
+    /// Whether the metronome settings popup is open
+    pub show_metronome_settings: bool,
+    /// Ruler hover preview position (sample position where the playhead would go)
+    pub ruler_hover_sample: Option<u64>,
+    /// Global FX bypass — when true, all effects on all tracks are skipped
+    pub global_fx_bypass: bool,
+    /// Saved per-slot enabled states before global bypass was engaged
+    /// (track_id, slot_id) -> original enabled state
+    pub pre_bypass_states: HashMap<(Uuid, Uuid), bool>,
+    /// Snap-to-clip-edge: the sample position of the nearest clip edge snap (for visual indicator)
+    pub clip_edge_snap_sample: Option<u64>,
 }
 
 /// State for slip-editing: shifting audio content within clip boundaries.
@@ -1129,6 +1147,14 @@ impl DawApp {
             dragging_separator: None,
             last_layout_save: std::time::Instant::now(),
             insert_silence_input: None,
+            metronome_volume: 0.8,
+            metronome_accent_first_beat: true,
+            metronome_count_in_bars: 1,
+            show_metronome_settings: false,
+            ruler_hover_sample: None,
+            global_fx_bypass: false,
+            pre_bypass_states: HashMap::new(),
+            clip_edge_snap_sample: None,
         };
 
         // Apply persisted layout
@@ -1816,10 +1842,33 @@ impl DawApp {
                 self.push_undo("Duplicate track");
                 let mut new_track = self.project.tracks[track_idx].clone();
                 new_track.id = Uuid::new_v4();
-                new_track.name = format!("{} (copy)", new_track.name);
+                // Append "(copy)" only if not already a copy
+                if new_track.name.ends_with("(copy)") {
+                    new_track.name = format!("{} 2", new_track.name);
+                } else {
+                    new_track.name = format!("{} (copy)", new_track.name);
+                }
+                // Regenerate clip IDs so they are unique, but keep buffer_id references
+                // shared so audio data is not duplicated in memory.
+                for clip in new_track.clips.iter_mut() {
+                    clip.id = Uuid::new_v4();
+                    // ClipSource::AudioBuffer { buffer_id } stays the same — shared reference
+                }
+                // Regenerate effect slot IDs
+                for slot in new_track.effects.iter_mut() {
+                    slot.id = Uuid::new_v4();
+                }
+                if let Some(ref mut inst) = new_track.instrument_plugin {
+                    inst.id = Uuid::new_v4();
+                }
+                // Session clips also get new IDs
+                for sc in new_track.session_clips.iter_mut().flatten() {
+                    sc.clip_id = Uuid::new_v4();
+                }
                 self.project.tracks.insert(track_idx + 1, new_track);
                 self.selected_track = Some(track_idx + 1);
                 self.sync_project();
+                self.set_status("Track duplicated with all content");
             }
         }
     }
@@ -3923,11 +3972,12 @@ impl eframe::App for DawApp {
                 if i.modifiers.shift { actions.push("redo".into()); }
                 else { actions.push("undo".into()); }
             }
-            if i.modifiers.command && i.key_pressed(egui::Key::S) { actions.push("save".into()); }
+            if i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::S) { actions.push("save".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::D) { actions.push("duplicate".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::A) { actions.push("select_all_clips_all_tracks".into()); }
             else if i.modifiers.command && i.key_pressed(egui::Key::A) { actions.push("select_all_clips".into()); }
-            if i.modifiers.command && i.key_pressed(egui::Key::E) { actions.push("effects".into()); }
+            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::E) { actions.push("toggle_global_fx_bypass".into()); }
+            else if i.modifiers.command && i.key_pressed(egui::Key::E) { actions.push("effects".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::I) { actions.push("project_info".into()); }
             else if i.modifiers.command && i.key_pressed(egui::Key::I) { actions.push("import".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::P) { actions.push("audio_pool".into()); }
@@ -3936,10 +3986,17 @@ impl eframe::App for DawApp {
             else if i.modifiers.command && i.key_pressed(egui::Key::B) { actions.push("bounce".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::C) { actions.push("copy".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::V) { actions.push("paste".into()); }
-            if i.modifiers.command && i.key_pressed(egui::Key::M) { actions.push("add_marker".into()); }
+            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::M) { actions.push("toggle_mute_selected".into()); }
+            else if i.modifiers.command && i.key_pressed(egui::Key::M) { actions.push("add_marker".into()); }
+            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::S) { actions.push("toggle_solo_selected".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::F) { actions.push("fx_browser".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::J) { actions.push("consolidate".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::Comma) { actions.push("preferences".into()); }
+            // Zoom presets: Cmd+1/2/3/4
+            if i.modifiers.command && i.key_pressed(egui::Key::Num1) { actions.push("zoom_fit_all".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::Num2) { actions.push("zoom_to_selection".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::Num3) { actions.push("zoom_one_bar".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::Num4) { actions.push("zoom_max".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::N) { actions.push("new_session".into()); }
         });
 
@@ -4066,6 +4123,49 @@ impl eframe::App for DawApp {
                         self.set_status("Loop OFF");
                     }
                 }
+                "toggle_global_fx_bypass" => {
+                    self.global_fx_bypass = !self.global_fx_bypass;
+                    if self.global_fx_bypass {
+                        // Save all current enabled states and disable everything
+                        self.pre_bypass_states.clear();
+                        for track in &self.project.tracks {
+                            for slot in &track.effects {
+                                self.pre_bypass_states.insert((track.id, slot.id), slot.enabled);
+                            }
+                            // Also save master effects
+                        }
+                        for slot in &self.project.master_effects {
+                            self.pre_bypass_states.insert((Uuid::nil(), slot.id), slot.enabled);
+                        }
+                        // Disable all effects
+                        for track in &mut self.project.tracks {
+                            for slot in &mut track.effects {
+                                slot.enabled = false;
+                            }
+                        }
+                        for slot in &mut self.project.master_effects {
+                            slot.enabled = false;
+                        }
+                        self.set_status("Global FX Bypass: ON");
+                    } else {
+                        // Restore original enabled states
+                        for track in &mut self.project.tracks {
+                            for slot in &mut track.effects {
+                                if let Some(&original) = self.pre_bypass_states.get(&(track.id, slot.id)) {
+                                    slot.enabled = original;
+                                }
+                            }
+                        }
+                        for slot in &mut self.project.master_effects {
+                            if let Some(&original) = self.pre_bypass_states.get(&(Uuid::nil(), slot.id)) {
+                                slot.enabled = original;
+                            }
+                        }
+                        self.pre_bypass_states.clear();
+                        self.set_status("Global FX Bypass: OFF");
+                    }
+                    self.sync_project();
+                }
                 "effects" => {
                     self.show_effects = !self.show_effects;
                 }
@@ -4191,6 +4291,58 @@ impl eframe::App for DawApp {
                 }
                 "zoom_fit" => {
                     self.zoom_to_selection_or_fit();
+                }
+                "zoom_fit_all" => {
+                    self.zoom_to_fit();
+                    self.set_status("Zoom: fit all content [Cmd+1]");
+                }
+                "zoom_to_selection" => {
+                    self.zoom_to_selection_or_fit();
+                    self.set_status("Zoom: selection [Cmd+2]");
+                }
+                "zoom_one_bar" => {
+                    let sr = self.sample_rate() as f64;
+                    let beats_per_bar = self.project.time_signature.numerator as f64;
+                    let bar_duration_sec = beats_per_bar * 60.0 / self.project.tempo.bpm as f64;
+                    let pps_base = 100.0_f32;
+                    let target_zoom = 800.0 / (bar_duration_sec as f32 * pps_base);
+                    self.zoom = target_zoom.clamp(0.1, 20.0);
+                    let pos = self.position_samples();
+                    let pos_sec = pos as f64 / sr;
+                    let pps = pps_base * self.zoom;
+                    self.scroll_x = (pos_sec as f32 * pps - 400.0).max(0.0);
+                    self.set_status("Zoom: 1 bar per screen [Cmd+3]");
+                }
+                "zoom_max" => {
+                    self.zoom = 20.0;
+                    let sr = self.sample_rate() as f64;
+                    let pos = self.position_samples();
+                    let pos_sec = pos as f64 / sr;
+                    let pps = 100.0 * self.zoom;
+                    self.scroll_x = (pos_sec as f32 * pps - 400.0).max(0.0);
+                    self.set_status("Zoom: maximum (sample level) [Cmd+4]");
+                }
+                "toggle_mute_selected" => {
+                    if let Some(ti) = self.selected_track {
+                        if ti < self.project.tracks.len() {
+                            self.push_undo("Toggle mute");
+                            self.project.tracks[ti].muted = !self.project.tracks[ti].muted;
+                            let state = if self.project.tracks[ti].muted { "muted" } else { "unmuted" };
+                            self.set_status(&format!("{} {}", self.project.tracks[ti].name, state));
+                            self.sync_project();
+                        }
+                    }
+                }
+                "toggle_solo_selected" => {
+                    if let Some(ti) = self.selected_track {
+                        if ti < self.project.tracks.len() {
+                            self.push_undo("Toggle solo");
+                            self.project.tracks[ti].solo = !self.project.tracks[ti].solo;
+                            let state = if self.project.tracks[ti].solo { "soloed" } else { "unsoloed" };
+                            self.set_status(&format!("{} {}", self.project.tracks[ti].name, state));
+                            self.sync_project();
+                        }
+                    }
                 }
                 "focus_playhead" => {
                     self.focus_playhead();
@@ -4826,6 +4978,9 @@ impl eframe::App for DawApp {
                 }
                 if self.show_automation {
                     status_pill(ui, "AUTO", egui::Color32::from_rgb(200, 170, 60), false);
+                }
+                if self.global_fx_bypass {
+                    status_pill(ui, "FX OFF", egui::Color32::from_rgb(255, 80, 80), true);
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

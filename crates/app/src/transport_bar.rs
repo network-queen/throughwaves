@@ -115,12 +115,75 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         // === TOGGLE STRIP — rounded pill buttons ===
         let ts = egui::vec2(28.0, 22.0);
 
-        toggle_pill(ui, "M", ts, app.metronome_enabled,
-            egui::Color32::from_rgb(200, 160, 30),
-            "Metronome [M]", || {
-            app.metronome_enabled = !app.metronome_enabled;
-            app.send_command(EngineCommand::SetMetronome(app.metronome_enabled));
-        });
+        // Metronome toggle with right-click settings popup
+        {
+            let active = app.metronome_enabled;
+            let accent = egui::Color32::from_rgb(200, 160, 30);
+            let bg = if active { accent.gamma_multiply(0.25) } else { egui::Color32::from_rgb(34, 35, 42) };
+            let tc = if active { accent } else { egui::Color32::from_rgb(140, 138, 132) };
+            let resp = ui.add_sized(ts, egui::Button::new(
+                egui::RichText::new("M").size(11.0).strong().color(tc)
+            ).fill(bg).corner_radius(11.0));
+            if resp.on_hover_text("Metronome [M]\nRight-click for settings").clicked() {
+                app.metronome_enabled = !app.metronome_enabled;
+                app.send_command(EngineCommand::SetMetronome(app.metronome_enabled));
+            }
+            if resp.secondary_clicked() {
+                app.show_metronome_settings = true;
+            }
+        }
+
+        // Metronome settings popup window
+        if app.show_metronome_settings {
+            let mut open = app.show_metronome_settings;
+            egui::Window::new("Metronome Settings")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(220.0)
+                .show(ui.ctx(), |ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+
+                    // Volume slider
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Volume").size(11.0));
+                        let mut vol = app.metronome_volume;
+                        if ui.add(egui::Slider::new(&mut vol, 0.0..=1.0)
+                            .show_value(false)
+                            .trailing_fill(true)).changed() {
+                            app.metronome_volume = vol;
+                        }
+                        ui.label(egui::RichText::new(format!("{:.0}%", app.metronome_volume * 100.0))
+                            .size(10.0).color(egui::Color32::from_rgb(140, 140, 150)));
+                    });
+
+                    // Accent first beat
+                    ui.checkbox(&mut app.metronome_accent_first_beat, "Accent first beat");
+
+                    // Count-in bars
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Count-in bars").size(11.0));
+                        for bars in [1u32, 2, 4] {
+                            let selected = app.metronome_count_in_bars == bars;
+                            let btn_color = if selected {
+                                egui::Color32::from_rgb(200, 160, 30)
+                            } else {
+                                egui::Color32::from_rgb(140, 140, 150)
+                            };
+                            if ui.add(egui::Button::new(
+                                egui::RichText::new(format!("{bars}")).color(btn_color).size(11.0)
+                            ).fill(if selected {
+                                egui::Color32::from_rgb(50, 45, 20)
+                            } else {
+                                egui::Color32::from_rgb(34, 35, 42)
+                            }).corner_radius(6.0).min_size(egui::vec2(28.0, 20.0))).clicked() {
+                                app.metronome_count_in_bars = bars;
+                            }
+                        }
+                    });
+                });
+            app.show_metronome_settings = open;
+        }
 
         toggle_pill(ui, "L", ts, app.loop_enabled,
             egui::Color32::from_rgb(80, 160, 220),

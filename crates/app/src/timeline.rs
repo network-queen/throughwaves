@@ -582,7 +582,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 if s_resp.hovered() && !s_active {
                                     ui.painter().circle_stroke(s_resp.rect.center(), 10.5, egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 200, 80).gamma_multiply(0.4)));
                                 }
-                                if s_resp.on_hover_text("Solo \u{2014} hear only this track").clicked() { track_actions.push(TrackAction::ToggleSolo(i)); }
+                                if s_resp.on_hover_text("Solo \u{2014} hear only this track\nCtrl+click for exclusive solo").clicked() {
+                                    let modifiers = ui.input(|i| i.modifiers);
+                                    if modifiers.ctrl {
+                                        track_actions.push(TrackAction::ToggleSoloExclusive(i));
+                                    } else {
+                                        track_actions.push(TrackAction::ToggleSolo(i));
+                                    }
+                                }
 
                                 // Record arm — red when active with subtle glow
                                 let r_active = track.armed;
@@ -659,6 +666,36 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         .color(egui::Color32::from_rgb(110, 110, 120)),
                                 );
                             });
+
+                            // Row 4: Tiny horizontal level meter (2px tall)
+                            {
+                                let track_id = track.id;
+                                let (left, right) = app.levels()
+                                    .map(|l| l.get_track_level(&track_id))
+                                    .unwrap_or((0.0, 0.0));
+                                let peak = left.max(right).clamp(0.0, 1.5);
+                                let meter_width = HEADER_WIDTH - 16.0;
+                                let (_, meter_rect) = ui.allocate_space(egui::vec2(meter_width, 2.0));
+                                // Background
+                                ui.painter().rect_filled(meter_rect, 1.0, egui::Color32::from_rgb(20, 20, 26));
+                                // Filled portion with green-yellow-red gradient
+                                if peak > 0.001 {
+                                    let fill_frac = (peak / 1.5).min(1.0);
+                                    let fill_w = meter_width * fill_frac;
+                                    let fill_rect = egui::Rect::from_min_size(
+                                        meter_rect.min,
+                                        egui::vec2(fill_w, 2.0),
+                                    );
+                                    let color = if peak > 1.0 {
+                                        egui::Color32::from_rgb(255, 60, 60) // red (clipping)
+                                    } else if peak > 0.7 {
+                                        egui::Color32::from_rgb(255, 200, 40) // yellow
+                                    } else {
+                                        egui::Color32::from_rgb(80, 200, 80) // green
+                                    };
+                                    ui.painter().rect_filled(fill_rect, 1.0, color);
+                                }
+                            }
                         });
                     });
 
@@ -679,6 +716,20 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     TrackAction::ToggleSolo(i) => {
                         app.push_undo("Toggle solo");
                         app.project.tracks[i].solo = !app.project.tracks[i].solo;
+                        app.sync_project();
+                    }
+                    TrackAction::ToggleSoloExclusive(i) => {
+                        app.push_undo("Exclusive solo");
+                        let was_solo = app.project.tracks[i].solo;
+                        // Un-solo all tracks first
+                        for track in app.project.tracks.iter_mut() {
+                            track.solo = false;
+                        }
+                        // If this track was already the only soloed one, leave all un-soloed
+                        // Otherwise, solo just this track
+                        if !was_solo {
+                            app.project.tracks[i].solo = true;
+                        }
                         app.sync_project();
                     }
                     TrackAction::ToggleArm(i) => {
@@ -4086,6 +4137,8 @@ fn draw_minimap(
 enum TrackAction {
     ToggleMute(usize),
     ToggleSolo(usize),
+    /// Exclusive solo: un-solos all other tracks, then solos this one
+    ToggleSoloExclusive(usize),
     ToggleArm(usize),
     SetVolume(usize, f32),
     Select(usize),
