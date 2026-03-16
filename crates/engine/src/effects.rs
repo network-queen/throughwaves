@@ -326,16 +326,16 @@ impl EffectProcessor {
             return;
         }
 
-        // Pre-compute coefficients for all active bands
-        let coeffs: Vec<BiquadCoeffs> = bands[..num_bands]
-            .iter()
-            .map(|b| BiquadCoeffs::from_band(b, sample_rate as f32))
-            .collect();
+        // Pre-compute coefficients for all active bands (stack-allocated, no heap alloc)
+        let mut coeffs = [BiquadCoeffs { b0: 0.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0 }; MAX_EQ_BANDS];
+        for (i, band) in bands[..num_bands].iter().enumerate() {
+            coeffs[i] = BiquadCoeffs::from_band(band, sample_rate as f32);
+        }
 
         // Process each sample through cascaded biquads
         for s in samples.iter_mut() {
             let mut x = *s;
-            for (bi, c) in coeffs.iter().enumerate() {
+            for (bi, c) in coeffs[..num_bands].iter().enumerate() {
                 let state = &mut self.peq_states[bi];
                 let y = c.b0 * x + c.b1 * state.x[0] + c.b2 * state.x[1]
                     - c.a1 * state.y[0] - c.a2 * state.y[1];

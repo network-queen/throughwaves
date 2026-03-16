@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use parking_lot::Mutex;
-use midir::{MidiInput, MidiInputConnection, MidiInputPort};
+use midir::{MidiInput, MidiInputConnection};
 
 /// A captured MIDI event with timing.
 #[derive(Debug, Clone)]

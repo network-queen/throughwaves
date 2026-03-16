@@ -378,12 +378,14 @@ struct Vst3ParamCache {
     plugin: jamhub_engine::vst3_host::Vst3Plugin,
 }
 
-static mut VST3_PARAM_CACHES: Option<std::collections::HashMap<uuid::Uuid, Vst3ParamCache>> = None;
+thread_local! {
+    static VST3_PARAM_CACHES: std::cell::RefCell<std::collections::HashMap<uuid::Uuid, Vst3ParamCache>>
+        = std::cell::RefCell::new(std::collections::HashMap::new());
+}
 
-fn get_param_caches() -> &'static mut std::collections::HashMap<uuid::Uuid, Vst3ParamCache> {
-    unsafe {
-        VST3_PARAM_CACHES.get_or_insert_with(std::collections::HashMap::new)
-    }
+/// Access the VST3 parameter caches safely (UI thread only).
+fn with_param_caches<R>(f: impl FnOnce(&mut std::collections::HashMap<uuid::Uuid, Vst3ParamCache>) -> R) -> R {
+    VST3_PARAM_CACHES.with(|c| f(&mut *c.borrow_mut()))
 }
 
 fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) {
@@ -421,8 +423,8 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
                 None
             };
 
-            let caches = get_param_caches();
-            if !caches.contains_key(&slot_id) {
+            let needs_load = with_param_caches(|caches| !caches.contains_key(&slot_id));
+            if needs_load {
                 if let Some(ref path) = vst_path {
                     let plugin = jamhub_engine::vst3_host::Vst3Plugin::load(
                         &std::path::PathBuf::from(path),
@@ -452,7 +454,9 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
                             rx,
                         });
                     }
-                    caches.insert(slot_id, Vst3ParamCache { params, plugin });
+                    with_param_caches(|caches| {
+                        caches.insert(slot_id, Vst3ParamCache { params, plugin });
+                    });
                 }
             }
 
@@ -462,7 +466,7 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
                 .default_width(300.0)
                 .resizable(true)
                 .show(ctx, |ui| {
-                    let caches = get_param_caches();
+                    with_param_caches(|caches| {
                     if let Some(cache) = caches.get_mut(&slot_id) {
                         if cache.params.is_empty() {
                             ui.label("No parameters available");
@@ -481,6 +485,7 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
                             });
                         }
                     }
+                    }); // end with_param_caches
                 });
         } else {
             // Built-in effect parameter UI
@@ -502,7 +507,7 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
 
         if !is_open {
             app.builtin_fx_open.remove(&slot_id);
-            get_param_caches().remove(&slot_id);
+            with_param_caches(|caches| { caches.remove(&slot_id); });
         }
     }
 
@@ -595,8 +600,8 @@ fn show_effect_controls(
     }
 }
 
-/// Thread-local to collect MIDI learn requests from within effect control rendering.
-/// Processed after the effects panel rendering is complete.
+// Thread-local to collect MIDI learn requests from within effect control rendering.
+// Processed after the effects panel rendering is complete.
 thread_local! {
     static MIDI_LEARN_REQUESTS: std::cell::RefCell<Vec<MidiMappingTarget>> =
         std::cell::RefCell::new(Vec::new());

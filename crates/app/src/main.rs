@@ -1450,7 +1450,6 @@ impl DawApp {
             });
 
             // Create a clip on EACH armed track with the same shared buffer
-            let mut total_takes = 0u32;
             for &track_idx in &armed_tracks {
                 if track_idx >= self.project.tracks.len() {
                     continue;
@@ -1499,7 +1498,6 @@ impl DawApp {
                 }
 
                 self.project.tracks[track_idx].clips.push(clip);
-                total_takes += 1;
             }
 
             self.sync_project();
@@ -3311,7 +3309,10 @@ impl DawApp {
             self.set_status("Consolidate: all clips must be on the same track");
             return;
         }
-        let ti = *track_indices.iter().next().unwrap();
+        let ti = match track_indices.iter().next() {
+            Some(&t) => t,
+            None => return,
+        };
         if ti >= self.project.tracks.len() {
             return;
         }
@@ -3804,7 +3805,7 @@ impl eframe::App for DawApp {
         }
 
         // Keyboard shortcuts — skip when a text field has focus
-        let text_has_focus = ctx.memory(|m| m.focused().is_some())
+        let _text_has_focus = ctx.memory(|m| m.focused().is_some())
             && ctx.input(|i| !i.raw.events.is_empty());
         // More reliable: check if any text edit is active
         let any_text_edit = self.renaming_track.is_some()

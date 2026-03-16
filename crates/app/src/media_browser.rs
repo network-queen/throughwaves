@@ -1016,6 +1016,7 @@ fn progress_val(preview: &PreviewState) -> f32 {
 // ── Drag-to-timeline handling ───────────────────────────────────────────────
 /// Call this from the timeline drawing code to handle media browser drag-and-drop.
 /// Returns Some((track_idx, start_sample, path)) if a drop occurred.
+#[allow(dead_code)]
 pub fn handle_drag_drop(
     app: &mut DawApp,
     ui: &egui::Ui,
@@ -1087,6 +1088,7 @@ pub fn handle_drag_drop(
 
 /// Import a file at a specific position on a specific track.
 /// If track_idx >= project.tracks.len(), creates a new audio track.
+#[allow(dead_code)]
 pub fn import_at_position(app: &mut DawApp, track_idx: usize, start_sample: u64, path: &Path) {
     // Create new track if needed
     if track_idx >= app.project.tracks.len() {

@@ -54,7 +54,12 @@ impl PluginWindowManager {
     }
 
     /// Hide a window when removing the effect from the chain.
-    /// Window and plugin are kept alive to avoid JUCE deadlocks.
+    ///
+    /// INTENTIONAL MEMORY LEAK: The window and its Vst3Plugin are kept alive
+    /// (hidden) rather than destroyed. Dropping Vst3Plugin on the main thread
+    /// deadlocks JUCE-based plugins because their internal threads need the
+    /// run loop. The window stays hidden and the plugin stays loaded until
+    /// the application exits, at which point the OS reclaims all resources.
     pub fn destroy(&mut self, slot_id: &Uuid) {
         if let Some(win) = self.windows.get(slot_id) {
             win.hide();
@@ -148,10 +153,19 @@ mod macos {
     use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
     use std::ffi::c_void;
 
+    /// A native macOS window hosting a VST3 plugin editor view.
+    ///
+    /// INTENTIONAL MEMORY LEAK: The IPlugView pointer (`_plug_view`) is stored here
+    /// to prevent its COM ref-count from being released while the window exists.
+    /// On drop, we only hide the window — we do NOT call `removed()` or `release()`
+    /// on the IPlugView because JUCE-based plugins crash during their internal
+    /// `_NSWindowTransformAnimation` teardown. The OS reclaims all resources on
+    /// process exit. This is the standard workaround for JUCE VST3 hosts.
     pub struct MacOsPluginWindow {
         window: Retained<NSWindow>,
         _view: Retained<NSView>,
-        plug_view: *mut vst3::Steinberg::IPlugView,
+        /// Kept alive to prevent use-after-free — intentionally never released (see doc above).
+        _plug_view: *mut vst3::Steinberg::IPlugView,
     }
 
     unsafe impl Send for MacOsPluginWindow {}
@@ -218,7 +232,7 @@ mod macos {
                 Some(Self {
                     window,
                     _view: view,
-                    plug_view,
+                    _plug_view: plug_view,
                 })
             }
         }

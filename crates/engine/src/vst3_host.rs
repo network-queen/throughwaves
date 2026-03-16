@@ -120,13 +120,20 @@ pub struct Vst3Plugin {
     /// Set to true if the plugin panicked during process() — disables further processing.
     pub crashed: bool,
     _lib: Option<libloading::Library>,
+    #[allow(dead_code)]
     component: Option<*mut IComponent>,
     processor: Option<*mut IAudioProcessor>,
     controller: Option<*mut IEditController>,
     sample_rate: f64,
+    #[allow(dead_code)]
     block_size: i32,
     /// Receives parameter changes from the editor UI's IComponentHandler
     pub param_change_rx: Option<ParamChangeRx>,
+    /// Pre-allocated buffers for audio processing (avoids per-call heap allocations)
+    proc_in_left: Vec<f32>,
+    proc_in_right: Vec<f32>,
+    proc_out_left: Vec<f32>,
+    proc_out_right: Vec<f32>,
 }
 
 unsafe impl Send for Vst3Plugin {}
@@ -379,6 +386,7 @@ impl Vst3Plugin {
             println!("VST3: '{found_name}' — editor UI likely available (has controller)");
         }
 
+        let buf_size = block_size as usize;
         Self {
             name: found_name,
             path: path.to_path_buf(),
@@ -396,6 +404,10 @@ impl Vst3Plugin {
             sample_rate,
             block_size,
             param_change_rx,
+            proc_in_left: vec![0.0; buf_size],
+            proc_in_right: vec![0.0; buf_size],
+            proc_out_left: vec![0.0; buf_size],
+            proc_out_right: vec![0.0; buf_size],
         }
     }
 
@@ -410,6 +422,10 @@ impl Vst3Plugin {
             _lib: None, component: None, processor: None, controller: None,
             sample_rate: 44100.0, block_size: 256,
             param_change_rx: None,
+            proc_in_left: Vec::new(),
+            proc_in_right: Vec::new(),
+            proc_out_left: Vec::new(),
+            proc_out_right: Vec::new(),
         }
     }
 
@@ -447,15 +463,23 @@ impl Vst3Plugin {
         let n = samples.len();
         if n == 0 { return; }
 
-        // Duplicate mono to stereo for input
-        let mut in_left = samples.to_vec();
-        let mut in_right = samples.to_vec();
-        // Separate output buffers
-        let mut out_left = vec![0.0f32; n];
-        let mut out_right = vec![0.0f32; n];
+        // Resize pre-allocated buffers if needed (only reallocates when block size grows)
+        if self.proc_in_left.len() < n {
+            self.proc_in_left.resize(n, 0.0);
+            self.proc_in_right.resize(n, 0.0);
+            self.proc_out_left.resize(n, 0.0);
+            self.proc_out_right.resize(n, 0.0);
+        }
 
-        let mut in_ptrs = [in_left.as_mut_ptr(), in_right.as_mut_ptr()];
-        let mut out_ptrs = [out_left.as_mut_ptr(), out_right.as_mut_ptr()];
+        // Duplicate mono to stereo for input (copy into pre-allocated buffers)
+        self.proc_in_left[..n].copy_from_slice(samples);
+        self.proc_in_right[..n].copy_from_slice(samples);
+        // Zero output buffers
+        self.proc_out_left[..n].fill(0.0);
+        self.proc_out_right[..n].fill(0.0);
+
+        let mut in_ptrs = [self.proc_in_left.as_mut_ptr(), self.proc_in_right.as_mut_ptr()];
+        let mut out_ptrs = [self.proc_out_left.as_mut_ptr(), self.proc_out_right.as_mut_ptr()];
 
         let mut input_bus = AudioBusBuffers {
             numChannels: 2,
@@ -500,6 +524,14 @@ impl Vst3Plugin {
 
         // Wrap the VST3 process call in catch_unwind to prevent plugin panics
         // from crashing the entire application.
+        //
+        // SAFETY of AssertUnwindSafe: The FFI call into the plugin cannot observe
+        // Rust unwind state. If the plugin triggers a Rust panic (e.g. via a
+        // nih-plug callback), catch_unwind captures it here. After a panic we
+        // mark the plugin as crashed and never call process() again, so no
+        // partially-mutated state is re-entered. The `data` struct and its
+        // backing buffers (`in_left`, `in_right`, `out_left`, `out_right`) are
+        // stack-local and will be dropped normally after this block.
         let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             unsafe { ((*(*processor).vtbl).process)(processor, &mut data) }
         }));
@@ -508,11 +540,13 @@ impl Vst3Plugin {
             Ok(result) => {
                 if result == 0 {
                     // Check if output has any signal
-                    let has_output = out_left.iter().any(|s| *s != 0.0) || out_right.iter().any(|s| *s != 0.0);
+                    let out_l = &self.proc_out_left[..n];
+                    let out_r = &self.proc_out_right[..n];
+                    let has_output = out_l.iter().any(|s| *s != 0.0) || out_r.iter().any(|s| *s != 0.0);
                     if has_output {
                         // Mix stereo output back to mono
                         for i in 0..n {
-                            samples[i] = (out_left[i] + out_right[i]) * 0.5;
+                            samples[i] = (out_l[i] + out_r[i]) * 0.5;
                         }
                     }
                     // If output is all zeros, keep original samples (passthrough)

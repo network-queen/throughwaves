@@ -210,7 +210,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                 }
 
                 // Collect unique vendors from scanned plugins
-                let mut vendors: Vec<String> = app.fx_browser.plugins.iter()
+                let vendors: Vec<String> = app.fx_browser.plugins.iter()
                     .map(|p| p.vendor.clone())
                     .collect::<std::collections::BTreeSet<_>>()
                     .into_iter()

@@ -98,6 +98,7 @@ const NOTE_NAMES: &[&str] = &[
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
 
+#[allow(dead_code)]
 fn note_name_with_octave(pitch: u8) -> String {
     let name = NOTE_NAMES[(pitch % 12) as usize];
     let octave = (pitch / 12) as i32 - 1;
@@ -728,13 +729,14 @@ fn show_note_grid(app: &mut DawApp, ui: &mut egui::Ui, track_idx: usize) {
                     }
                     app.piano_roll_state.selected_notes.insert(idx);
 
-                    let nr = note_rects.iter().find(|n| n.idx == idx).unwrap();
-                    app.piano_roll_state.drag_mode = Some(DragMode::Moving {
-                        anchor_idx: idx,
-                        start_tick: nr.start_tick,
-                        start_pitch: nr.pitch,
-                    });
-                    app.push_undo("Move MIDI notes");
+                    if let Some(nr) = note_rects.iter().find(|n| n.idx == idx) {
+                        app.piano_roll_state.drag_mode = Some(DragMode::Moving {
+                            anchor_idx: idx,
+                            start_tick: nr.start_tick,
+                            start_pitch: nr.pitch,
+                        });
+                        app.push_undo("Move MIDI notes");
+                    }
                 } else {
                     // Create new note
                     let (tick, pitch) = pos_to_grid(pos);
@@ -1031,7 +1033,7 @@ fn show_velocity_lane(
                             + n.start_tick as f32 * pixels_per_tick;
                         let dist = (pos.x - nx).abs();
                         if dist < 20.0 {
-                            if best.is_none() || dist < best.unwrap().1 {
+                            if best.map_or(true, |(_, d)| dist < d) {
                                 best = Some((i, dist));
                             }
                         }

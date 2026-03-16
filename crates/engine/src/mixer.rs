@@ -99,6 +99,10 @@ pub struct Mixer {
     pdc_delays: HashMap<Uuid, DelayBuffer>,
     /// Shared PDC information for the UI.
     pub pdc_info: PdcInfo,
+    /// Pre-allocated reusable buffer for master output (avoids per-block allocation).
+    output_buf: Vec<f32>,
+    /// Pre-allocated reusable mono buffer for master effects downmix.
+    master_mono_buf: Vec<f32>,
 }
 
 impl Mixer {
@@ -111,6 +115,8 @@ impl Mixer {
             master_processor: EffectProcessor::new(sample_rate),
             pdc_delays: HashMap::new(),
             pdc_info: PdcInfo::new(),
+            output_buf: Vec::new(),
+            master_mono_buf: Vec::new(),
         }
     }
 
@@ -209,7 +215,10 @@ impl Mixer {
         audio_buffers: &HashMap<ClipBufferId, Vec<f32>>,
     ) -> Vec<f32> {
         let num_samples = block_size * self.channels as usize;
-        let mut output = vec![0.0f32; num_samples];
+        // Reuse pre-allocated output buffer (only reallocates if block size grows)
+        self.output_buf.resize(num_samples, 0.0);
+        self.output_buf.fill(0.0);
+        let mut output = std::mem::take(&mut self.output_buf);
 
         // Recalculate PDC compensation values
         self.update_pdc(project);
@@ -416,7 +425,10 @@ impl Mixer {
             }
         }
 
-        output
+        // Return the buffer, stashing the allocation back for reuse next block
+        let result = output.clone();
+        self.output_buf = output;
+        result
     }
 
     /// Apply the master bus effect chain to interleaved output samples.
@@ -433,8 +445,9 @@ impl Mixer {
         let channels = self.channels as usize;
         let frames = output.len() / channels.max(1);
 
-        // Downmix to mono for effect processing
-        let mut mono = vec![0.0f32; frames];
+        // Downmix to mono for effect processing (reuse pre-allocated buffer)
+        self.master_mono_buf.resize(frames, 0.0);
+        let mut mono = std::mem::take(&mut self.master_mono_buf);
         for i in 0..frames {
             let mut sum = 0.0f32;
             for ch in 0..channels {
@@ -466,6 +479,8 @@ impl Mixer {
                 output[i * channels + ch] = mono[i];
             }
         }
+        // Stash the buffer back for reuse
+        self.master_mono_buf = mono;
     }
 
     /// Render the raw clip audio for a track (pre-effects) into a mono buffer.

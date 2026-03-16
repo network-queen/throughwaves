@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::thread;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Stream;

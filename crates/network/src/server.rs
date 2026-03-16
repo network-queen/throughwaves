@@ -9,7 +9,7 @@ use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
-use crate::message::{PeerInfo, SessionMessage};
+use crate::message::SessionMessage;
 use crate::session::Session;
 
 type Sessions = Arc<RwLock<HashMap<String, Arc<Session>>>>;
