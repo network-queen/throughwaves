@@ -114,6 +114,14 @@ impl Mixer {
         }
     }
 
+    /// Return the set of VST3 effect slot IDs whose plugins have crashed.
+    pub fn crashed_plugin_ids(&self) -> std::collections::HashSet<Uuid> {
+        self.vst_instances.iter()
+            .filter(|(_, vst)| vst.crashed)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
     /// Load a VST3 plugin instance for a given effect slot.
     pub fn load_vst3(&mut self, slot_id: Uuid, path: &PathBuf) {
         println!("Mixer: loading VST3 for slot {slot_id} from {}", path.display());
@@ -224,6 +232,17 @@ impl Mixer {
                 continue;
             }
             if any_solo && !track.solo {
+                continue;
+            }
+
+            // Skip tracks where no clips overlap the current block
+            let block_end = position_samples + block_size as u64;
+            let has_overlapping_clip = track.clips.iter().any(|clip| {
+                if clip.muted { return false; }
+                let clip_end = clip.start_sample + clip.visual_duration_samples();
+                clip.start_sample < block_end && clip_end > position_samples
+            });
+            if !has_overlapping_clip {
                 continue;
             }
 
@@ -571,7 +590,13 @@ impl Mixer {
 
         for (aci, &ci) in active_clips.iter().enumerate() {
             let clip = &track.clips[ci];
-            let rate = clip.playback_rate.max(0.01);
+            // Apply transpose to playback rate: rate * 2^(semitones/12)
+            let transpose_factor = if clip.transpose_semitones != 0 {
+                2.0_f32.powf(clip.transpose_semitones as f32 / 12.0)
+            } else {
+                1.0
+            };
+            let rate = (clip.playback_rate * transpose_factor).max(0.01);
             // Visual duration accounts for playback rate
             let visual_duration = clip.visual_duration_samples();
             let clip_visual_end = clip.start_sample + visual_duration;
@@ -630,6 +655,12 @@ impl Mixer {
                             if clip.loop_count > 1 && buf_len > 0 {
                                 source_pos = source_pos % buf_len as f64;
                             }
+
+                            // Non-destructive reverse: read from the end of the buffer backwards
+                            if clip.reversed && buf_len > 0 {
+                                source_pos = (buf_len as f64 - 1.0 - source_pos).max(0.0);
+                            }
+
                             let source_idx = source_pos.floor() as usize;
                             let frac = source_pos - source_pos.floor();
 
@@ -638,8 +669,16 @@ impl Mixer {
                             }
 
                             // Linear interpolation between adjacent samples
-                            let s0 = buf[source_idx];
-                            let s1 = if source_idx + 1 < buf.len() { buf[source_idx + 1] } else { s0 };
+                            // When reversed, interpolate towards the lower index
+                            let (s0, s1) = if clip.reversed {
+                                let a = buf[source_idx];
+                                let b = if source_idx > 0 { buf[source_idx - 1] } else { a };
+                                (a, b)
+                            } else {
+                                let a = buf[source_idx];
+                                let b = if source_idx + 1 < buf.len() { buf[source_idx + 1] } else { a };
+                                (a, b)
+                            };
                             let sample_val = s0 + (s1 - s0) * frac as f32;
 
                             let mut gain = 1.0f32;
@@ -758,6 +797,11 @@ impl Mixer {
 
                 if source_idx >= buf.len() {
                     continue;
+                }
+
+                // Non-destructive reverse for OLA path
+                if clip.reversed && !buf.is_empty() {
+                    source_idx = buf.len() - 1 - source_idx.min(buf.len() - 1);
                 }
 
                 // Hann window for smooth crossfade

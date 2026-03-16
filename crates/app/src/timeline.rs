@@ -381,6 +381,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 }
                             });
                             ui.separator();
+                            if ui.button("Set Color...").clicked() { track_actions.push(TrackAction::OpenColorPalette(i)); ui.close_menu(); }
+                            ui.separator();
+                            if ui.button("Save as Template...").clicked() { track_actions.push(TrackAction::SaveAsTemplate(i)); ui.close_menu(); }
+                            if ui.button("Add from Template...").clicked() { track_actions.push(TrackAction::AddFromTemplate); ui.close_menu(); }
+                            ui.separator();
                             if ui.button("Delete").clicked() { track_actions.push(TrackAction::Delete(i)); ui.close_menu(); }
                         });
 
@@ -753,6 +758,19 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             app.set_status(&format!("Track height: {}", label));
                         }
                     }
+                    TrackAction::SaveAsTemplate(i) => {
+                        let name = app.project.tracks[i].name.clone();
+                        app.template_name_input = Some(crate::templates::TemplateNameInput {
+                            name,
+                            track_idx: i,
+                        });
+                    }
+                    TrackAction::AddFromTemplate => {
+                        app.show_track_template_picker = true;
+                    }
+                    TrackAction::OpenColorPalette(i) => {
+                        app.color_palette_track = Some(i);
+                    }
                 }
             }
 
@@ -1069,10 +1087,30 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             ui.separator();
                         }
                     }
+                    // Non-destructive reverse toggle
+                    let is_reversed = app.project.tracks[ti].clips[ci].reversed;
+                    let rev_label = if is_reversed {
+                        "Reverse (non-destructive) \u{2713}"
+                    } else {
+                        "Reverse (non-destructive)"
+                    };
+                    if ui.button(rev_label).on_hover_text("Toggle non-destructive reverse playback").clicked() {
+                        app.push_undo("Toggle clip reverse");
+                        app.project.tracks[ti].clips[ci].reversed = !is_reversed;
+                        app.sync_project();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Properties...").on_hover_text("Open clip properties panel").clicked() {
+                        app.editing_clip = Some((ti, ci));
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("Delete Clip").clicked() {
                         app.push_undo("Delete clip");
                         app.project.tracks[ti].clips.remove(ci);
                         app.selected_clips.clear();
+                        app.editing_clip = None;
                         app.sync_project();
                         ui.close_menu();
                     }
@@ -1094,21 +1132,33 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         });
 
         // Double-click anywhere: navigate playhead to that exact time point
+        // Double-click on a clip: open/close clip properties panel
         if response.double_clicked() {
             if let Some(pos) = response.interact_pointer_pos {
-                let x_offset = pos.x - rect.min.x + app.scroll_x;
-                let seconds = x_offset as f64 / pixels_per_second as f64;
-                let sample_pos = (seconds * sample_rate) as u64;
-                let snapped = app.snap_position(sample_pos);
-                app.send_command(jamhub_engine::EngineCommand::SetPosition(snapped));
-
-                // Also select track/clip under cursor
-                if let Some(ti) = track_at_y(app, pos.y, tracks_y_start) {
-                    app.selected_track = Some(ti);
-                }
+                let mut clicked_on_clip = false;
                 for &(ti, ci, _, cr) in &clip_rects {
                     if cr.contains(pos) {
+                        clicked_on_clip = true;
+                        // Toggle clip properties panel (double-click again to close)
+                        if app.editing_clip == Some((ti, ci)) {
+                            app.editing_clip = None;
+                        } else {
+                            app.editing_clip = Some((ti, ci));
+                        }
                         app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
+                        app.selected_track = Some(ti);
+                        break;
+                    }
+                }
+
+                if !clicked_on_clip {
+                    let x_offset = pos.x - rect.min.x + app.scroll_x;
+                    let seconds = x_offset as f64 / pixels_per_second as f64;
+                    let sample_pos = (seconds * sample_rate) as u64;
+                    let snapped = app.snap_position(sample_pos);
+                    app.send_command(jamhub_engine::EngineCommand::SetPosition(snapped));
+
+                    if let Some(ti) = track_at_y(app, pos.y, tracks_y_start) {
                         app.selected_track = Some(ti);
                     }
                 }
@@ -2415,7 +2465,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             let lighten = |c: u8| -> u8 { ((c as u16 * 3 / 4) + 64).min(255) as u8 };
                             egui::Color32::from_rgb(lighten(color.r()), lighten(color.g()), lighten(color.b()))
                         };
-                        draw_waveform(painter, &peaks, cr, clip.duration_samples, wc, clip.content_offset, app.zoom);
+                        draw_waveform(painter, &peaks, cr, clip.duration_samples, wc, clip.content_offset, app.zoom, Some((rect.min.x, rect.max.x)));
                     }
                 }
 
@@ -2550,10 +2600,17 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 } else {
                     String::new()
                 };
-                let label = if is_clip_muted {
-                    format!("{} (inactive){}", clip.name, speed_suffix)
+                let transpose_suffix = if clip.transpose_semitones != 0 {
+                    let sign = if clip.transpose_semitones > 0 { "+" } else { "" };
+                    format!(" [{}{}st]", sign, clip.transpose_semitones)
                 } else {
-                    format!("{}{}", clip.name, speed_suffix)
+                    String::new()
+                };
+                let rev_suffix = if clip.reversed { " REV" } else { "" };
+                let label = if is_clip_muted {
+                    format!("{} (inactive){}{}{}", clip.name, speed_suffix, transpose_suffix, rev_suffix)
+                } else {
+                    format!("{}{}{}{}", clip.name, speed_suffix, transpose_suffix, rev_suffix)
                 };
                 let text_color = if is_clip_muted {
                     egui::Color32::from_rgb(130, 130, 130)
@@ -3285,6 +3342,7 @@ fn draw_waveform(
     color: egui::Color32,
     content_offset: u64,
     zoom: f32,
+    visible_x_range: Option<(f32, f32)>,
 ) {
     let width = clip_rect.width();
     if width < 2.0 {
@@ -3309,16 +3367,25 @@ fn draw_waveform(
     let center_y = clip_rect.center().y;
     let half_height = clip_rect.height() * 0.4;
 
+    // Only compute waveform peaks for the visible portion of the clip
+    let (px_start, px_end) = if let Some((vis_left, vis_right)) = visible_x_range {
+        let start = ((vis_left - clip_rect.min.x).max(0.0) as usize).min(width as usize);
+        let end = ((vis_right - clip_rect.min.x).ceil().max(0.0) as usize).min(width as usize);
+        (start, end)
+    } else {
+        (0, width as usize)
+    };
+
     // When zoomed out far, reduce number of pixels sampled for performance
     let step = if zoomed_out { 2 } else { 1 };
-    let num_pixels = (width as usize).min(2000);
-    let mut peak_top: Vec<egui::Pos2> = Vec::with_capacity(num_pixels / step + 2);
-    let mut peak_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_pixels / step + 2);
-    let mut rms_top: Vec<egui::Pos2> = Vec::with_capacity(num_pixels / step + 2);
-    let mut rms_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_pixels / step + 2);
+    let num_visible = (px_end.saturating_sub(px_start)).min(2000);
+    let mut peak_top: Vec<egui::Pos2> = Vec::with_capacity(num_visible / step + 2);
+    let mut peak_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_visible / step + 2);
+    let mut rms_top: Vec<egui::Pos2> = Vec::with_capacity(num_visible / step + 2);
+    let mut rms_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_visible / step + 2);
 
-    let mut px = 0;
-    while px < num_pixels {
+    let mut px = px_start;
+    while px < px_start + num_visible {
         let sample_start = px as f64 * samples_per_pixel;
         let sample_end = ((px + step) as f64 * samples_per_pixel).min(total_samples as f64);
         let peak_start = ((sample_start / block_size) as usize + offset_blocks).min(peak_data.len());
@@ -3565,4 +3632,10 @@ enum TrackAction {
     FlattenComp(usize),
     /// Set track height preset (0.0 = auto)
     SetHeight(usize, f32),
+    /// Save track as a reusable template
+    SaveAsTemplate(usize),
+    /// Open the "Add from Template" picker
+    AddFromTemplate,
+    /// Open the color palette picker for a track
+    OpenColorPalette(usize),
 }

@@ -1123,6 +1123,8 @@ pub fn import_at_position(app: &mut DawApp, track_idx: usize, start_sample: u64,
                 gain_db: 0.0,
                 take_index: 0,
                 content_offset: 0,
+                transpose_semitones: 0,
+                reversed: false,
             };
 
             app.waveform_cache.insert(buffer_id, &data.samples);

@@ -568,6 +568,13 @@ pub struct Clip {
     /// Used for slip editing — the clip boundaries stay fixed but the audio content shifts.
     #[serde(default)]
     pub content_offset: u64,
+    /// Pitch transpose in semitones. Adjusts playback rate by 2^(semitones/12).
+    /// Default 0 = no transposition. Range: -24 to +24.
+    #[serde(default)]
+    pub transpose_semitones: i32,
+    /// Non-destructive reverse: when true, audio buffer is read backwards during playback.
+    #[serde(default)]
+    pub reversed: bool,
 }
 
 fn default_playback_rate() -> f32 {

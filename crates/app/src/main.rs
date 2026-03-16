@@ -17,6 +17,7 @@ mod undo;
 mod plugin_window;
 mod undo_panel;
 mod project_info;
+pub mod templates;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -389,6 +390,20 @@ pub struct DawApp {
     pub slip_editing: Option<SlipEditState>,
     /// Region naming dialog state
     pub region_name_input: Option<RegionNameInput>,
+    /// Clip properties panel: (track_idx, clip_idx) of the clip being edited
+    pub editing_clip: Option<(usize, usize)>,
+    /// Inline clip name editing state: (track_idx, clip_idx, text buffer)
+    pub renaming_clip: Option<(usize, usize, String)>,
+    /// Track template naming dialog state
+    pub template_name_input: Option<templates::TemplateNameInput>,
+    /// FX preset naming dialog state
+    pub fx_preset_name_input: Option<templates::FxPresetNameInput>,
+    /// Custom RGB color picker dialog state
+    pub custom_color_input: Option<templates::CustomColorInput>,
+    /// Whether to show the "Add from Template" picker window
+    pub show_track_template_picker: bool,
+    /// Track index for which the color palette popup is shown
+    pub color_palette_track: Option<usize>,
 }
 
 /// State for slip-editing: shifting audio content within clip boundaries.
@@ -599,7 +614,7 @@ pub struct RecentProject {
     pub last_opened: u64, // unix timestamp
 }
 
-fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("jamhub")
@@ -973,6 +988,13 @@ impl DawApp {
             show_locators: false,
             slip_editing: None,
             region_name_input: None,
+            editing_clip: None,
+            renaming_clip: None,
+            template_name_input: None,
+            fx_preset_name_input: None,
+            custom_color_input: None,
+            show_track_template_picker: false,
+            color_palette_track: None,
         }
     }
 
@@ -1094,7 +1116,7 @@ impl DawApp {
                     start_sample: position,
                     duration_samples: data.duration_samples,
                     source: ClipSource::AudioBuffer { buffer_id },
-                    muted: false, content_offset: 0,
+                    muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
                     fade_in_samples: 0,
                     fade_out_samples: 0,
                     color: None,
@@ -1257,7 +1279,7 @@ impl DawApp {
                 start_sample: rec_start,
                 duration_samples: duration,
                 source: ClipSource::AudioBuffer { buffer_id },
-                muted: false, content_offset: 0,
+                muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
                 fade_in_samples: 0,
                 fade_out_samples: 0,
                 color: None,
@@ -1397,7 +1419,7 @@ impl DawApp {
                     start_sample: rec_start,
                     duration_samples: 1, // will grow
                     source: ClipSource::AudioBuffer { buffer_id: live_id },
-                    muted: false, content_offset: 0,
+                    muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
                     fade_in_samples: 0,
                     fade_out_samples: 0,
                     color: None,
@@ -1502,6 +1524,36 @@ impl DawApp {
         self.set_status(&format!("{} clip(s) deleted", count));
     }
 
+    /// Remove audio buffers that are no longer referenced by any clip or frozen track.
+    /// Returns the number of buffers removed.
+    pub fn cleanup_unused_audio(&mut self) -> usize {
+        let referenced: HashSet<Uuid> = self.project.tracks.iter()
+            .flat_map(|t| {
+                let clip_ids = t.clips.iter().filter_map(|c| {
+                    if let ClipSource::AudioBuffer { buffer_id } = &c.source {
+                        Some(*buffer_id)
+                    } else {
+                        None
+                    }
+                });
+                let frozen_id = t.frozen_buffer_id.into_iter();
+                clip_ids.chain(frozen_id)
+            })
+            .collect();
+
+        let orphans: Vec<Uuid> = self.audio_buffers.keys()
+            .filter(|id| !referenced.contains(id))
+            .copied()
+            .collect();
+
+        let count = orphans.len();
+        for id in orphans {
+            self.audio_buffers.remove(&id);
+            self.waveform_cache.remove(id);
+        }
+        count
+    }
+
     /// Backward-compatible: check if any clips are selected
     pub fn has_selected_clips(&self) -> bool {
         !self.selected_clips.is_empty()
@@ -1589,6 +1641,8 @@ impl DawApp {
                 gain_db: 0.0,
                 take_index: 0,
                 content_offset: 0,
+                transpose_semitones: 0,
+                reversed: false,
             };
 
             if let ClipSource::AudioBuffer { buffer_id } = &clip_source {
@@ -1703,7 +1757,7 @@ impl DawApp {
                     start_sample: 0,
                     duration_samples: duration,
                     source: ClipSource::AudioBuffer { buffer_id },
-                    muted: false, content_offset: 0,
+                    muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
                     fade_in_samples: 0,
                     fade_out_samples: 0,
                     color: None,
@@ -1765,7 +1819,7 @@ impl DawApp {
                     start_sample: 0, duration_samples: duration,
                     source: ClipSource::AudioBuffer { buffer_id },
                     muted: false, fade_in_samples: 0, fade_out_samples: 0,
-                    color: None, playback_rate: 1.0, preserve_pitch: false, loop_count: 1, gain_db: 0.0, take_index: 0, content_offset: 0,
+                    color: None, playback_rate: 1.0, preserve_pitch: false, loop_count: 1, gain_db: 0.0, take_index: 0, content_offset: 0, transpose_semitones: 0, reversed: false,
                 });
                 self.project.tracks[track_idx].frozen = true;
                 self.project.tracks[track_idx].frozen_buffer_id = Some(buffer_id);
@@ -1830,7 +1884,7 @@ impl DawApp {
                     start_sample: range_start, duration_samples: duration,
                     source: ClipSource::AudioBuffer { buffer_id },
                     muted: false, fade_in_samples: 0, fade_out_samples: 0,
-                    color: None, playback_rate: 1.0, preserve_pitch: false, loop_count: 1, gain_db: 0.0, take_index: 0, content_offset: 0,
+                    color: None, playback_rate: 1.0, preserve_pitch: false, loop_count: 1, gain_db: 0.0, take_index: 0, content_offset: 0, transpose_semitones: 0, reversed: false,
                 });
                 self.sync_project();
                 self.set_status(&format!("Selection bounced ({:.1}s)", duration as f64 / sr as f64));
@@ -1838,6 +1892,208 @@ impl DawApp {
             Err(e) => self.set_status(&format!("Bounce selection failed: {e}")),
         }
         self.bounce_progress = None;
+    }
+
+    /// Show the "Add from Template" picker window.
+    pub fn show_track_template_picker_window(&mut self, ctx: &egui::Context) {
+        if !self.show_track_template_picker {
+            return;
+        }
+        let mut open = true;
+        let mut add_template: Option<templates::TrackTemplate> = None;
+        let mut delete_idx: Option<usize> = None;
+
+        egui::Window::new("Add Track from Template")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(340.0)
+            .show(ctx, |ui| {
+                let user_templates = templates::load_track_templates();
+                if user_templates.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No saved templates yet.")
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(130, 130, 140)),
+                    );
+                    ui.label(
+                        egui::RichText::new("Right-click a track header > \"Save as Template...\" to create one.")
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(110, 110, 120)),
+                    );
+                } else {
+                    ui.label("Saved templates:");
+                    ui.add_space(4.0);
+                    for (idx, tpl) in user_templates.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            let kind_label = match tpl.track_kind {
+                                TrackKind::Audio => "Audio",
+                                TrackKind::Midi => "MIDI",
+                                TrackKind::Bus => "Bus",
+                            };
+                            let fx_count = tpl.effects.len();
+                            let c = egui::Color32::from_rgb(tpl.color[0], tpl.color[1], tpl.color[2]);
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                            ui.painter().circle_filled(rect.center(), 5.0, c);
+                            let label = format!("{} ({}, {} FX)", tpl.name, kind_label, fx_count);
+                            if ui.button(&label).clicked() {
+                                add_template = Some(tpl.clone());
+                            }
+                            if ui.add(
+                                egui::Button::new(
+                                    egui::RichText::new("x")
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(160, 60, 60)),
+                                ).frame(false),
+                            ).on_hover_text("Delete template").clicked() {
+                                delete_idx = Some(idx);
+                            }
+                        });
+                    }
+                }
+            });
+
+        if let Some(tpl) = add_template {
+            self.push_undo("Add track from template");
+            let id = uuid::Uuid::new_v4();
+            let track = jamhub_model::Track {
+                id,
+                name: tpl.name.clone(),
+                kind: tpl.track_kind,
+                clips: Vec::new(),
+                volume: tpl.volume,
+                pan: tpl.pan,
+                muted: false,
+                solo: false,
+                armed: false,
+                color: tpl.color,
+                effects: tpl.effects.iter().map(|e| {
+                    jamhub_model::EffectSlot::new(e.effect.clone())
+                }).collect(),
+                lanes_expanded: false,
+                custom_height: 0.0,
+                automation: Vec::new(),
+                sends: tpl.sends.clone(),
+                group_id: None,
+                frozen: false,
+                frozen_buffer_id: None,
+                pre_freeze_clips: None,
+                pre_freeze_effects: None,
+                sidechain_track_id: None,
+                input_channel: None,
+                output_target: None,
+                session_clips: Vec::new(),
+            };
+            self.project.tracks.push(track);
+            self.selected_track = Some(self.project.tracks.len() - 1);
+            self.sync_project();
+            self.set_status(&format!("Added track from template: {}", tpl.name));
+            self.show_track_template_picker = false;
+        }
+
+        if let Some(idx) = delete_idx {
+            let mut user_templates = templates::load_track_templates();
+            if idx < user_templates.len() {
+                user_templates.remove(idx);
+                templates::save_track_templates(&user_templates);
+                self.set_status("Template deleted");
+            }
+        }
+
+        if !open {
+            self.show_track_template_picker = false;
+        }
+    }
+
+    /// Show a color palette popup window for a track.
+    pub fn show_color_palette_popup(&mut self, ctx: &egui::Context) {
+        let track_idx = match self.color_palette_track {
+            Some(i) if i < self.project.tracks.len() => i,
+            _ => {
+                self.color_palette_track = None;
+                return;
+            }
+        };
+
+        let mut open = true;
+        let mut chosen_color: Option<[u8; 3]> = None;
+        let mut open_custom = false;
+
+        egui::Window::new("Track Color")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(200.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new("Choose a color:")
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(180, 180, 190)),
+                );
+                ui.add_space(4.0);
+
+                // 4x4 color grid
+                let colors = templates::PALETTE_COLORS;
+                for row in 0..4 {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        for col in 0..4 {
+                            let idx = row * 4 + col;
+                            if idx < colors.len() {
+                                let (rgb, name) = colors[idx];
+                                let c = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                                let current = self.project.tracks[track_idx].color;
+                                let is_current = current == rgb;
+
+                                let (rect, resp) = ui.allocate_exact_size(
+                                    egui::vec2(28.0, 28.0),
+                                    egui::Sense::click(),
+                                );
+                                ui.painter().rect_filled(rect, 4.0, c);
+                                if is_current {
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        4.0,
+                                        egui::Stroke::new(2.0, egui::Color32::WHITE),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                }
+                                if resp.on_hover_text(name).clicked() {
+                                    chosen_color = Some(rgb);
+                                }
+                            }
+                        }
+                    });
+                }
+
+                ui.add_space(6.0);
+                ui.separator();
+                if ui.button("Custom RGB...").clicked() {
+                    open_custom = true;
+                }
+            });
+
+        if let Some(color) = chosen_color {
+            self.push_undo("Set track color");
+            self.project.tracks[track_idx].color = color;
+            self.sync_project();
+            self.color_palette_track = None;
+        }
+
+        if open_custom {
+            let current = self.project.tracks[track_idx].color;
+            self.custom_color_input = Some(templates::CustomColorInput {
+                track_idx,
+                r: current[0],
+                g: current[1],
+                b: current[2],
+            });
+            self.color_palette_track = None;
+        }
+
+        if !open {
+            self.color_palette_track = None;
+        }
     }
 
     /// Show the Audio Pool manager window.
@@ -2429,7 +2685,7 @@ impl DawApp {
             start_sample: overall_start,
             duration_samples: duration,
             source: ClipSource::AudioBuffer { buffer_id },
-            muted: false, content_offset: 0,
+            muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
             fade_in_samples: 0,
             fade_out_samples: 0,
             color: None,
@@ -2472,6 +2728,12 @@ impl DawApp {
 
         // Create backup of previous version before overwriting
         Self::backup_project(&dir);
+
+        // Clean up unreferenced audio buffers before saving
+        let cleaned = self.cleanup_unused_audio();
+        if cleaned > 0 {
+            eprintln!("Save: cleaned up {cleaned} unused audio buffer(s)");
+        }
 
         let sr = self.sample_rate();
         match jamhub_engine::save_project(&dir, &self.project, &self.audio_buffers, sr) {
@@ -2699,8 +2961,14 @@ impl eframe::App for DawApp {
 
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
-        if self.transport_state() == TransportState::Playing || self.is_recording {
+        // Smart repaint scheduling: full-speed when active, 10fps when idle
+        let is_playing = self.transport_state() == TransportState::Playing;
+        let has_plugin_editors = !self.plugin_windows.windows.is_empty() || !self.builtin_fx_open.is_empty();
+        if is_playing || self.is_recording || has_plugin_editors {
             ctx.request_repaint();
+        } else {
+            // Idle: 10fps refresh for meters, status messages, etc.
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
         // Auto-save check: use preferences interval (0 = disabled)
@@ -3528,6 +3796,11 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                     }
                     ui.separator();
+                    if ui.button("Add from Template...").clicked() {
+                        self.show_track_template_picker = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("Delete Selected Track").clicked() {
                         self.delete_selected_track();
                         ui.close_menu();
@@ -3845,6 +4118,13 @@ impl eframe::App for DawApp {
         self.show_audio_pool_window(ctx);
         midi_mapping::show_mapping_manager(self, ctx);
 
+        // Template & preset dialogs
+        templates::show_template_name_dialog(self, ctx);
+        templates::show_fx_preset_name_dialog(self, ctx);
+        templates::show_custom_color_dialog(self, ctx);
+        self.show_track_template_picker_window(ctx);
+        self.show_color_palette_popup(ctx);
+
         // Cleanup closed plugin editor windows
         self.plugin_windows.cleanup_closed();
 
@@ -4104,6 +4384,120 @@ impl eframe::App for DawApp {
                 });
             if !open {
                 self.show_autosave_recovery = false;
+            }
+        }
+
+        // ── Clip Properties Window ───────────────────────────────────────
+        if let Some((ti, ci)) = self.editing_clip {
+            let valid = ti < self.project.tracks.len()
+                && ci < self.project.tracks[ti].clips.len();
+            if valid {
+                let mut clip_open = true;
+                let clip_name = self.project.tracks[ti].clips[ci].name.clone();
+                egui::Window::new(format!("Clip Properties \u{2014} {}", clip_name))
+                    .id(egui::Id::new("clip_properties_panel"))
+                    .collapsible(false)
+                    .resizable(true)
+                    .open(&mut clip_open)
+                    .default_width(320.0)
+                    .show(ctx, |ui| {
+                        let sr = self.sample_rate() as f64;
+                        let clip = &mut self.project.tracks[ti].clips[ci];
+
+                        egui::Grid::new("clip_props_grid")
+                            .num_columns(2)
+                            .spacing([12.0, 6.0])
+                            .show(ui, |ui| {
+                                ui.label("Name:");
+                                let mut name_buf = clip.name.clone();
+                                if ui.text_edit_singleline(&mut name_buf).changed() {
+                                    clip.name = name_buf;
+                                }
+                                ui.end_row();
+
+                                ui.label("Start:");
+                                let mut start_sec = clip.start_sample as f64 / sr;
+                                if ui.add(egui::DragValue::new(&mut start_sec)
+                                    .speed(0.01).suffix(" s").range(0.0..=f64::MAX)).changed()
+                                {
+                                    clip.start_sample = (start_sec * sr) as u64;
+                                }
+                                ui.end_row();
+
+                                ui.label("Duration:");
+                                let mut dur_sec = clip.duration_samples as f64 / sr;
+                                if ui.add(egui::DragValue::new(&mut dur_sec)
+                                    .speed(0.01).suffix(" s").range(0.001..=f64::MAX)).changed()
+                                {
+                                    clip.duration_samples = (dur_sec * sr).max(1.0) as u64;
+                                }
+                                ui.end_row();
+
+                                ui.label("Gain:");
+                                ui.add(egui::Slider::new(&mut clip.gain_db, -24.0..=24.0)
+                                    .suffix(" dB").step_by(0.1));
+                                ui.end_row();
+
+                                ui.label("Speed:");
+                                ui.add(egui::Slider::new(&mut clip.playback_rate, 0.1..=4.0)
+                                    .step_by(0.01).suffix("x"));
+                                ui.end_row();
+
+                                ui.label("Transpose:");
+                                ui.add(egui::Slider::new(&mut clip.transpose_semitones, -24..=24)
+                                    .suffix(" st"));
+                                ui.end_row();
+
+                                ui.label("Fade In:");
+                                let mut fi_sec = clip.fade_in_samples as f64 / sr;
+                                if ui.add(egui::DragValue::new(&mut fi_sec)
+                                    .speed(0.001).suffix(" s").range(0.0..=f64::MAX)).changed()
+                                {
+                                    clip.fade_in_samples = (fi_sec * sr) as u64;
+                                }
+                                ui.end_row();
+
+                                ui.label("Fade Out:");
+                                let mut fo_sec = clip.fade_out_samples as f64 / sr;
+                                if ui.add(egui::DragValue::new(&mut fo_sec)
+                                    .speed(0.001).suffix(" s").range(0.0..=f64::MAX)).changed()
+                                {
+                                    clip.fade_out_samples = (fo_sec * sr) as u64;
+                                }
+                                ui.end_row();
+
+                                ui.label("Loop:");
+                                ui.add(egui::Slider::new(&mut clip.loop_count, 1..=32).suffix("x"));
+                                ui.end_row();
+
+                                ui.label("Reversed:");
+                                ui.checkbox(&mut clip.reversed, "Reverse playback");
+                                ui.end_row();
+
+                                ui.label("Preserve Pitch:");
+                                ui.checkbox(&mut clip.preserve_pitch, "Pitch-lock on speed change");
+                                ui.end_row();
+                            });
+
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("Reset Gain").clicked() {
+                                self.project.tracks[ti].clips[ci].gain_db = 0.0;
+                            }
+                            if ui.button("Reset Transpose").clicked() {
+                                self.project.tracks[ti].clips[ci].transpose_semitones = 0;
+                            }
+                            if ui.button("Reset Speed").clicked() {
+                                self.project.tracks[ti].clips[ci].playback_rate = 1.0;
+                            }
+                        });
+                    });
+                if !clip_open {
+                    self.editing_clip = None;
+                }
+                self.sync_project();
+            } else {
+                self.editing_clip = None;
             }
         }
 

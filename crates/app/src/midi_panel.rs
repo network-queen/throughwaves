@@ -130,6 +130,8 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                         gain_db: 0.0,
                                         take_index: 0,
                                         content_offset: 0,
+                                        transpose_semitones: 0,
+                                        reversed: false,
                                     });
                                 }
                                 app.sync_project();

@@ -176,6 +176,10 @@ pub struct PianoRollState {
     pub show_velocity_lane: bool,
     /// Quantize grid size in ticks (default = quarter note).
     pub quantize_ticks: u64,
+    /// Swing amount 0.0-1.0 (0% = straight, 0.5 = dotted, 0.66 = triplet).
+    pub swing_amount: f32,
+    /// Humanize amount 0.0-1.0 controlling randomization range.
+    pub humanize_amount: f32,
     /// Scale snapping
     pub scale: Scale,
     pub root_note: u8,
@@ -184,6 +188,22 @@ pub struct PianoRollState {
     /// CC lane
     pub show_cc_lane: bool,
     pub cc_number: u8,
+    /// Simple LCG random state for humanize.
+    rng_state: u64,
+}
+
+impl PianoRollState {
+    /// Simple LCG pseudo-random number generator. Returns a value in [0, 1).
+    fn next_rand(&mut self) -> f64 {
+        // LCG parameters from Numerical Recipes
+        self.rng_state = self.rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((self.rng_state >> 33) as f64) / (1u64 << 31) as f64
+    }
+
+    /// Returns a random value in [-1.0, 1.0).
+    fn next_rand_bipolar(&mut self) -> f64 {
+        self.next_rand() * 2.0 - 1.0
+    }
 }
 
 impl Default for PianoRollState {
@@ -193,11 +213,14 @@ impl Default for PianoRollState {
             drag_mode: None,
             show_velocity_lane: false,
             quantize_ticks: TICKS_PER_BEAT,
+            swing_amount: 0.0,
+            humanize_amount: 0.5,
             scale: Scale::Chromatic,
             root_note: 0, // C
             drum_mode: false,
             show_cc_lane: false,
             cc_number: 1, // Mod Wheel
+            rng_state: 12345,
         }
     }
 }
@@ -226,10 +249,10 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
             let track_name = app.project.tracks[track_idx].name.clone();
             ui.heading(format!("Piano Roll: {track_name}"));
 
-            // ── Toolbar ─────────────────────────────────────────────
+            // ── Toolbar row 1: Quantize, Scale, Mode ──────────────
             ui.horizontal(|ui| {
                 // Quantize button
-                if ui.button("Quantize").on_hover_text("Snap selected notes to grid").clicked() {
+                if ui.button("Quantize").on_hover_text("Snap selected notes to grid (with swing)").clicked() {
                     quantize_selected(app, track_idx);
                 }
 
@@ -252,6 +275,22 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                             }
                         }
                     });
+
+                // Swing slider
+                ui.label("Swing:");
+                let swing_pct = (app.piano_roll_state.swing_amount * 100.0).round() as i32;
+                let swing_text = match swing_pct {
+                    0 => "Straight".to_string(),
+                    50 => "Dotted".to_string(),
+                    66 => "Triplet".to_string(),
+                    v => format!("{v}%"),
+                };
+                ui.add(
+                    egui::Slider::new(&mut app.piano_roll_state.swing_amount, 0.0..=1.0)
+                        .text(swing_text)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                        .max_decimals(2),
+                );
 
                 ui.separator();
 
@@ -329,6 +368,34 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                 }
                             }
                         });
+                }
+            });
+
+            // ── Toolbar row 2: Edit operations ────────────────────────
+            ui.horizontal(|ui| {
+                // Humanize button
+                if ui.button("Humanize").on_hover_text("Randomize timing & velocity of selected notes").clicked() {
+                    humanize_selected(app, track_idx);
+                }
+
+                // Humanize amount slider
+                ui.add(
+                    egui::Slider::new(&mut app.piano_roll_state.humanize_amount, 0.0..=1.0)
+                        .text("Amount")
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                        .max_decimals(2),
+                );
+
+                ui.separator();
+
+                // Legato button
+                if ui.button("Legato").on_hover_text("Extend selected notes to reach the next note (no gaps)").clicked() {
+                    legato_selected(app, track_idx);
+                }
+
+                // Staccato button
+                if ui.button("Staccato").on_hover_text("Shorten selected notes to 50% duration").clicked() {
+                    staccato_selected(app, track_idx);
                 }
 
                 ui.separator();
@@ -851,6 +918,34 @@ fn show_velocity_lane(
     pixels_per_tick: f32,
 ) {
     ui.separator();
+
+    // ── Velocity preset buttons ───────────────────────────────────
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("Vel:")
+                .small()
+                .color(egui::Color32::GRAY),
+        );
+        const VELOCITY_PRESETS: &[(&str, u8)] = &[
+            ("pp", 32),
+            ("p", 48),
+            ("mp", 64),
+            ("mf", 80),
+            ("f", 96),
+            ("ff", 112),
+            ("fff", 127),
+        ];
+        for &(name, vel) in VELOCITY_PRESETS {
+            if ui
+                .small_button(name)
+                .on_hover_text(format!("Set selected notes to velocity {vel}"))
+                .clicked()
+            {
+                set_selected_velocity(app, track_idx, vel);
+            }
+        }
+    });
+
     let (vel_response, vel_painter) = ui.allocate_painter(
         egui::vec2(grid_width, VELOCITY_LANE_HEIGHT),
         egui::Sense::click_and_drag(),
@@ -1337,6 +1432,8 @@ fn find_or_create_midi_clip(app: &mut DawApp, track_idx: usize) -> Option<usize>
         gain_db: 0.0,
         take_index: 0,
         content_offset: 0,
+        transpose_semitones: 0,
+        reversed: false,
     };
     app.project.tracks[track_idx].clips.push(clip);
     Some(app.project.tracks[track_idx].clips.len() - 1)
@@ -1438,6 +1535,7 @@ fn quantize_selected(app: &mut DawApp, track_idx: usize) {
         return;
     }
 
+    let swing = app.piano_roll_state.swing_amount;
     app.push_undo("Quantize MIDI notes");
 
     let selected: Vec<usize> = app.piano_roll_state.selected_notes.iter().copied().collect();
@@ -1445,7 +1543,78 @@ fn quantize_selected(app: &mut DawApp, track_idx: usize) {
         for &idx in &selected {
             if idx < notes.len() {
                 let t = notes[idx].start_tick;
-                notes[idx].start_tick = ((t + quant / 2) / quant) * quant;
+                // Snap to nearest grid position
+                let grid_pos = ((t + quant / 2) / quant) * quant;
+                // Determine which grid index this is (0-based)
+                let grid_index = grid_pos / quant;
+                // Apply swing: odd-numbered grid positions shift toward the next one
+                let swung = if grid_index % 2 == 1 && swing > 0.0 {
+                    grid_pos + (swing * quant as f32) as u64
+                } else {
+                    grid_pos
+                };
+                notes[idx].start_tick = swung;
+            }
+        }
+    }
+
+    update_clip_duration(app, track_idx);
+    app.sync_project();
+    let swing_pct = (swing * 100.0).round() as i32;
+    let swing_info = if swing_pct > 0 {
+        format!(" (swing {swing_pct}%)")
+    } else {
+        String::new()
+    };
+    app.set_status(&format!(
+        "Quantized {} notes to {}{swing_info}",
+        selected.len(),
+        quantize_label(quant)
+    ));
+}
+
+/// Humanize selected notes: randomize timing and velocity by a configurable amount.
+fn humanize_selected(app: &mut DawApp, track_idx: usize) {
+    if app.piano_roll_state.selected_notes.is_empty() {
+        app.set_status("Select notes first, then humanize");
+        return;
+    }
+
+    let ci = match app.project.tracks[track_idx]
+        .clips
+        .iter()
+        .position(|c| matches!(c.source, ClipSource::Midi { .. }))
+    {
+        Some(i) => i,
+        None => return,
+    };
+
+    let amount = app.piano_roll_state.humanize_amount;
+    // Max timing randomization: 20 ticks at 100%
+    let max_timing_ticks = (amount * 20.0) as i64;
+    // Max velocity randomization: 15 at 100%
+    let max_vel = (amount * 15.0) as i32;
+
+    app.push_undo("Humanize MIDI notes");
+
+    let selected: Vec<usize> = app.piano_roll_state.selected_notes.iter().copied().collect();
+    if let ClipSource::Midi { ref mut notes, .. } = app.project.tracks[track_idx].clips[ci].source {
+        for &idx in &selected {
+            if idx < notes.len() {
+                // Randomize timing
+                if max_timing_ticks > 0 {
+                    let rand_t = app.piano_roll_state.next_rand_bipolar();
+                    let delta = (rand_t * max_timing_ticks as f64).round() as i64;
+                    let new_tick = (notes[idx].start_tick as i64 + delta).max(0) as u64;
+                    notes[idx].start_tick = new_tick;
+                }
+                // Randomize velocity
+                if max_vel > 0 {
+                    let rand_v = app.piano_roll_state.next_rand_bipolar();
+                    let delta = (rand_v * max_vel as f64).round() as i32;
+                    let new_vel = (notes[idx].velocity as i32 + delta).clamp(1, 127) as u8;
+                    notes[idx].velocity = new_vel;
+                }
             }
         }
     }
@@ -1453,9 +1622,138 @@ fn quantize_selected(app: &mut DawApp, track_idx: usize) {
     update_clip_duration(app, track_idx);
     app.sync_project();
     app.set_status(&format!(
-        "Quantized {} notes to {}",
+        "Humanized {} notes ({:.0}%)",
         selected.len(),
-        quantize_label(quant)
+        amount * 100.0
+    ));
+}
+
+/// Legato: extend each selected note to reach the next note at the same pitch (minus 1 tick).
+fn legato_selected(app: &mut DawApp, track_idx: usize) {
+    if app.piano_roll_state.selected_notes.is_empty() {
+        app.set_status("Select notes first, then apply legato");
+        return;
+    }
+
+    let ci = match app.project.tracks[track_idx]
+        .clips
+        .iter()
+        .position(|c| matches!(c.source, ClipSource::Midi { .. }))
+    {
+        Some(i) => i,
+        None => return,
+    };
+
+    app.push_undo("Legato MIDI notes");
+
+    let selected: Vec<usize> = app.piano_roll_state.selected_notes.iter().copied().collect();
+    if let ClipSource::Midi { ref mut notes, .. } = app.project.tracks[track_idx].clips[ci].source {
+        // For each selected note, find the next note at the same pitch
+        // and extend duration to reach it (minus 1 tick for separation).
+        // We need a snapshot of start_ticks and pitches to avoid borrow issues.
+        let snapshot: Vec<(u64, u8)> = notes.iter().map(|n| (n.start_tick, n.pitch)).collect();
+
+        for &idx in &selected {
+            if idx >= notes.len() {
+                continue;
+            }
+            let pitch = snapshot[idx].1;
+            let start = snapshot[idx].0;
+
+            // Find the next note at the same pitch (by start_tick, excluding self)
+            let mut next_start: Option<u64> = None;
+            for (i, &(s, p)) in snapshot.iter().enumerate() {
+                if i == idx {
+                    continue;
+                }
+                if p == pitch && s > start {
+                    next_start = Some(match next_start {
+                        Some(curr) => curr.min(s),
+                        None => s,
+                    });
+                }
+            }
+
+            if let Some(ns) = next_start {
+                // Extend to reach next note minus 1 tick separation
+                let new_dur = ns.saturating_sub(start).saturating_sub(1).max(1);
+                notes[idx].duration_ticks = new_dur;
+            }
+        }
+    }
+
+    update_clip_duration(app, track_idx);
+    app.sync_project();
+    app.set_status(&format!("Applied legato to {} notes", selected.len()));
+}
+
+/// Staccato: shorten each selected note to 50% of its duration.
+fn staccato_selected(app: &mut DawApp, track_idx: usize) {
+    if app.piano_roll_state.selected_notes.is_empty() {
+        app.set_status("Select notes first, then apply staccato");
+        return;
+    }
+
+    let ci = match app.project.tracks[track_idx]
+        .clips
+        .iter()
+        .position(|c| matches!(c.source, ClipSource::Midi { .. }))
+    {
+        Some(i) => i,
+        None => return,
+    };
+
+    app.push_undo("Staccato MIDI notes");
+
+    let selected: Vec<usize> = app.piano_roll_state.selected_notes.iter().copied().collect();
+    if let ClipSource::Midi { ref mut notes, .. } = app.project.tracks[track_idx].clips[ci].source {
+        for &idx in &selected {
+            if idx < notes.len() {
+                let half = notes[idx].duration_ticks / 2;
+                notes[idx].duration_ticks = half.max(1); // At least 1 tick
+            }
+        }
+    }
+
+    update_clip_duration(app, track_idx);
+    app.sync_project();
+    app.set_status(&format!(
+        "Applied staccato to {} notes (50%)",
+        selected.len()
+    ));
+}
+
+/// Set velocity of all selected notes to a preset value.
+fn set_selected_velocity(app: &mut DawApp, track_idx: usize, velocity: u8) {
+    if app.piano_roll_state.selected_notes.is_empty() {
+        app.set_status("Select notes first, then set velocity");
+        return;
+    }
+
+    let ci = match app.project.tracks[track_idx]
+        .clips
+        .iter()
+        .position(|c| matches!(c.source, ClipSource::Midi { .. }))
+    {
+        Some(i) => i,
+        None => return,
+    };
+
+    app.push_undo("Set velocity preset");
+
+    let selected: Vec<usize> = app.piano_roll_state.selected_notes.iter().copied().collect();
+    if let ClipSource::Midi { ref mut notes, .. } = app.project.tracks[track_idx].clips[ci].source {
+        for &idx in &selected {
+            if idx < notes.len() {
+                notes[idx].velocity = velocity;
+            }
+        }
+    }
+
+    app.sync_project();
+    app.set_status(&format!(
+        "Set {} notes to velocity {velocity}",
+        selected.len()
     ));
 }
 

@@ -33,6 +33,11 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
             let mut toggle_builtin_popup: Option<usize> = None;
             let effects_len = app.project.tracks[track_idx].effects.len();
 
+            // Read crashed plugin IDs from engine state
+            let crashed_plugins = app.engine.as_ref()
+                .map(|e| e.state.read().crashed_plugins.clone())
+                .unwrap_or_default();
+
             let slot_info: Vec<(uuid::Uuid, bool, bool, String)> = app.project.tracks[track_idx]
                 .effects
                 .iter()
@@ -61,9 +66,16 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                     let (slot_id, is_open, is_vst, ref vst_path) = slot_info[i];
                     let slot = &mut app.project.tracks[track_idx].effects[i];
                     let is_enabled = slot.enabled;
-                    let name = slot.name().to_string();
+                    let is_crashed = crashed_plugins.contains(&slot_id);
+                    let name = if is_crashed {
+                        format!("[CRASHED] {}", slot.name())
+                    } else {
+                        slot.name().to_string()
+                    };
 
-                    let row_bg = if is_open {
+                    let row_bg = if is_crashed {
+                        egui::Color32::from_rgb(60, 25, 25)
+                    } else if is_open {
                         egui::Color32::from_rgb(35, 42, 52)
                     } else {
                         egui::Color32::from_rgb(36, 36, 42)
@@ -263,6 +275,89 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
             ).clicked() {
                 app.fx_browser.show = true;
             }
+
+            // --- FX Chain Presets ---
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::new(
+                    egui::RichText::new("Save Preset...")
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(140, 180, 140)),
+                )).on_hover_text("Save the current effect chain as a reusable preset").clicked() {
+                    app.fx_preset_name_input = Some(crate::templates::FxPresetNameInput {
+                        name: String::new(),
+                    });
+                }
+                ui.menu_button(
+                    egui::RichText::new("Load Preset...")
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(140, 160, 200)),
+                    |ui| {
+                        // Default built-in presets
+                        ui.label(
+                            egui::RichText::new("Built-in")
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(120, 120, 130)),
+                        );
+                        for preset in crate::templates::default_fx_presets() {
+                            let fx_names: Vec<&str> = preset.effects.iter().map(|e| e.name()).collect();
+                            let desc = fx_names.join(" > ");
+                            if ui.button(format!("{} ({})", preset.name, desc)).clicked() {
+                                app.push_undo("Load FX preset");
+                                app.project.tracks[track_idx].effects = preset.effects.iter().map(|e| {
+                                    jamhub_model::EffectSlot::new(e.effect.clone())
+                                }).collect();
+                                needs_sync = true;
+                                app.set_status(&format!("Loaded preset: {}", preset.name));
+                                ui.close_menu();
+                            }
+                        }
+                        // User presets
+                        let user_presets = crate::templates::load_fx_presets();
+                        if !user_presets.is_empty() {
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new("User Presets")
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(120, 120, 130)),
+                            );
+                            let mut del_idx: Option<usize> = None;
+                            for (pidx, preset) in user_presets.iter().enumerate() {
+                                let fx_count = preset.effects.len();
+                                ui.horizontal(|ui| {
+                                    if ui.button(format!("{} ({} FX)", preset.name, fx_count)).clicked() {
+                                        app.push_undo("Load FX preset");
+                                        app.project.tracks[track_idx].effects = preset.effects.iter().map(|e| {
+                                            jamhub_model::EffectSlot::new(e.effect.clone())
+                                        }).collect();
+                                        needs_sync = true;
+                                        app.set_status(&format!("Loaded preset: {}", preset.name));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add(
+                                        egui::Button::new(
+                                            egui::RichText::new("x")
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(160, 60, 60)),
+                                        ).frame(false),
+                                    ).on_hover_text("Delete preset").clicked() {
+                                        del_idx = Some(pidx);
+                                        ui.close_menu();
+                                    }
+                                });
+                            }
+                            if let Some(di) = del_idx {
+                                let mut presets = crate::templates::load_fx_presets();
+                                if di < presets.len() {
+                                    presets.remove(di);
+                                    crate::templates::save_fx_presets(&presets);
+                                    app.set_status("FX preset deleted");
+                                }
+                            }
+                        }
+                    },
+                );
+            });
 
             if needs_sync {
                 app.sync_project();

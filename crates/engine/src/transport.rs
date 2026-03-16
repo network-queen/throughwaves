@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
@@ -49,6 +49,8 @@ pub struct EngineState {
     pub transport: TransportState,
     pub position_samples: u64,
     pub sample_rate: u32,
+    /// Set of VST3 effect slot IDs whose plugins have crashed during processing.
+    pub crashed_plugins: HashSet<Uuid>,
 }
 
 impl EngineHandle {
@@ -66,6 +68,7 @@ impl EngineHandle {
             transport: TransportState::Stopped,
             position_samples: 0,
             sample_rate,
+            crashed_plugins: HashSet::new(),
         }));
 
         let levels = LevelMeters::new();
@@ -167,6 +170,11 @@ fn engine_loop(
             let mut s = state.write();
             s.transport = transport;
             s.position_samples = position;
+            // Report crashed VST3 plugins to the UI
+            let crashed = mixer.crashed_plugin_ids();
+            if !crashed.is_empty() {
+                s.crashed_plugins = crashed;
+            }
         }
 
         if transport == TransportState::Playing {

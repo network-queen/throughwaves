@@ -117,6 +117,8 @@ pub struct Vst3Plugin {
     pub has_editor: bool,
     /// Plugin-reported latency in samples (from IAudioProcessor::getLatencySamples).
     pub latency_samples: u32,
+    /// Set to true if the plugin panicked during process() — disables further processing.
+    pub crashed: bool,
     _lib: Option<libloading::Library>,
     component: Option<*mut IComponent>,
     processor: Option<*mut IAudioProcessor>,
@@ -386,6 +388,7 @@ impl Vst3Plugin {
             num_params,
             has_editor,
             latency_samples,
+            crashed: false,
             _lib: Some(lib),
             component: Some(component),
             processor,
@@ -403,6 +406,7 @@ impl Vst3Plugin {
             error: Some(error.to_string()),
             num_params: 0, has_editor: false,
             latency_samples: 0,
+            crashed: false,
             _lib: None, component: None, processor: None, controller: None,
             sample_rate: 44100.0, block_size: 256,
             param_change_rx: None,
@@ -429,7 +433,12 @@ impl Vst3Plugin {
 
     /// Process audio through the plugin (mono samples).
     /// Sends stereo to the VST3 plugin and mixes output back to mono.
+    /// If the plugin panics during processing, it is disabled and marked as crashed.
     pub fn process(&mut self, samples: &mut [f32]) {
+        if self.crashed {
+            return; // plugin has crashed — passthrough to avoid further panics
+        }
+
         let processor = match self.processor {
             Some(p) if self.processing => p,
             _ => return, // passthrough if not ready
@@ -489,21 +498,37 @@ impl Vst3Plugin {
             processContext: &mut process_context,
         };
 
-        let result = unsafe { ((*(*processor).vtbl).process)(processor, &mut data) };
+        // Wrap the VST3 process call in catch_unwind to prevent plugin panics
+        // from crashing the entire application.
+        let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            unsafe { ((*(*processor).vtbl).process)(processor, &mut data) }
+        }));
 
-        if result == 0 {
-            // Check if output has any signal
-            let has_output = out_left.iter().any(|s| *s != 0.0) || out_right.iter().any(|s| *s != 0.0);
-            if has_output {
-                // Mix stereo output back to mono
-                for i in 0..n {
-                    samples[i] = (out_left[i] + out_right[i]) * 0.5;
+        match process_result {
+            Ok(result) => {
+                if result == 0 {
+                    // Check if output has any signal
+                    let has_output = out_left.iter().any(|s| *s != 0.0) || out_right.iter().any(|s| *s != 0.0);
+                    if has_output {
+                        // Mix stereo output back to mono
+                        for i in 0..n {
+                            samples[i] = (out_left[i] + out_right[i]) * 0.5;
+                        }
+                    }
+                    // If output is all zeros, keep original samples (passthrough)
+                    // This handles plugins that don't produce output until they have enough data
                 }
+                // If result != 0, keep original samples (passthrough)
             }
-            // If output is all zeros, keep original samples (passthrough)
-            // This handles plugins that don't produce output until they have enough data
+            Err(_) => {
+                // Plugin panicked — disable it and mark as crashed
+                eprintln!("VST3 CRASH: plugin '{}' panicked during process() — disabling", self.name);
+                self.crashed = true;
+                self.processing = false;
+                self.error = Some("Plugin crashed during audio processing".to_string());
+                // Keep original samples (passthrough)
+            }
         }
-        // If result != 0, keep original samples (passthrough)
     }
 
     /// Get parameter count.
