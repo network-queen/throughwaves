@@ -935,6 +935,15 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.sync_project();
                         ui.close_menu();
                     }
+                    let has_effects = !app.project.tracks[ti].effects.is_empty();
+                    if ui.add_enabled(has_effects, egui::Button::new("Bounce in Place"))
+                        .on_hover_text("Render clip through track effects into a new audio buffer")
+                        .on_disabled_hover_text("No effects on this track")
+                        .clicked()
+                    {
+                        app.bounce_clip_in_place(ti, ci);
+                        ui.close_menu();
+                    }
                     ui.separator();
                     ui.menu_button("Process", |ui| {
                         if ui.button("Normalize").on_hover_text("Normalize peak to 0dB").clicked() {
@@ -2924,55 +2933,67 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
-        // Trim / fade cursor hint — change cursor when hovering near clip edges or fade handles
-        if app.trimming_clip.is_none() && app.dragging_clip.is_none() && app.dragging_fade.is_none() {
+        // Cursor feedback — determine cursor icon based on what the mouse hovers over.
+        // Only apply when no active drag/trim operation is in progress.
+        if app.trimming_clip.is_none() && app.dragging_clip.is_none() && app.dragging_fade.is_none()
+            && app.dragging_clips.is_none() && app.dragging_clip_gain.is_none()
+            && app.stretching_clip.is_none() && app.slip_editing.is_none()
+        {
             if let Some(hover_pos) = ui.input(|i| i.pointer.hover_pos()) {
-                let edge_zone = 8.0;
-                let fade_handle_zone = 20.0;
-                let mut near_interactive = false;
-                for &(ti, ci, _, cr) in &clip_rects {
-                    if !cr.contains(hover_pos) {
-                        continue;
-                    }
-                    // Check fade handles (top corners)
-                    if (hover_pos.y - cr.top()) < fade_handle_zone {
-                        let clip = &app.project.tracks[ti].clips[ci];
-                        let fade_in_px = (clip.fade_in_samples as f64 / sample_rate) as f32 * pixels_per_second;
-                        let fi_handle_x = cr.left() + fade_in_px;
-                        let fade_out_px = (clip.fade_out_samples as f64 / sample_rate) as f32 * pixels_per_second;
-                        let fo_handle_x = cr.right() - fade_out_px;
-                        if (hover_pos.x - fi_handle_x).abs() < fade_handle_zone
-                            || (hover_pos.x - fo_handle_x).abs() < fade_handle_zone
-                        {
-                            near_interactive = true;
-                            break;
-                        }
-                    }
-                    // Check trim edges
-                    if (hover_pos.x - cr.left()).abs() < edge_zone
-                        || (hover_pos.x - cr.right()).abs() < edge_zone
-                    {
-                        near_interactive = true;
-                        break;
-                    }
-                }
-                if near_interactive {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                }
+                if rect.contains(hover_pos) && hover_pos.y > tracks_y_start {
+                    let edge_zone = 8.0;
+                    let fade_handle_zone = 20.0;
 
-                // Track separator hover — show vertical resize cursor near separator lines
-                if !near_interactive && app.dragging_separator.is_none() {
-                    let sep_zone = 4.0;
-                    for (i, track) in app.project.tracks.iter().enumerate() {
-                        if is_track_collapsed(app, i) {
+                    // Scan all clips once, determine what the cursor is over
+                    let mut cursor_result = None; // None = not determined yet
+                    for &(ti, ci, _, cr) in &clip_rects {
+                        if !cr.contains(hover_pos) {
                             continue;
                         }
-                        let sep_y = tracks_y_start + track_offsets[i] + track_height(track, app.track_height_zoom);
-                        if (hover_pos.y - sep_y).abs() < sep_zone && hover_pos.x >= rect.min.x && hover_pos.x <= rect.max.x {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                        // Highest priority: fade handles (top corners)
+                        if (hover_pos.y - cr.top()) < fade_handle_zone {
+                            let clip = &app.project.tracks[ti].clips[ci];
+                            let fade_in_px = (clip.fade_in_samples as f64 / sample_rate) as f32 * pixels_per_second;
+                            let fi_handle_x = cr.left() + fade_in_px;
+                            let fade_out_px = (clip.fade_out_samples as f64 / sample_rate) as f32 * pixels_per_second;
+                            let fo_handle_x = cr.right() - fade_out_px;
+                            if (hover_pos.x - fi_handle_x).abs() < fade_handle_zone
+                                || (hover_pos.x - fo_handle_x).abs() < fade_handle_zone
+                            {
+                                cursor_result = Some(egui::CursorIcon::ResizeHorizontal);
+                                break;
+                            }
+                        }
+                        // Trim edges
+                        if (hover_pos.x - cr.left()).abs() < edge_zone
+                            || (hover_pos.x - cr.right()).abs() < edge_zone
+                        {
+                            cursor_result = Some(egui::CursorIcon::ResizeHorizontal);
                             break;
                         }
+                        // Over clip body — grab cursor
+                        cursor_result = Some(egui::CursorIcon::Grab);
+                        break;
                     }
+
+                    // If no clip was hit, check track separator hover
+                    if cursor_result.is_none() && app.dragging_separator.is_none() {
+                        let sep_zone = 4.0;
+                        for (i, track) in app.project.tracks.iter().enumerate() {
+                            if is_track_collapsed(app, i) {
+                                continue;
+                            }
+                            let sep_y = tracks_y_start + track_offsets[i] + track_height(track, app.track_height_zoom);
+                            if (hover_pos.y - sep_y).abs() < sep_zone && hover_pos.x >= rect.min.x && hover_pos.x <= rect.max.x {
+                                cursor_result = Some(egui::CursorIcon::ResizeVertical);
+                                break;
+                            }
+                        }
+                    }
+
+                    // If still nothing, we are over empty timeline area — crosshair
+                    let cursor = cursor_result.unwrap_or(egui::CursorIcon::Crosshair);
+                    ui.ctx().set_cursor_icon(cursor);
                 }
             }
         }
@@ -3330,6 +3351,75 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 app.speed_input = None;
             } else if cancel {
                 app.speed_input = None;
+            }
+        }
+
+        // Insert Silence dialog
+        if app.insert_silence_input.is_some() {
+            let mut apply = false;
+            let mut cancel = false;
+            egui::Window::new("Insert Silence at Playhead")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ui.ctx(), |ui| {
+                    if let Some(ref mut state) = app.insert_silence_input {
+                        ui.horizontal(|ui| {
+                            ui.label("Duration:");
+                            let resp = ui.text_edit_singleline(&mut state.input_buf);
+                            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                apply = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut state.use_bars, true, "Bars");
+                            ui.radio_value(&mut state.use_bars, false, "Seconds");
+                        });
+
+                        // Show preview of duration in the other unit
+                        if let Ok(val) = state.input_buf.parse::<f64>() {
+                            if state.use_bars {
+                                let beats_per_bar = app.project.time_signature.numerator as f64;
+                                let bps = app.project.tempo.bpm / 60.0;
+                                let secs = val * beats_per_bar / bps;
+                                ui.label(format!("= {:.2}s", secs));
+                            } else {
+                                let bps = app.project.tempo.bpm / 60.0;
+                                let beats_per_bar = app.project.time_signature.numerator as f64;
+                                let bars = val * bps / beats_per_bar;
+                                ui.label(format!("= {:.2} bars", bars));
+                            }
+                        }
+
+                        ui.horizontal(|ui| {
+                            if ui.button("Insert").clicked() {
+                                apply = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancel = true;
+                            }
+                        });
+                    }
+                });
+
+            if apply {
+                if let Some(ref state) = app.insert_silence_input {
+                    if let Ok(val) = state.input_buf.parse::<f64>() {
+                        let duration_samples = if state.use_bars {
+                            // Convert bars to samples
+                            let beats_per_bar = app.project.time_signature.numerator as f64;
+                            let bps = app.project.tempo.bpm / 60.0;
+                            let secs = val * beats_per_bar / bps;
+                            (secs * sample_rate) as u64
+                        } else {
+                            (val * sample_rate) as u64
+                        };
+                        app.insert_silence(duration_samples);
+                    }
+                }
+                app.insert_silence_input = None;
+            } else if cancel {
+                app.insert_silence_input = None;
             }
         }
 

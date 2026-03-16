@@ -1,5 +1,5 @@
 use eframe::egui;
-use jamhub_model::{MidiMappingTarget, TrackKind};
+use jamhub_model::MidiMappingTarget;
 
 use crate::DawApp;
 use crate::midi_mapping;
@@ -56,7 +56,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
             // Build a list of (track_id, track_name) for dropdowns
-            let track_info: Vec<(uuid::Uuid, String, TrackKind)> = app
+            let track_info: Vec<(uuid::Uuid, String, jamhub_model::TrackKind)> = app
                 .project
                 .tracks
                 .iter()
@@ -103,29 +103,19 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                             .color(egui::Color32::from_rgb(100, 98, 94)),
                                     );
                                     let kind_label = match track.kind {
-                                        TrackKind::Audio => "AUD",
-                                        TrackKind::Midi => "MID",
-                                        TrackKind::Bus => "BUS",
+                                        jamhub_model::TrackKind::Audio
+                                        | jamhub_model::TrackKind::Bus => "AUD",
+                                        jamhub_model::TrackKind::Midi => "MID",
                                     };
                                     ui.label(
                                         egui::RichText::new(kind_label)
                                             .size(8.0)
-                                            .color(if track.kind == TrackKind::Bus {
-                                                egui::Color32::from_rgb(120, 175, 220)
-                                            } else {
-                                                egui::Color32::from_rgb(100, 98, 94)
-                                            }),
+                                            .color(egui::Color32::from_rgb(100, 98, 94)),
                                     );
                                 });
 
                                 // Input selector
-                                if track.kind == TrackKind::Bus {
-                                    ui.label(
-                                        egui::RichText::new("In: Sends")
-                                            .size(8.0)
-                                            .color(egui::Color32::from_rgb(120, 170, 220)),
-                                    );
-                                } else {
+                                {
                                     let current_input_label = match track.input_channel {
                                         None => "Default In".to_string(),
                                         Some(ch) => format!("In {}", ch + 1),
@@ -203,8 +193,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                                     },
                                                 );
                                             }
-                                            for (tid, tname, tkind) in &track_info {
-                                                if *tkind != TrackKind::Bus || *tid == current_id {
+                                            for (tid, tname, _tkind) in &track_info {
+                                                if *tid == current_id {
                                                     continue;
                                                 }
                                                 if ui
@@ -483,7 +473,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 });
 
                                 // ---- Sends section ----
-                                if track.kind == TrackKind::Audio || track.kind == TrackKind::Bus {
+                                {
                                     ui.separator();
                                     ui.label(
                                         egui::RichText::new("Sends")

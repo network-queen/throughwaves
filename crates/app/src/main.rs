@@ -417,6 +417,8 @@ pub struct DawApp {
     pub dragging_separator: Option<usize>,
     /// Timer for periodic layout persistence
     pub last_layout_save: std::time::Instant,
+    /// Insert Silence dialog state
+    pub insert_silence_input: Option<InsertSilenceInput>,
 }
 
 /// State for slip-editing: shifting audio content within clip boundaries.
@@ -514,6 +516,22 @@ pub struct SpeedInputState {
     pub track_idx: usize,
     pub clip_idx: usize,
     pub input_buf: String,
+}
+
+/// State for the Insert Silence dialog.
+pub struct InsertSilenceInput {
+    pub input_buf: String,
+    /// If true, interpret input as bars; if false, interpret as seconds.
+    pub use_bars: bool,
+}
+
+impl Default for InsertSilenceInput {
+    fn default() -> Self {
+        Self {
+            input_buf: "1".into(),
+            use_bars: true,
+        }
+    }
 }
 
 /// State for files being dragged over the window from Finder
@@ -739,14 +757,14 @@ impl ProjectTemplate {
             ProjectTemplate::SingerSongwriter => {
                 project.add_track("Vocals", TrackKind::Audio);
                 project.add_track("Guitar", TrackKind::Audio);
-                project.add_track("Mix Bus", TrackKind::Bus);
+                project.add_track("Mix Bus", TrackKind::Audio);
             }
             ProjectTemplate::Band => {
                 project.add_track("Drums", TrackKind::Audio);
                 project.add_track("Bass", TrackKind::Audio);
                 project.add_track("Guitar", TrackKind::Audio);
                 project.add_track("Vocal", TrackKind::Audio);
-                project.add_track("Mix Bus", TrackKind::Bus);
+                project.add_track("Mix Bus", TrackKind::Audio);
             }
             ProjectTemplate::Electronic => {
                 project.add_track("Synth 1", TrackKind::Midi);
@@ -755,7 +773,7 @@ impl ProjectTemplate {
                 project.add_track("Bass", TrackKind::Midi);
                 project.add_track("Audio 1", TrackKind::Audio);
                 project.add_track("Audio 2", TrackKind::Audio);
-                project.add_track("Master Bus", TrackKind::Bus);
+                project.add_track("Master Bus", TrackKind::Audio);
             }
             ProjectTemplate::Podcast => {
                 project.add_track("Host", TrackKind::Audio);
@@ -1071,6 +1089,7 @@ impl DawApp {
             layout_loaded: false,
             dragging_separator: None,
             last_layout_save: std::time::Instant::now(),
+            insert_silence_input: None,
         };
 
         // Apply persisted layout
@@ -1868,6 +1887,419 @@ impl DawApp {
         self.set_status(&format!("Split {} clip(s) at playhead", to_split.len()));
     }
 
+    /// Split clips on ALL tracks at the playhead position (Reaper-style).
+    /// Called when pressing S with no clip selected.
+    pub fn split_all_tracks_at_playhead(&mut self) {
+        let pos = self.position_samples();
+        let mut total_splits = 0usize;
+
+        // Collect all (track_idx, clip_idx) pairs that need splitting
+        let mut splits: Vec<(usize, Vec<usize>)> = Vec::new();
+        for (ti, track) in self.project.tracks.iter().enumerate() {
+            let mut to_split = Vec::new();
+            for (ci, clip) in track.clips.iter().enumerate() {
+                let clip_end = clip.start_sample + clip.duration_samples;
+                if pos > clip.start_sample && pos < clip_end {
+                    to_split.push(ci);
+                }
+            }
+            if !to_split.is_empty() {
+                splits.push((ti, to_split));
+            }
+        }
+
+        if splits.is_empty() {
+            self.set_status("No clips at playhead on any track");
+            return;
+        }
+
+        self.push_undo("Split all tracks at playhead");
+
+        for (ti, to_split) in &splits {
+            let ti = *ti;
+            for &ci in to_split.iter().rev() {
+                let clip_start = self.project.tracks[ti].clips[ci].start_sample;
+                let clip_duration = self.project.tracks[ti].clips[ci].duration_samples;
+                let clip_name = self.project.tracks[ti].clips[ci].name.clone();
+                let clip_source = self.project.tracks[ti].clips[ci].source.clone();
+                let clip_muted = self.project.tracks[ti].clips[ci].muted;
+                let split_offset = pos - clip_start;
+                let clip_color = self.project.tracks[ti].clips[ci].color;
+                let clip_rate = self.project.tracks[ti].clips[ci].playback_rate;
+                let clip_preserve_pitch = self.project.tracks[ti].clips[ci].preserve_pitch;
+
+                let mut right_clip = Clip {
+                    id: Uuid::new_v4(),
+                    name: clip_name.clone(),
+                    start_sample: pos,
+                    duration_samples: clip_duration - split_offset,
+                    source: clip_source.clone(),
+                    muted: clip_muted,
+                    fade_in_samples: 0,
+                    fade_out_samples: 0,
+                    color: clip_color,
+                    playback_rate: clip_rate,
+                    preserve_pitch: clip_preserve_pitch,
+                    loop_count: 1,
+                    gain_db: 0.0,
+                    take_index: 0,
+                    content_offset: 0,
+                    transpose_semitones: 0,
+                    reversed: false,
+                };
+
+                if let ClipSource::AudioBuffer { buffer_id } = &clip_source {
+                    let buf_data = self.audio_buffers.get(buffer_id).cloned();
+                    if let Some(buf) = buf_data {
+                        let raw_split = (split_offset as usize).min(buf.len());
+                        let split_at = find_nearest_zero_crossing(&buf, raw_split, 256);
+                        let right_samples = buf[split_at..].to_vec();
+                        let left_samples = buf[..split_at].to_vec();
+
+                        let right_id = Uuid::new_v4();
+                        let left_id = Uuid::new_v4();
+
+                        right_clip.source = ClipSource::AudioBuffer { buffer_id: right_id };
+                        right_clip.duration_samples = right_samples.len() as u64;
+
+                        self.waveform_cache.insert(right_id, &right_samples);
+                        self.waveform_cache.insert(left_id, &left_samples);
+                        self.send_command(EngineCommand::LoadAudioBuffer { id: right_id, samples: right_samples.clone() });
+                        self.send_command(EngineCommand::LoadAudioBuffer { id: left_id, samples: left_samples.clone() });
+                        self.audio_buffers.insert(right_id, right_samples);
+                        self.audio_buffers.insert(left_id, left_samples);
+
+                        self.project.tracks[ti].clips[ci].source =
+                            ClipSource::AudioBuffer { buffer_id: left_id };
+                    }
+                }
+
+                self.project.tracks[ti].clips[ci].duration_samples = split_offset;
+                self.project.tracks[ti].clips.insert(ci + 1, right_clip);
+                total_splits += 1;
+            }
+        }
+
+        self.sync_project();
+        self.set_status(&format!("Split {} clip(s) across all tracks at playhead", total_splits));
+    }
+
+    /// Insert silence at the playhead: shift all clips after the playhead forward
+    /// by the given duration in samples.
+    pub fn insert_silence(&mut self, duration_samples: u64) {
+        if duration_samples == 0 {
+            self.set_status("Insert silence: duration is zero");
+            return;
+        }
+
+        let pos = self.position_samples();
+        self.push_undo("Insert silence");
+
+        // First, split any clips that span the playhead position
+        for ti in 0..self.project.tracks.len() {
+            let mut splits_needed: Vec<usize> = Vec::new();
+            for (ci, clip) in self.project.tracks[ti].clips.iter().enumerate() {
+                let clip_end = clip.start_sample + clip.duration_samples;
+                if pos > clip.start_sample && pos < clip_end {
+                    splits_needed.push(ci);
+                }
+            }
+            // Split in reverse order to keep indices valid
+            for &ci in splits_needed.iter().rev() {
+                let clip = &self.project.tracks[ti].clips[ci];
+                let split_offset = pos - clip.start_sample;
+                let clip_source = clip.source.clone();
+                let clip_duration = clip.duration_samples;
+                let clip_name = clip.name.clone();
+                let clip_muted = clip.muted;
+                let clip_color = clip.color;
+                let clip_rate = clip.playback_rate;
+                let clip_preserve_pitch = clip.preserve_pitch;
+
+                let mut right_clip = Clip {
+                    id: Uuid::new_v4(),
+                    name: clip_name,
+                    start_sample: pos,
+                    duration_samples: clip_duration - split_offset,
+                    source: clip_source.clone(),
+                    muted: clip_muted,
+                    fade_in_samples: 0,
+                    fade_out_samples: 0,
+                    color: clip_color,
+                    playback_rate: clip_rate,
+                    preserve_pitch: clip_preserve_pitch,
+                    loop_count: 1,
+                    gain_db: 0.0,
+                    take_index: 0,
+                    content_offset: 0,
+                    transpose_semitones: 0,
+                    reversed: false,
+                };
+
+                if let ClipSource::AudioBuffer { buffer_id } = &clip_source {
+                    if let Some(buf) = self.audio_buffers.get(buffer_id).cloned() {
+                        let raw_split = (split_offset as usize).min(buf.len());
+                        let split_at = find_nearest_zero_crossing(&buf, raw_split, 256);
+                        let right_samples = buf[split_at..].to_vec();
+                        let left_samples = buf[..split_at].to_vec();
+                        let right_id = Uuid::new_v4();
+                        let left_id = Uuid::new_v4();
+                        right_clip.source = ClipSource::AudioBuffer { buffer_id: right_id };
+                        right_clip.duration_samples = right_samples.len() as u64;
+                        self.waveform_cache.insert(right_id, &right_samples);
+                        self.waveform_cache.insert(left_id, &left_samples);
+                        self.send_command(EngineCommand::LoadAudioBuffer { id: right_id, samples: right_samples.clone() });
+                        self.send_command(EngineCommand::LoadAudioBuffer { id: left_id, samples: left_samples.clone() });
+                        self.audio_buffers.insert(right_id, right_samples);
+                        self.audio_buffers.insert(left_id, left_samples);
+                        self.project.tracks[ti].clips[ci].source =
+                            ClipSource::AudioBuffer { buffer_id: left_id };
+                    }
+                }
+                self.project.tracks[ti].clips[ci].duration_samples = split_offset;
+                self.project.tracks[ti].clips.insert(ci + 1, right_clip);
+            }
+        }
+
+        // Now shift all clips that start at or after the playhead
+        for track in &mut self.project.tracks {
+            for clip in &mut track.clips {
+                if clip.start_sample >= pos {
+                    clip.start_sample += duration_samples;
+                }
+            }
+        }
+
+        // Also shift markers
+        for marker in &mut self.project.markers {
+            if marker.sample >= pos {
+                marker.sample += duration_samples;
+            }
+        }
+
+        // Shift regions
+        for region in &mut self.project.regions {
+            if region.start >= pos {
+                region.start += duration_samples;
+                region.end += duration_samples;
+            } else if region.end > pos {
+                region.end += duration_samples;
+            }
+        }
+
+        // Shift automation points
+        for track in &mut self.project.tracks {
+            for lane in &mut track.automation {
+                for point in &mut lane.points {
+                    if point.sample >= pos {
+                        point.sample += duration_samples;
+                    }
+                }
+            }
+        }
+
+        self.sync_project();
+        let secs = duration_samples as f64 / self.sample_rate() as f64;
+        self.set_status(&format!("Inserted {:.2}s of silence at playhead", secs));
+    }
+
+    /// Remove time at the current selection: delete the time range from all tracks,
+    /// trim clips that partially overlap, and shift remaining clips left.
+    pub fn remove_time_selection(&mut self) {
+        let (sel_start, sel_end) = match (self.selection_start, self.selection_end) {
+            (Some(s), Some(e)) => (s.min(e), s.max(e)),
+            _ => {
+                self.set_status("No time selection — select a range first");
+                return;
+            }
+        };
+
+        let range_len = sel_end - sel_start;
+        if range_len == 0 {
+            self.set_status("Selection has zero length");
+            return;
+        }
+
+        self.push_undo("Remove time at selection");
+
+        for track in &mut self.project.tracks {
+            let mut new_clips = Vec::new();
+            for clip in &track.clips {
+                let clip_end = clip.start_sample + clip.duration_samples;
+
+                if clip_end <= sel_start {
+                    // Clip is entirely before the selection — keep as-is
+                    new_clips.push(clip.clone());
+                } else if clip.start_sample >= sel_end {
+                    // Clip is entirely after the selection — shift left
+                    let mut shifted = clip.clone();
+                    shifted.start_sample -= range_len;
+                    new_clips.push(shifted);
+                } else if clip.start_sample >= sel_start && clip_end <= sel_end {
+                    // Clip is entirely within the selection — remove it
+                    // (don't add to new_clips)
+                } else if clip.start_sample < sel_start && clip_end > sel_end {
+                    // Clip spans the entire selection — trim the middle out
+                    // Keep left portion
+                    let mut left = clip.clone();
+                    left.duration_samples = sel_start - clip.start_sample;
+                    new_clips.push(left);
+                    // Keep right portion, shifted left
+                    let mut right = clip.clone();
+                    right.id = Uuid::new_v4();
+                    right.start_sample = sel_start;
+                    let right_offset = sel_end - clip.start_sample;
+                    right.duration_samples = clip.duration_samples - right_offset;
+                    right.content_offset = clip.content_offset + right_offset;
+                    new_clips.push(right);
+                } else if clip.start_sample < sel_start && clip_end > sel_start {
+                    // Clip starts before selection, ends within it — trim right edge
+                    let mut trimmed = clip.clone();
+                    trimmed.duration_samples = sel_start - clip.start_sample;
+                    new_clips.push(trimmed);
+                } else if clip.start_sample < sel_end && clip_end > sel_end {
+                    // Clip starts within selection, ends after it — trim left edge and shift
+                    let mut trimmed = clip.clone();
+                    let trim_amount = sel_end - clip.start_sample;
+                    trimmed.start_sample = sel_start;
+                    trimmed.duration_samples = clip.duration_samples - trim_amount;
+                    trimmed.content_offset = clip.content_offset + trim_amount;
+                    new_clips.push(trimmed);
+                }
+            }
+            track.clips = new_clips;
+        }
+
+        // Shift markers
+        self.project.markers.retain(|m| m.sample < sel_start || m.sample >= sel_end);
+        for marker in &mut self.project.markers {
+            if marker.sample >= sel_end {
+                marker.sample -= range_len;
+            }
+        }
+
+        // Shift regions
+        self.project.regions.retain(|r| !(r.start >= sel_start && r.end <= sel_end));
+        for region in &mut self.project.regions {
+            if region.start >= sel_end {
+                region.start -= range_len;
+                region.end -= range_len;
+            } else if region.end > sel_start {
+                // Partially overlapping region — trim
+                if region.start < sel_start {
+                    region.end = sel_start;
+                }
+            }
+        }
+
+        // Shift automation points
+        for track in &mut self.project.tracks {
+            for lane in &mut track.automation {
+                lane.points.retain(|p| p.sample < sel_start || p.sample >= sel_end);
+                for point in &mut lane.points {
+                    if point.sample >= sel_end {
+                        point.sample -= range_len;
+                    }
+                }
+            }
+        }
+
+        // Clear selection
+        self.selection_start = None;
+        self.selection_end = None;
+        self.selected_clips.clear();
+
+        self.sync_project();
+        let secs = range_len as f64 / self.sample_rate() as f64;
+        self.set_status(&format!("Removed {:.2}s of time", secs));
+    }
+
+    /// Crop to selection: remove everything outside the time selection,
+    /// trim clips that extend beyond, and move everything to start at time 0.
+    pub fn crop_to_selection(&mut self) {
+        let (sel_start, sel_end) = match (self.selection_start, self.selection_end) {
+            (Some(s), Some(e)) => (s.min(e), s.max(e)),
+            _ => {
+                self.set_status("No time selection — select a range first");
+                return;
+            }
+        };
+
+        if sel_end <= sel_start {
+            self.set_status("Selection has zero length");
+            return;
+        }
+
+        self.push_undo("Crop to selection");
+
+        for track in &mut self.project.tracks {
+            let mut new_clips = Vec::new();
+            for clip in &track.clips {
+                let clip_end = clip.start_sample + clip.duration_samples;
+
+                // Skip clips entirely outside the selection
+                if clip_end <= sel_start || clip.start_sample >= sel_end {
+                    continue;
+                }
+
+                let mut kept = clip.clone();
+
+                // Trim left edge if clip starts before selection
+                if kept.start_sample < sel_start {
+                    let trim = sel_start - kept.start_sample;
+                    kept.content_offset += trim;
+                    kept.duration_samples -= trim;
+                    kept.start_sample = sel_start;
+                }
+
+                // Trim right edge if clip ends after selection
+                let kept_end = kept.start_sample + kept.duration_samples;
+                if kept_end > sel_end {
+                    kept.duration_samples = sel_end - kept.start_sample;
+                }
+
+                // Shift to start at time 0
+                kept.start_sample -= sel_start;
+
+                new_clips.push(kept);
+            }
+            track.clips = new_clips;
+        }
+
+        // Filter and shift markers
+        self.project.markers.retain(|m| m.sample >= sel_start && m.sample < sel_end);
+        for marker in &mut self.project.markers {
+            marker.sample -= sel_start;
+        }
+
+        // Filter and shift regions
+        self.project.regions.retain(|r| r.end > sel_start && r.start < sel_end);
+        for region in &mut self.project.regions {
+            region.start = region.start.saturating_sub(sel_start);
+            region.end = (region.end - sel_start).min(sel_end - sel_start);
+        }
+
+        // Shift automation points
+        for track in &mut self.project.tracks {
+            for lane in &mut track.automation {
+                lane.points.retain(|p| p.sample >= sel_start && p.sample < sel_end);
+                for point in &mut lane.points {
+                    point.sample -= sel_start;
+                }
+            }
+        }
+
+        // Clear selection and move playhead to 0
+        self.selection_start = None;
+        self.selection_end = None;
+        self.selected_clips.clear();
+        self.send_command(EngineCommand::SetPosition(0));
+
+        self.sync_project();
+        let secs = (sel_end - sel_start) as f64 / self.sample_rate() as f64;
+        self.set_status(&format!("Cropped to {:.2}s selection", secs));
+    }
+
     /// Flatten comp: remove all muted clips (inactive takes) from the selected track,
     /// keeping only the active (unmuted) clips. This produces a clean single-take track.
     pub fn flatten_comp(&mut self, track_idx: usize) {
@@ -1963,6 +2395,110 @@ impl DawApp {
             }
             Err(e) => self.set_status(&format!("Bounce failed: {e}")),
         }
+    }
+
+    /// Bounce a single clip in place: render it through the track's effect chain
+    /// and replace the clip with the rendered audio. Effects are NOT removed.
+    pub fn bounce_clip_in_place(&mut self, track_idx: usize, clip_idx: usize) {
+        if track_idx >= self.project.tracks.len() {
+            self.set_status("Invalid track index");
+            return;
+        }
+        if clip_idx >= self.project.tracks[track_idx].clips.len() {
+            self.set_status("Invalid clip index");
+            return;
+        }
+        if self.project.tracks[track_idx].effects.is_empty() {
+            self.set_status("No effects on track — nothing to bounce");
+            return;
+        }
+
+        let clip = &self.project.tracks[track_idx].clips[clip_idx];
+        let clip_start = clip.start_sample;
+        let clip_duration = clip.visual_duration_samples();
+        let clip_name = clip.name.clone();
+
+        if clip_duration == 0 {
+            self.set_status("Clip has zero duration");
+            return;
+        }
+
+        // Build a temporary project with only this track and only this clip
+        let sr = self.sample_rate();
+        let mut temp_project = self.project.clone();
+        let mut temp_track = temp_project.tracks[track_idx].clone();
+        // Keep only the target clip (unmuted), clear all others
+        let single_clip = temp_track.clips[clip_idx].clone();
+        temp_track.clips = vec![single_clip];
+        temp_track.clips[0].muted = false;
+        temp_track.muted = false;
+        temp_track.solo = false;
+        temp_track.volume = 1.0;
+        temp_track.pan = 0.0;
+        temp_project.tracks = vec![temp_track];
+
+        // Render through the mixer (includes effect chain)
+        let block_size: usize = 1024;
+        let total_samples = clip_duration + (sr as u64); // 1s tail for effects
+        let mut mixer = jamhub_engine::Mixer::new(sr, 1); // mono render
+
+        let mut output = Vec::new();
+        let mut pos: u64 = clip_start;
+        let end = clip_start + total_samples;
+        while pos < end {
+            let block = mixer.render_block(&temp_project, pos, block_size, &self.audio_buffers);
+            output.extend_from_slice(&block);
+            pos += block_size as u64;
+        }
+
+        // Trim trailing silence from the effects tail
+        // Find last non-silent sample (threshold: -80dB ~ 0.0001)
+        let mut trim_len = output.len();
+        while trim_len > clip_duration as usize {
+            if output[trim_len - 1].abs() > 0.0001 {
+                break;
+            }
+            trim_len -= 1;
+        }
+        // Keep at least the original clip duration
+        trim_len = trim_len.max(clip_duration as usize);
+        output.truncate(trim_len);
+
+        self.push_undo("Bounce clip in place");
+
+        let buffer_id = Uuid::new_v4();
+        let duration = output.len() as u64;
+
+        self.waveform_cache.insert(buffer_id, &output);
+        self.send_command(EngineCommand::LoadAudioBuffer {
+            id: buffer_id,
+            samples: output.clone(),
+        });
+        self.audio_buffers.insert(buffer_id, output);
+
+        // Replace the clip with the bounced version at the same position
+        self.project.tracks[track_idx].clips[clip_idx] = Clip {
+            id: Uuid::new_v4(),
+            name: format!("{} (bounced)", clip_name),
+            start_sample: clip_start,
+            duration_samples: duration,
+            source: ClipSource::AudioBuffer { buffer_id },
+            muted: false,
+            content_offset: 0,
+            transpose_semitones: 0,
+            reversed: false,
+            fade_in_samples: 0,
+            fade_out_samples: 0,
+            color: None,
+            playback_rate: 1.0,
+            preserve_pitch: false,
+            loop_count: 1,
+            gain_db: 0.0,
+            take_index: 0,
+        };
+
+        self.sync_project();
+        self.set_status(&format!("Bounced in place: {} — effects baked into clip", clip_name));
     }
 
     /// Freeze selected track: render effects offline, disable processing, save CPU.
@@ -2109,9 +2645,9 @@ impl DawApp {
                     for (idx, tpl) in user_templates.iter().enumerate() {
                         ui.horizontal(|ui| {
                             let kind_label = match tpl.track_kind {
-                                TrackKind::Audio => "Audio",
+                                TrackKind::Audio
+                                | TrackKind::Bus => "Audio",
                                 TrackKind::Midi => "MIDI",
-                                TrackKind::Bus => "Bus",
                             };
                             let fx_count = tpl.effects.len();
                             let c = egui::Color32::from_rgb(tpl.color[0], tpl.color[1], tpl.color[2]);
@@ -2432,8 +2968,14 @@ impl DawApp {
                 format: fmt,
                 sample_rate: if self.export_sample_rate > 0 { self.export_sample_rate } else { 0 },
             };
+            self.set_status(&format!("Exporting {}...", path.file_name().unwrap_or_default().to_string_lossy()));
+            let start_time = std::time::Instant::now();
             match jamhub_engine::export_with_options(&path, &self.project, &self.audio_buffers, sr, &options) {
-                Ok(()) => self.set_status(&format!("Exported {} {}-bit: {}", fmt.label(), self.export_bit_depth, path.display())),
+                Ok(()) => {
+                    let elapsed = start_time.elapsed().as_secs_f32();
+                    let filename = path.file_name().unwrap_or_default().to_string_lossy();
+                    self.set_status(&format!("Exported: {} ({:.1}s)", filename, elapsed));
+                }
                 Err(e) => self.set_status(&format!("Export failed: {e}")),
             }
         }
@@ -2543,6 +3085,10 @@ impl DawApp {
                 format: self.export_format,
                 sample_rate: if self.export_sample_rate > 0 { self.export_sample_rate } else { 0 },
             };
+            // Collect track names for progress display
+            let track_names: Vec<String> = self.project.tracks.iter().map(|t| t.name.clone()).collect();
+            let start_time = std::time::Instant::now();
+            self.set_status("Exporting stems...");
             let result = jamhub_engine::export_stems(
                 &dir,
                 &self.project,
@@ -2550,15 +3096,15 @@ impl DawApp {
                 sr,
                 &options,
                 |current, total| {
-                    // Progress callback — in a real async implementation this would
-                    // update the UI; here the export runs synchronously so we log.
-                    eprintln!("Exporting stem {current}/{total}...");
+                    let name = track_names.get(current.saturating_sub(1)).map(|s| s.as_str()).unwrap_or("?");
+                    eprintln!("Exporting stem {current}/{total}: {name}...");
                 },
             );
             match result {
                 Ok(res) => {
                     let count = res.stems.len();
-                    self.set_status(&format!("Exported {count} stems to {}", dir.display()));
+                    let elapsed = start_time.elapsed().as_secs_f32();
+                    self.set_status(&format!("Exported {count} stems to {} ({:.1}s)", dir.display(), elapsed));
                 }
                 Err(e) => self.set_status(&format!("Stem export failed: {e}")),
             }
@@ -3335,7 +3881,8 @@ impl eframe::App for DawApp {
             }
             if i.modifiers.command && i.key_pressed(egui::Key::S) { actions.push("save".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::D) { actions.push("duplicate".into()); }
-            if i.modifiers.command && i.key_pressed(egui::Key::A) { actions.push("select_all_clips".into()); }
+            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::A) { actions.push("select_all_clips_all_tracks".into()); }
+            else if i.modifiers.command && i.key_pressed(egui::Key::A) { actions.push("select_all_clips".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::E) { actions.push("effects".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::I) { actions.push("project_info".into()); }
             else if i.modifiers.command && i.key_pressed(egui::Key::I) { actions.push("import".into()); }
@@ -3430,6 +3977,27 @@ impl eframe::App for DawApp {
                         }
                     }
                 }
+                "select_all_clips_all_tracks" => {
+                    // Cmd+Shift+A: select all clips on ALL tracks
+                    self.selected_clips.clear();
+                    let mut total = 0;
+                    for ti in 0..self.project.tracks.len() {
+                        for ci in 0..self.project.tracks[ti].clips.len() {
+                            self.selected_clips.insert((ti, ci));
+                            total += 1;
+                        }
+                    }
+                    self.set_status(&format!("Selected all {} clip(s) on all tracks", total));
+                }
+                "insert_silence" => {
+                    self.insert_silence_input = Some(InsertSilenceInput::default());
+                }
+                "remove_time" => {
+                    self.remove_time_selection();
+                }
+                "crop_to_selection" => {
+                    self.crop_to_selection();
+                }
                 "track_up" => {
                     if let Some(idx) = self.selected_track {
                         if idx > 0 {
@@ -3487,7 +4055,12 @@ impl eframe::App for DawApp {
                     self.set_status(&format!("Snap: {}", self.snap_mode.label()));
                 }
                 "split" => {
-                    self.split_clip_at_playhead();
+                    // If no clips are selected, split ALL tracks at playhead (Reaper-style)
+                    if self.selected_clips.is_empty() {
+                        self.split_all_tracks_at_playhead();
+                    } else {
+                        self.split_clip_at_playhead();
+                    }
                 }
                 "input_monitor" => {
                     self.toggle_input_monitor();
@@ -3923,6 +4496,20 @@ impl eframe::App for DawApp {
                                 self.set_status(&format!("Selected {} clip(s)", count));
                             }
                         }
+                        ui.close_menu();
+                    }
+                    if ui.button("Select All (All Tracks) Cmd+Shift+A").clicked() {
+                        self.selected_clips.clear();
+                        let mut total = 0;
+                        for ti in 0..self.project.tracks.len() {
+                            for ci in 0..self.project.tracks[ti].clips.len() {
+                                self.selected_clips.insert((ti, ci));
+                                total += 1;
+                            }
+                        }
+                        self.set_status(&format!("Selected all {} clip(s)", total));
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui.button("MIDI Mappings...").clicked() {
                         self.show_midi_mappings = !self.show_midi_mappings;
@@ -3930,8 +4517,6 @@ impl eframe::App for DawApp {
                     }
                     if ui.button("Macro Controls...").clicked() {
                         self.show_macros = !self.show_macros;
-                        ui.close_menu();
-                    }
                         ui.close_menu();
                     }
                     ui.separator();
@@ -3942,12 +4527,35 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Split Clip at Playhead  S").clicked() {
-                        self.split_clip_at_playhead();
+                    if ui.button("Split at Playhead      S").clicked() {
+                        if self.selected_clips.is_empty() {
+                            self.split_all_tracks_at_playhead();
+                        } else {
+                            self.split_clip_at_playhead();
+                        }
                         ui.close_menu();
                     }
                     if ui.button("Duplicate Track        Cmd+D").clicked() {
                         self.duplicate_selected_track();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Insert Silence at Playhead...").clicked() {
+                        self.insert_silence_input = Some(InsertSilenceInput::default());
+                        ui.close_menu();
+                    }
+                    if ui.add_enabled(
+                        self.selection_start.is_some() && self.selection_end.is_some(),
+                        egui::Button::new("Remove Time at Selection"),
+                    ).clicked() {
+                        self.remove_time_selection();
+                        ui.close_menu();
+                    }
+                    if ui.add_enabled(
+                        self.selection_start.is_some() && self.selection_end.is_some(),
+                        egui::Button::new("Crop to Selection"),
+                    ).clicked() {
+                        self.crop_to_selection();
                         ui.close_menu();
                     }
                     ui.separator();
@@ -3981,10 +4589,10 @@ impl eframe::App for DawApp {
                     if ui.button("Add Bus Track").clicked() {
                         self.push_undo("Add bus track");
                         let bus_count = self.project.tracks.iter()
-                            .filter(|t| t.kind == TrackKind::Bus)
+                            .filter(|t| t.name.starts_with("Bus"))
                             .count() + 1;
                         self.project
-                            .add_track(&format!("Bus {bus_count}"), TrackKind::Bus);
+                            .add_track(&format!("Bus {bus_count}"), TrackKind::Audio);
                         self.sync_project();
                         ui.close_menu();
                     }

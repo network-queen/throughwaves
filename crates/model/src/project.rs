@@ -525,7 +525,8 @@ impl TrackEffect {
 pub enum TrackKind {
     Audio,
     Midi,
-    /// Bus/Aux track — receives audio only from sends, has no clips of its own.
+    /// Legacy Bus/Aux variant — kept for backward compatibility with saved projects.
+    /// Treated identically to Audio everywhere. Any track can receive sends.
     Bus,
 }
 

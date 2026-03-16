@@ -5,7 +5,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use uuid::Uuid;
 
-use jamhub_model::{ClipBufferId, Project, TrackKind};
+use jamhub_model::{ClipBufferId, Project};
 
 use crate::effects::EffectProcessor;
 use crate::vst3_host::Vst3Plugin;
@@ -216,18 +216,16 @@ impl Mixer {
 
         let any_solo = project.tracks.iter().any(|t| t.solo);
 
-        // Accumulator for send contributions to bus/aux tracks, keyed by target track ID.
+        // Accumulator for send contributions, keyed by target track ID.
+        // Any track can be a send target — not just Bus tracks.
         let mut send_buffers: HashMap<Uuid, Vec<f32>> = HashMap::new();
 
-        // ---- Pre-pass: Render raw (pre-effect) audio for all Audio tracks ----
+        // ---- Pre-pass: Render raw (pre-effect) clip audio for all tracks ----
         // Stored for sidechain access so compressors on other tracks can use
         // this track's audio as their detection signal.
         let mut pre_effect_audio: HashMap<Uuid, Vec<f32>> = HashMap::new();
 
         for track in &project.tracks {
-            if track.kind != TrackKind::Audio {
-                continue;
-            }
             if track.muted {
                 continue;
             }
@@ -252,22 +250,44 @@ impl Mixer {
             }
         }
 
-        // ---- Pass 1: Apply effects, volume/pan, sends for Audio tracks ----
-        // We also accumulate bus-routed audio into send_buffers via output_target.
-        let mut bus_output_buffers: HashMap<Uuid, Vec<f32>> = HashMap::new();
+        // ---- Single pass: process ALL tracks uniformly ----
+        // Each track renders its own clips (if any), receives send/routed audio,
+        // applies effects, and mixes to output. "Bus" tracks just happen to have
+        // no clips, so they only get send audio — but the code path is the same.
+        let mut output_target_buffers: HashMap<Uuid, Vec<f32>> = HashMap::new();
 
         for track in &project.tracks {
-            if track.muted || track.kind != TrackKind::Audio {
+            if track.muted {
                 continue;
             }
             if any_solo && !track.solo {
                 continue;
             }
 
-            let mut track_mono = match pre_effect_audio.get(&track.id) {
-                Some(buf) => buf.clone(),
-                None => continue,
-            };
+            // Start with clip audio (if any)
+            let mut track_mono = pre_effect_audio.get(&track.id)
+                .cloned()
+                .unwrap_or_else(|| vec![0.0f32; block_size]);
+
+            // Mix in audio from sends targeting this track
+            if let Some(send_audio) = send_buffers.remove(&track.id) {
+                for i in 0..block_size {
+                    track_mono[i] += send_audio[i];
+                }
+            }
+
+            // Mix in audio from tracks routed via output_target to this track
+            if let Some(routed) = output_target_buffers.remove(&track.id) {
+                for i in 0..block_size {
+                    track_mono[i] += routed[i];
+                }
+            }
+
+            // If there's no audio at all, skip further processing
+            let has_audio = track_mono.iter().any(|&s| s != 0.0);
+            if !has_audio {
+                continue;
+            }
 
             // Frozen tracks: skip all effect processing (effects already baked into frozen audio)
             if track.frozen {
@@ -371,12 +391,12 @@ impl Mixer {
             let (left_gain, right_gain) = pan_law(auto_pan);
 
             if let Some(target_id) = track.output_target {
-                // Route to a bus track instead of master
-                let bus_buf = bus_output_buffers
+                // Route to another track instead of master
+                let target_buf = output_target_buffers
                     .entry(target_id)
                     .or_insert_with(|| vec![0.0f32; block_size]);
                 for i in 0..block_size {
-                    bus_buf[i] += track_mono[i] * auto_volume;
+                    target_buf[i] += track_mono[i] * auto_volume;
                 }
             } else {
                 // Route to master output
@@ -392,128 +412,6 @@ impl Mixer {
                         };
                         output[i * channels + ch] += sample * gain;
                     }
-                }
-            }
-        }
-
-        // ---- Pass 2: Process Bus/Aux tracks ----
-        // Bus tracks receive audio from sends AND from tracks routed via output_target.
-        for track in &project.tracks {
-            if track.kind != TrackKind::Bus {
-                continue;
-            }
-            if track.muted {
-                continue;
-            }
-            if any_solo && !track.solo {
-                continue;
-            }
-
-            // Combine audio from sends and output_target routing
-            let mut track_mono = send_buffers
-                .remove(&track.id)
-                .unwrap_or_else(|| vec![0.0f32; block_size]);
-
-            if let Some(routed) = bus_output_buffers.remove(&track.id) {
-                for i in 0..block_size {
-                    track_mono[i] += routed[i];
-                }
-            }
-
-            let has_audio = track_mono.iter().any(|&s| s != 0.0);
-            if !has_audio {
-                continue;
-            }
-
-            // Apply effects chain on bus track with sidechain support
-            if !track.effects.is_empty() {
-                let sidechain_audio = track.sidechain_track_id
-                    .and_then(|sc_id| pre_effect_audio.get(&sc_id));
-
-                let processor = self
-                    .processors
-                    .entry(track.id)
-                    .or_insert_with(|| EffectProcessor::new(self.sample_rate));
-
-                for (slot_index, slot) in track.effects.iter().enumerate() {
-                    if !slot.enabled {
-                        continue;
-                    }
-
-                    match &slot.effect {
-                        jamhub_model::TrackEffect::Vst3Plugin { .. } => {
-                            if let Some(vst) = self.vst_instances.get_mut(&slot.id) {
-                                vst.apply_pending_param_changes();
-                                vst.process(&mut track_mono);
-                            }
-                        }
-                        jamhub_model::TrackEffect::Compressor { threshold_db, ratio, attack_ms, release_ms }
-                            if sidechain_audio.is_some() =>
-                        {
-                            let automated = apply_effect_automation(
-                                &slot.effect,
-                                slot_index,
-                                &track.automation,
-                                position_samples,
-                            );
-                            if let jamhub_model::TrackEffect::Compressor { threshold_db, ratio, attack_ms, release_ms } = &automated {
-                                processor.process_compressor(
-                                    &mut track_mono,
-                                    sidechain_audio.map(|v| v.as_slice()),
-                                    *threshold_db,
-                                    *ratio,
-                                    *attack_ms,
-                                    *release_ms,
-                                    self.sample_rate,
-                                );
-                            }
-                        }
-                        effect => {
-                            let automated = apply_effect_automation(
-                                effect,
-                                slot_index,
-                                &track.automation,
-                                position_samples,
-                            );
-                            processor.process(&mut track_mono, &automated, self.sample_rate);
-                        }
-                    }
-                }
-            }
-
-            // Apply PDC delay compensation for bus tracks
-            if let Some(delay_buf) = self.pdc_delays.get_mut(&track.id) {
-                delay_buf.process(&mut track_mono);
-            }
-
-            // Bus volume and pan
-            let auto_volume = get_automation_value(
-                &track.automation,
-                &jamhub_model::AutomationParam::Volume,
-                position_samples,
-                track.volume,
-            );
-            let auto_pan = get_automation_value(
-                &track.automation,
-                &jamhub_model::AutomationParam::Pan,
-                position_samples,
-                track.pan,
-            );
-
-            let channels = self.channels as usize;
-            let (left_gain, right_gain) = pan_law(auto_pan);
-
-            for i in 0..block_size {
-                let sample = track_mono[i] * auto_volume;
-                for ch in 0..channels {
-                    let gain = if ch == 0 {
-                        left_gain
-                    } else if ch == 1 {
-                        right_gain
-                    } else {
-                        1.0
-                    };
-                    output[i * channels + ch] += sample * gain;
                 }
             }
         }
