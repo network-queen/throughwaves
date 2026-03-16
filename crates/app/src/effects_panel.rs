@@ -14,7 +14,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
     };
 
     let mut open = true;
-    egui::Window::new("FX Chain")
+    egui::Window::new("FX Chain").constrain(false)
         .open(&mut open)
         .default_width(260.0)
         .show(ctx, |ui| {

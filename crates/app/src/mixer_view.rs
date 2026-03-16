@@ -43,6 +43,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         SetSidechain { track_idx: usize, sc_id: Option<uuid::Uuid> },
         SetInputChannel { track_idx: usize, channel: Option<u16> },
         SetOutputTarget { track_idx: usize, target: Option<uuid::Uuid> },
+        SetInstrument { track_idx: usize, instrument: Option<(jamhub_model::EffectSlot, std::path::PathBuf)> },
     }
     let mut routing_actions: Vec<RoutingAction> = Vec::new();
 
@@ -113,6 +114,78 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                             .color(egui::Color32::from_rgb(100, 98, 94)),
                                     );
                                 });
+
+                                // Instrument selector for MIDI tracks
+                                if track.kind == jamhub_model::TrackKind::Midi {
+                                    let instr_label = match &track.instrument_plugin {
+                                        Some(slot) => slot.effect.name().to_string(),
+                                        None => "Built-in Synth".to_string(),
+                                    };
+                                    let _track_id = track.id;
+                                    let current_instr = track.instrument_plugin.clone();
+                                    egui::ComboBox::from_id_salt(("instr_sel", i))
+                                        .selected_text(
+                                            egui::RichText::new(&instr_label).size(8.0),
+                                        )
+                                        .width(CHANNEL_WIDTH - 12.0)
+                                        .show_ui(ui, |ui| {
+                                            // Built-in Synth option
+                                            if ui
+                                                .selectable_label(
+                                                    current_instr.is_none(),
+                                                    "Built-in Synth",
+                                                )
+                                                .on_hover_text("Use the built-in polyphonic synthesizer")
+                                                .clicked()
+                                            {
+                                                routing_actions.push(
+                                                    RoutingAction::SetInstrument {
+                                                        track_idx: i,
+                                                        instrument: None,
+                                                    },
+                                                );
+                                            }
+
+                                            // List loaded instrument plugins from FX browser
+                                            let instruments: Vec<(String, std::path::PathBuf)> = app
+                                                .fx_browser
+                                                .plugins
+                                                .iter()
+                                                .filter(|p| p.is_instrument)
+                                                .filter(|p| {
+                                                    app.fx_browser.loaded_plugins.iter()
+                                                        .any(|l| l.path == p.path && l.loaded)
+                                                })
+                                                .map(|p| (p.name.clone(), p.path.clone()))
+                                                .collect();
+
+                                            if !instruments.is_empty() {
+                                                ui.separator();
+                                                for (name, path) in &instruments {
+                                                    let is_selected = current_instr.as_ref()
+                                                        .map(|s| s.effect.name() == name.as_str())
+                                                        .unwrap_or(false);
+                                                    if ui
+                                                        .selectable_label(is_selected, name)
+                                                        .clicked()
+                                                    {
+                                                        let slot = jamhub_model::EffectSlot::new(
+                                                            jamhub_model::TrackEffect::Vst3Plugin {
+                                                                path: path.to_string_lossy().to_string(),
+                                                                name: name.clone(),
+                                                            },
+                                                        );
+                                                        routing_actions.push(
+                                                            RoutingAction::SetInstrument {
+                                                                track_idx: i,
+                                                                instrument: Some((slot, path.clone())),
+                                                            },
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        });
+                                }
 
                                 // Input selector
                                 {
@@ -1001,6 +1074,29 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
             RoutingAction::SetOutputTarget { track_idx, target } => {
                 app.project.tracks[track_idx].output_target = target;
+                needs_sync = true;
+            }
+            RoutingAction::SetInstrument { track_idx, instrument } => {
+                let track_id = app.project.tracks[track_idx].id;
+                match instrument {
+                    Some((slot, path)) => {
+                        app.push_undo("Set VSTi instrument");
+                        app.project.tracks[track_idx].instrument_plugin = Some(slot);
+                        app.send_command(
+                            jamhub_engine::EngineCommand::LoadVsti {
+                                track_id,
+                                path,
+                            },
+                        );
+                    }
+                    None => {
+                        app.push_undo("Remove VSTi instrument");
+                        app.project.tracks[track_idx].instrument_plugin = None;
+                        app.send_command(
+                            jamhub_engine::EngineCommand::UnloadVsti { track_id },
+                        );
+                    }
+                }
                 needs_sync = true;
             }
         }

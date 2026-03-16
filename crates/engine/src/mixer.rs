@@ -590,6 +590,14 @@ impl Mixer {
         block_size: usize,
         tempo: &jamhub_model::Tempo,
     ) -> Vec<f32> {
+        // Check if this track has a VSTi instrument assigned
+        let use_vsti = track.instrument_plugin.is_some()
+            && self.vsti_instances.contains_key(&track.id);
+
+        if use_vsti {
+            return self.render_midi_track_vsti(track, position_samples, block_size, tempo);
+        }
+
         let synth = self.synths.entry(track.id).or_insert_with(Synth::new);
 
         // Update synth parameters from track settings

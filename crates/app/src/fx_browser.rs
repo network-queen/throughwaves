@@ -158,7 +158,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
     app.fx_browser.scan_if_needed();
 
     let mut open = true;
-    egui::Window::new("Plugin Browser")
+    egui::Window::new("Plugin Browser").constrain(false)
         .open(&mut open)
         .default_size([520.0, 550.0])
         .show(ctx, |ui| {

@@ -144,7 +144,7 @@ pub fn show(app: &mut super::DawApp, ctx: &egui::Context) {
     ctx.request_repaint();
 
     let mut open = app.spectrum_analyzer.show;
-    egui::Window::new("Spectrum Analyzer")
+    egui::Window::new("Spectrum Analyzer").constrain(false)
         .open(&mut open)
         .default_size([480.0, 260.0])
         .resizable(true)

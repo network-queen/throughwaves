@@ -238,7 +238,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
 
     if app.project.tracks[track_idx].kind != TrackKind::Midi {
         let mut open = true;
-        egui::Window::new("Piano Roll")
+        egui::Window::new("Piano Roll").constrain(false)
             .open(&mut open)
             .default_size([400.0, 150.0])
             .show(ctx, |ui| {
@@ -258,7 +258,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
     }
 
     let mut open = true;
-    egui::Window::new("Piano Roll")
+    egui::Window::new("Piano Roll").constrain(false)
         .open(&mut open)
         .default_size([1000.0, 700.0])
         .min_size([600.0, 400.0])
@@ -692,6 +692,40 @@ fn show_note_grid(app: &mut DawApp, ui: &mut egui::Ui, track_idx: usize) {
                     velocity: note.velocity,
                 });
             }
+        }
+    }
+
+    // ── Playhead ──────────────────────────────────────────────
+    {
+        let transport = app.transport_state();
+        let pos_samples = app.position_samples();
+        let sr = app.sample_rate() as f64;
+        let bpm = app.project.tempo.bpm;
+        let ticks_per_second = bpm / 60.0 * TICKS_PER_BEAT as f64;
+        let pos_ticks = (pos_samples as f64 / sr * ticks_per_second) as f32;
+        let playhead_x = rect.min.x + KEY_WIDTH + pos_ticks * pixels_per_tick;
+
+        if playhead_x >= rect.min.x + KEY_WIDTH && playhead_x <= rect.max.x {
+            // Playhead line
+            painter.line_segment(
+                [egui::pos2(playhead_x, rect.min.y), egui::pos2(playhead_x, rect.max.y)],
+                egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 180, 60)),
+            );
+            // Small triangle at top
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(playhead_x, rect.min.y),
+                    egui::pos2(playhead_x - 4.0, rect.min.y + 6.0),
+                    egui::pos2(playhead_x + 4.0, rect.min.y + 6.0),
+                ],
+                egui::Color32::from_rgb(235, 180, 60),
+                egui::Stroke::NONE,
+            ));
+        }
+
+        // Request repaint while playing so the playhead moves
+        if transport == jamhub_model::TransportState::Playing {
+            ui.ctx().request_repaint();
         }
     }
 

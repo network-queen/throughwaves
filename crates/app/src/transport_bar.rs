@@ -11,83 +11,98 @@ const TIME_SIG_PRESETS: &[(u8, u8)] = &[
 
 pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().item_spacing.x = 5.0;
         let state = app.transport_state();
 
-        // === TRANSPORT BUTTONS — circular, prominent ===
-        let small_btn = egui::vec2(28.0, 28.0);
-        let big_btn = egui::vec2(34.0, 34.0);
+        // === TRANSPORT BUTTONS — circular, larger, prominent ===
+        let small_btn = egui::vec2(32.0, 32.0);
+        let big_btn = egui::vec2(40.0, 40.0);
+        let small_r = 15.0;
+        let big_r = 19.0;
 
         // RTZ — return to zero
         let rtz_rect = ui.allocate_space(small_btn).1;
         let rtz_resp = ui.interact(rtz_rect, ui.id().with("rtz"), egui::Sense::click());
-        ui.painter().circle_filled(rtz_rect.center(), 13.0, egui::Color32::from_rgb(36, 37, 44));
+        ui.painter().circle_filled(rtz_rect.center(), small_r, egui::Color32::from_rgb(36, 37, 44));
         if rtz_resp.hovered() {
-            ui.painter().circle_stroke(rtz_rect.center(), 13.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(235, 180, 60)));
+            ui.painter().circle_filled(rtz_rect.center(), small_r, egui::Color32::from_rgb(44, 45, 54));
+            ui.painter().circle_stroke(rtz_rect.center(), small_r, egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 180, 60)));
         }
-        ui.painter().text(rtz_rect.center(), egui::Align2::CENTER_CENTER, "RTZ", egui::FontId::proportional(9.0), egui::Color32::from_rgb(200, 198, 194));
+        ui.painter().text(rtz_rect.center(), egui::Align2::CENTER_CENTER, "RTZ", egui::FontId::proportional(10.0), egui::Color32::from_rgb(200, 198, 194));
         if rtz_resp.on_hover_text("Return to zero [Home]").clicked() {
             app.send_command(EngineCommand::SetPosition(0));
             app.scroll_x = 0.0;
         }
 
-        // Rewind — smaller circle
+        // Rewind
         let rewind_rect = ui.allocate_space(small_btn).1;
         let rewind_resp = ui.interact(rewind_rect, ui.id().with("rewind"), egui::Sense::click());
-        ui.painter().circle_filled(rewind_rect.center(), 13.0, egui::Color32::from_rgb(36, 37, 44));
+        ui.painter().circle_filled(rewind_rect.center(), small_r, egui::Color32::from_rgb(36, 37, 44));
         if rewind_resp.hovered() {
-            ui.painter().circle_stroke(rewind_rect.center(), 13.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(235, 180, 60)));
+            ui.painter().circle_filled(rewind_rect.center(), small_r, egui::Color32::from_rgb(44, 45, 54));
+            ui.painter().circle_stroke(rewind_rect.center(), small_r, egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 180, 60)));
         }
-        ui.painter().text(rewind_rect.center(), egui::Align2::CENTER_CENTER, "\u{23EE}", egui::FontId::proportional(14.0), egui::Color32::from_rgb(230, 228, 224));
+        ui.painter().text(rewind_rect.center(), egui::Align2::CENTER_CENTER, "\u{23EE}", egui::FontId::proportional(16.0), egui::Color32::from_rgb(230, 228, 224));
         if rewind_resp.on_hover_text("Rewind to start [Home]").clicked() {
             app.send_command(EngineCommand::SetPosition(0));
         }
 
-        // Stop — smaller circle
+        // Stop
         let stop_active = state == TransportState::Stopped;
         let stop_rect = ui.allocate_space(small_btn).1;
         let stop_resp = ui.interact(stop_rect, ui.id().with("stop"), egui::Sense::click());
-        let stop_bg = if stop_active { egui::Color32::from_rgb(58, 60, 72) } else { egui::Color32::from_rgb(36, 37, 44) };
-        ui.painter().circle_filled(stop_rect.center(), 13.0, stop_bg);
+        let stop_bg = if stop_active { egui::Color32::from_rgb(62, 64, 78) } else { egui::Color32::from_rgb(36, 37, 44) };
+        ui.painter().circle_filled(stop_rect.center(), small_r, stop_bg);
         if stop_resp.hovered() {
-            ui.painter().circle_stroke(stop_rect.center(), 13.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(235, 180, 60)));
+            ui.painter().circle_filled(stop_rect.center(), small_r, egui::Color32::from_rgb(48, 50, 60));
+            ui.painter().circle_stroke(stop_rect.center(), small_r, egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 180, 60)));
         }
-        ui.painter().text(stop_rect.center(), egui::Align2::CENTER_CENTER, "\u{23F9}", egui::FontId::proportional(14.0), egui::Color32::WHITE);
+        ui.painter().text(stop_rect.center(), egui::Align2::CENTER_CENTER, "\u{23F9}", egui::FontId::proportional(16.0), egui::Color32::WHITE);
         if stop_resp.on_hover_text("Stop playback").clicked() {
             app.send_command(EngineCommand::Stop);
         }
 
-        // Play — large green/orange circle
+        // Play — large green/amber circle
         let playing = state == TransportState::Playing;
         let play_rect = ui.allocate_space(big_btn).1;
         let play_resp = ui.interact(play_rect, ui.id().with("play"), egui::Sense::click());
-        let play_bg = if playing { egui::Color32::from_rgb(220, 150, 30) } else { egui::Color32::from_rgb(50, 160, 60) };
-        ui.painter().circle_filled(play_rect.center(), 16.0, play_bg);
-        if play_resp.hovered() {
-            ui.painter().circle_stroke(play_rect.center(), 16.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+        let play_bg = if playing { egui::Color32::from_rgb(235, 180, 60) } else { egui::Color32::from_rgb(80, 200, 80) };
+        // Subtle glow when playing
+        if playing {
+            ui.painter().circle_filled(play_rect.center(), big_r + 3.0, egui::Color32::from_rgba_premultiplied(235, 180, 60, 35));
         }
-        ui.painter().text(play_rect.center(), egui::Align2::CENTER_CENTER, "\u{25B6}", egui::FontId::proportional(16.0), egui::Color32::WHITE);
+        ui.painter().circle_filled(play_rect.center(), big_r, play_bg);
+        if play_resp.hovered() {
+            ui.painter().circle_stroke(play_rect.center(), big_r, egui::Stroke::new(2.0, egui::Color32::WHITE));
+        }
+        ui.painter().text(play_rect.center(), egui::Align2::CENTER_CENTER, "\u{25B6}", egui::FontId::proportional(18.0), egui::Color32::WHITE);
         if play_resp.on_hover_text("Play [Space]").clicked() {
             app.send_command(EngineCommand::Play);
         }
 
-        // Record — large red circle, pulsing when recording
+        // Record — large red circle, pulsing glow when recording
         let rec_rect = ui.allocate_space(big_btn).1;
         let rec_resp = ui.interact(rec_rect, ui.id().with("record"), egui::Sense::click());
         let rec_bg = if app.is_recording {
             // Pulsing red — animate brightness
-            let pulse = (ui.input(|i| i.time) * 3.0).sin() as f32 * 0.15 + 0.85;
-            let r = (210.0 * pulse) as u8;
-            egui::Color32::from_rgb(r, 25, 25)
+            let pulse = (ui.input(|i| i.time) * 2.5).sin() as f32 * 0.18 + 0.82;
+            let r = (232.0 * pulse) as u8;
+            egui::Color32::from_rgb(r, 30, 30)
         } else {
             egui::Color32::from_rgb(36, 37, 44)
         };
-        ui.painter().circle_filled(rec_rect.center(), 16.0, rec_bg);
-        if rec_resp.hovered() {
-            ui.painter().circle_stroke(rec_rect.center(), 16.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 80, 80)));
+        // Pulsing outer glow when recording
+        if app.is_recording {
+            let glow_pulse = (ui.input(|i| i.time) * 2.5).sin() as f32 * 0.3 + 0.7;
+            let glow_alpha = (50.0 * glow_pulse) as u8;
+            ui.painter().circle_filled(rec_rect.center(), big_r + 4.0, egui::Color32::from_rgba_premultiplied(232, 50, 50, glow_alpha));
         }
-        let rec_dot_color = if app.is_recording { egui::Color32::WHITE } else { egui::Color32::from_rgb(220, 70, 70) };
-        ui.painter().circle_filled(rec_rect.center(), 6.0, rec_dot_color);
+        ui.painter().circle_filled(rec_rect.center(), big_r, rec_bg);
+        if rec_resp.hovered() {
+            ui.painter().circle_stroke(rec_rect.center(), big_r, egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 80, 80)));
+        }
+        let rec_dot_color = if app.is_recording { egui::Color32::WHITE } else { egui::Color32::from_rgb(232, 80, 80) };
+        ui.painter().circle_filled(rec_rect.center(), 7.0, rec_dot_color);
         if rec_resp.on_hover_text("Record [R]\nRecords onto the selected track").clicked() {
             app.toggle_recording();
         }
@@ -169,10 +184,10 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         let ticks = (tick_frac * ticks_per_beat as f64) as u32;
 
         egui::Frame::default()
-            .fill(egui::Color32::from_rgb(16, 16, 20))
-            .inner_margin(egui::Margin::symmetric(12, 4))
-            .corner_radius(6.0)
-            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(36, 37, 44)))
+            .fill(egui::Color32::from_rgb(12, 12, 16))
+            .inner_margin(egui::Margin::symmetric(14, 5))
+            .corner_radius(8.0)
+            .stroke(egui::Stroke::new(1.5, egui::Color32::from_rgb(40, 40, 50)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 14.0;
@@ -228,11 +243,12 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
 
-                // BPM in a pill-shaped container
+                // BPM in a recessed pill container
                 egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(36, 37, 44))
-                    .inner_margin(egui::Margin::symmetric(8, 2))
-                    .corner_radius(11.0)
+                    .fill(egui::Color32::from_rgb(18, 18, 24))
+                    .inner_margin(egui::Margin::symmetric(10, 3))
+                    .corner_radius(12.0)
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(42, 42, 52)))
                     .show(ui, |ui| {
                         let mut bpm = app.project.tempo.bpm;
                         if ui.add(egui::DragValue::new(&mut bpm).range(20.0..=300.0).speed(0.5).suffix(" bpm"))

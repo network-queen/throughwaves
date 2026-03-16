@@ -34,64 +34,64 @@ use undo::UndoManager;
 fn setup_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
 
-    // Warm modern dark theme — Ableton Live 12 clean meets Bitwig warmth
-    let bg = egui::Color32::from_rgb(20, 20, 24);          // deepest background
-    let panel_bg = egui::Color32::from_rgb(28, 29, 34);    // panel surfaces
-    let widget_bg = egui::Color32::from_rgb(36, 37, 44);   // widget backgrounds
-    let widget_hover = egui::Color32::from_rgb(48, 50, 60); // hover state
-    let widget_active = egui::Color32::from_rgb(58, 60, 72); // active/pressed
-    let accent = egui::Color32::from_rgb(235, 180, 60);    // warm amber/gold
-    let selection = egui::Color32::from_rgb(80, 200, 190);  // soft teal
-    let text = egui::Color32::from_rgb(230, 228, 224);     // warm white
-    let text_dim = egui::Color32::from_rgb(145, 142, 138); // secondary text
+    // Modern creative DAW theme — warm darks, vibrant accents, colorful and alive
+    let bg = egui::Color32::from_rgb(18, 18, 22);          // deepest background
+    let panel_bg = egui::Color32::from_rgb(24, 25, 30);    // panel surfaces
+    let widget_bg = egui::Color32::from_rgb(34, 35, 42);   // widget backgrounds
+    let widget_hover = egui::Color32::from_rgb(46, 48, 58); // hover state — visible lift
+    let widget_active = egui::Color32::from_rgb(56, 58, 70); // active/pressed
+    let accent = egui::Color32::from_rgb(235, 180, 60);    // warm amber/gold — primary accent
+    let selection = egui::Color32::from_rgb(80, 200, 190);  // soft teal — selection/highlights
+    let text = egui::Color32::from_rgb(232, 230, 226);     // warm white
+    let text_dim = egui::Color32::from_rgb(140, 138, 132); // secondary text
 
     visuals.panel_fill = panel_bg;
-    visuals.window_fill = egui::Color32::from_rgb(26, 27, 32);
+    visuals.window_fill = egui::Color32::from_rgb(22, 23, 28);
     visuals.extreme_bg_color = bg;
-    visuals.faint_bg_color = egui::Color32::from_rgb(32, 33, 38);
+    visuals.faint_bg_color = egui::Color32::from_rgb(28, 29, 34);
 
-    // Widget styles — softer corners, warmer feel
+    // Widget styles — pill-shaped corners, smooth hover transitions
     visuals.widgets.noninteractive.bg_fill = panel_bg;
     visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_dim);
-    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(8);
 
     visuals.widgets.inactive.bg_fill = widget_bg;
     visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text);
-    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(5);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(8);
     visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
 
     visuals.widgets.hovered.bg_fill = widget_hover;
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(5);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.5));
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.45));
     visuals.widgets.hovered.expansion = 1.0; // subtle grow on hover
 
     visuals.widgets.active.bg_fill = widget_active;
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.active.corner_radius = egui::CornerRadius::same(5);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(8);
 
     visuals.widgets.open.bg_fill = widget_hover;
     visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    visuals.widgets.open.corner_radius = egui::CornerRadius::same(8);
 
-    visuals.widgets.open.corner_radius = egui::CornerRadius::same(5);
-    visuals.selection.bg_fill = selection.gamma_multiply(0.25);
+    visuals.selection.bg_fill = selection.gamma_multiply(0.22);
     visuals.selection.stroke = egui::Stroke::new(1.5, selection);
 
     visuals.window_shadow = egui::epaint::Shadow {
-        offset: [0, 6],
-        blur: 16,
-        spread: 0,
-        color: egui::Color32::from_black_alpha(100),
+        offset: [0, 8],
+        blur: 20,
+        spread: 2,
+        color: egui::Color32::from_black_alpha(110),
     };
-    visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(44, 45, 52));
+    visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(42, 43, 50));
 
     ctx.set_visuals(visuals);
 
     // Typography & spacing — generous, readable, modern
     let mut style = (*ctx.style()).clone();
     style.spacing.item_spacing = egui::vec2(7.0, 6.0);
-    style.spacing.button_padding = egui::vec2(10.0, 5.0);
-    style.spacing.window_margin = egui::Margin::same(12);
+    style.spacing.button_padding = egui::vec2(12.0, 6.0);
+    style.spacing.window_margin = egui::Margin::same(14);
 
     // Larger default font sizes
     use egui::FontId;
@@ -110,16 +110,16 @@ fn apply_theme(ctx: &egui::Context, theme: ThemeChoice) {
 
     let (bg, panel_bg, widget_bg, widget_hover, widget_active, accent, text, text_dim, win_fill, win_stroke_col) = match theme {
         ThemeChoice::Dark => (
-            egui::Color32::from_rgb(20, 20, 24),
-            egui::Color32::from_rgb(28, 29, 34),
-            egui::Color32::from_rgb(36, 37, 44),
-            egui::Color32::from_rgb(48, 50, 60),
-            egui::Color32::from_rgb(58, 60, 72),
+            egui::Color32::from_rgb(18, 18, 22),
+            egui::Color32::from_rgb(24, 25, 30),
+            egui::Color32::from_rgb(34, 35, 42),
+            egui::Color32::from_rgb(46, 48, 58),
+            egui::Color32::from_rgb(56, 58, 70),
             egui::Color32::from_rgb(235, 180, 60),
-            egui::Color32::from_rgb(230, 228, 224),
-            egui::Color32::from_rgb(145, 142, 138),
-            egui::Color32::from_rgb(26, 27, 32),
-            egui::Color32::from_rgb(44, 45, 52),
+            egui::Color32::from_rgb(232, 230, 226),
+            egui::Color32::from_rgb(140, 138, 132),
+            egui::Color32::from_rgb(22, 23, 28),
+            egui::Color32::from_rgb(42, 43, 50),
         ),
         ThemeChoice::Darker => (
             egui::Color32::from_rgb(14, 14, 18),
@@ -158,34 +158,36 @@ fn apply_theme(ctx: &egui::Context, theme: ThemeChoice) {
 
     visuals.widgets.noninteractive.bg_fill = panel_bg;
     visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_dim);
-    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(8);
 
     visuals.widgets.inactive.bg_fill = widget_bg;
     visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text);
-    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(5);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(8);
     visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
 
     visuals.widgets.hovered.bg_fill = widget_hover;
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(5);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.5));
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.45));
+    visuals.widgets.hovered.expansion = 1.0;
 
     visuals.widgets.active.bg_fill = widget_active;
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.active.corner_radius = egui::CornerRadius::same(5);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(8);
 
     visuals.widgets.open.bg_fill = widget_hover;
     visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    visuals.widgets.open.corner_radius = egui::CornerRadius::same(8);
 
     let teal = egui::Color32::from_rgb(80, 200, 190);
-    visuals.selection.bg_fill = teal.gamma_multiply(0.25);
+    visuals.selection.bg_fill = teal.gamma_multiply(0.22);
     visuals.selection.stroke = egui::Stroke::new(1.5, teal);
 
     visuals.window_shadow = egui::epaint::Shadow {
-        offset: [0, 6],
-        blur: 16,
-        spread: 0,
-        color: egui::Color32::from_black_alpha(100),
+        offset: [0, 8],
+        blur: 20,
+        spread: 2,
+        color: egui::Color32::from_black_alpha(110),
     };
     visuals.window_stroke = egui::Stroke::new(1.0, win_stroke_col);
 
@@ -3868,14 +3870,11 @@ impl eframe::App for DawApp {
                     egui::Key::Num7, egui::Key::Num8, egui::Key::Num9,
                 ].iter().enumerate() {
                     if i.key_pressed(*key) && !i.modifiers.command {
-                        if i.modifiers.shift {
-                            // Shift+1-9: save current playhead to locator slot
+                        if i.modifiers.ctrl {
+                            // Ctrl+1-9: save locator
                             actions.push(format!("save_locator_{}", idx));
-                        } else if i.modifiers.ctrl {
-                            // Ctrl+1-9: select track
-                            actions.push(format!("select_track_{}", idx));
                         } else {
-                            // 1-9: recall locator (jump to saved position)
+                            // 1-9: recall locator (or select track if no locator saved)
                             actions.push(format!("recall_locator_{}", idx));
                         }
                     }
@@ -4318,7 +4317,11 @@ impl eframe::App for DawApp {
                                 self.send_command(EngineCommand::SetPosition(pos));
                                 self.set_status(&format!("Jumped to locator {}", idx + 1));
                             } else {
-                                self.set_status(&format!("Locator {} not set (Shift+{} to save)", idx + 1, idx + 1));
+                                // No locator saved — select track instead
+                                if idx < self.project.tracks.len() {
+                                    self.selected_track = Some(idx);
+                                    self.selected_clips.clear();
+                                }
                             }
                         }
                     }
@@ -4594,16 +4597,6 @@ impl eframe::App for DawApp {
                         self.sync_project();
                         ui.close_menu();
                     }
-                    if ui.button("Add Bus Track").clicked() {
-                        self.push_undo("Add bus track");
-                        let bus_count = self.project.tracks.iter()
-                            .filter(|t| t.name.starts_with("Bus"))
-                            .count() + 1;
-                        self.project
-                            .add_track(&format!("Bus {bus_count}"), TrackKind::Audio);
-                        self.sync_project();
-                        ui.close_menu();
-                    }
                     ui.separator();
                     if ui.button("Add from Template...").clicked() {
                         self.show_track_template_picker = true;
@@ -4734,9 +4727,9 @@ impl eframe::App for DawApp {
         egui::TopBottomPanel::top("transport")
             .frame(
                 egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(22, 24, 30))
-                    .inner_margin(egui::Margin::symmetric(8, 4))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 38, 46)))
+                    .fill(egui::Color32::from_rgb(20, 22, 28))
+                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(36, 36, 44)))
             )
             .show(ctx, |ui| {
                 transport_bar::show(self, ui);
@@ -5298,6 +5291,28 @@ impl eframe::App for DawApp {
                             }
                             if ui.button("Reset Speed").clicked() {
                                 self.project.tracks[ti].clips[ci].playback_rate = 1.0;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("Maximize Volume")
+                                .on_hover_text("Increase gain to maximum level without clipping (normalize to 0dB)")
+                                .clicked()
+                            {
+                                if let ClipSource::AudioBuffer { buffer_id } = &self.project.tracks[ti].clips[ci].source {
+                                    if let Some(buf) = self.audio_buffers.get(buffer_id) {
+                                        let peak = buf.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+                                        if peak > 0.0001 {
+                                            // Calculate gain needed to bring peak to 1.0 (0dB)
+                                            let gain_needed = 20.0 * (1.0 / peak).log10();
+                                            self.project.tracks[ti].clips[ci].gain_db = gain_needed.min(24.0);
+                                            self.set_status(&format!("Volume maximized: +{:.1} dB", gain_needed.min(24.0)));
+                                        } else {
+                                            self.set_status("Clip is silent — cannot maximize");
+                                        }
+                                    }
+                                } else {
+                                    self.set_status("Maximize only works on audio clips");
+                                }
                             }
                         });
                     });
