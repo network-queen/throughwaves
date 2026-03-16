@@ -106,6 +106,129 @@ fn create_component_handler() -> (*mut IComponentHandler, ParamChangeRx) {
 
 // --- End IComponentHandler ---
 
+// --- IEventList implementation for MIDI events ---
+
+/// A simple IEventList implementation that holds VST3 events in a Vec.
+#[repr(C)]
+struct HostEventList {
+    vtbl: *const IEventListVtbl,
+    ref_count: AtomicI32,
+    events: Vec<Event>,
+}
+
+unsafe extern "system" fn evtlist_query_interface(
+    this: *mut FUnknown,
+    iid: *const TUID,
+    obj: *mut *mut c_void,
+) -> tresult {
+    let iid_slice = unsafe { &*iid };
+    if *iid_slice == IEventList_iid || *iid_slice == FUnknown_iid {
+        evtlist_add_ref(this);
+        unsafe { *obj = this as *mut c_void; }
+        0
+    } else {
+        unsafe { *obj = ptr::null_mut(); }
+        -1
+    }
+}
+
+unsafe extern "system" fn evtlist_add_ref(this: *mut FUnknown) -> u32 {
+    let el = this as *mut HostEventList;
+    unsafe { (*el).ref_count.fetch_add(1, Ordering::SeqCst) as u32 + 1 }
+}
+
+unsafe extern "system" fn evtlist_release(this: *mut FUnknown) -> u32 {
+    let el = this as *mut HostEventList;
+    let prev = unsafe { (*el).ref_count.fetch_sub(1, Ordering::SeqCst) };
+    if prev <= 1 {
+        drop(unsafe { Box::from_raw(el) });
+        0
+    } else {
+        (prev - 1) as u32
+    }
+}
+
+unsafe extern "system" fn evtlist_get_event_count(this: *mut IEventList) -> i32 {
+    let el = this as *mut HostEventList;
+    unsafe { (*el).events.len() as i32 }
+}
+
+unsafe extern "system" fn evtlist_get_event(
+    this: *mut IEventList,
+    index: i32,
+    e: *mut Event,
+) -> tresult {
+    let el = this as *mut HostEventList;
+    let events = unsafe { &(*el).events };
+    if index >= 0 && (index as usize) < events.len() {
+        unsafe { *e = events[index as usize]; }
+        0
+    } else {
+        -1
+    }
+}
+
+unsafe extern "system" fn evtlist_add_event(
+    this: *mut IEventList,
+    e: *mut Event,
+) -> tresult {
+    let el = this as *mut HostEventList;
+    unsafe { (*el).events.push(*e); }
+    0
+}
+
+static HOST_EVENTLIST_VTBL: IEventListVtbl = IEventListVtbl {
+    base: FUnknownVtbl {
+        queryInterface: evtlist_query_interface,
+        addRef: evtlist_add_ref,
+        release: evtlist_release,
+    },
+    getEventCount: evtlist_get_event_count,
+    getEvent: evtlist_get_event,
+    addEvent: evtlist_add_event,
+};
+
+/// Create a note-on VST3 Event.
+fn make_note_on_event(sample_offset: i32, channel: i16, pitch: i16, velocity: f32, note_id: i32) -> Event {
+    let mut evt: Event = unsafe { std::mem::zeroed() };
+    evt.busIndex = 0;
+    evt.sampleOffset = sample_offset;
+    evt.r#type = Event_::EventTypes_::kNoteOnEvent as u16;
+    evt.flags = Event_::EventFlags_::kIsLive as u16;
+    evt.__field0 = Event__type0 {
+        noteOn: NoteOnEvent {
+            channel,
+            pitch,
+            tuning: 0.0,
+            velocity,
+            length: -1,
+            noteId: note_id,
+        },
+    };
+    evt
+}
+
+/// Create a note-off VST3 Event.
+fn make_note_off_event(sample_offset: i32, channel: i16, pitch: i16, velocity: f32, note_id: i32) -> Event {
+    let mut evt: Event = unsafe { std::mem::zeroed() };
+    evt.busIndex = 0;
+    evt.sampleOffset = sample_offset;
+    evt.r#type = Event_::EventTypes_::kNoteOffEvent as u16;
+    evt.flags = Event_::EventFlags_::kIsLive as u16;
+    evt.__field0 = Event__type0 {
+        noteOff: NoteOffEvent {
+            channel,
+            pitch,
+            velocity,
+            noteId: note_id,
+            tuning: 0.0,
+        },
+    };
+    evt
+}
+
+// --- End IEventList ---
+
 /// A hosted VST3 plugin instance ready for audio processing.
 pub struct Vst3Plugin {
     pub name: String,
@@ -119,6 +242,8 @@ pub struct Vst3Plugin {
     pub latency_samples: u32,
     /// Set to true if the plugin panicked during process() — disables further processing.
     pub crashed: bool,
+    /// True if this plugin is an instrument (VSTi) — has event inputs and audio outputs but no audio inputs.
+    pub is_instrument: bool,
     _lib: Option<libloading::Library>,
     #[allow(dead_code)]
     component: Option<*mut IComponent>,
@@ -227,8 +352,15 @@ impl Vst3Plugin {
         let num_out = unsafe {
             ((*(*component).vtbl).getBusCount)(component, MediaTypes_::kAudio as i32, BusDirections_::kOutput as i32)
         };
+        let num_event_in = unsafe {
+            ((*(*component).vtbl).getBusCount)(component, MediaTypes_::kEvent as i32, BusDirections_::kInput as i32)
+        };
 
-        println!("VST3: '{found_name}' — {num_in} in, {num_out} out");
+        // Detect instrument: 0 audio inputs, 1+ audio outputs, 1+ event inputs
+        let is_instrument = num_in == 0 && num_out > 0 && num_event_in > 0;
+
+        println!("VST3: '{found_name}' — {num_in} audio in, {num_out} audio out, {num_event_in} event in{}",
+            if is_instrument { " [INSTRUMENT]" } else { "" });
 
         // Activate audio buses
         for i in 0..num_in {
@@ -239,6 +371,12 @@ impl Vst3Plugin {
         for i in 0..num_out {
             unsafe {
                 ((*(*component).vtbl).activateBus)(component, MediaTypes_::kAudio as i32, BusDirections_::kOutput as i32, i, 1);
+            }
+        }
+        // Activate event input buses (needed for instruments to receive MIDI)
+        for i in 0..num_event_in {
+            unsafe {
+                ((*(*component).vtbl).activateBus)(component, MediaTypes_::kEvent as i32, BusDirections_::kInput as i32, i, 1);
             }
         }
 
@@ -397,6 +535,7 @@ impl Vst3Plugin {
             has_editor,
             latency_samples,
             crashed: false,
+            is_instrument,
             _lib: Some(lib),
             component: Some(component),
             processor,
@@ -419,6 +558,7 @@ impl Vst3Plugin {
             num_params: 0, has_editor: false,
             latency_samples: 0,
             crashed: false,
+            is_instrument: false,
             _lib: None, component: None, processor: None, controller: None,
             sample_rate: 44100.0, block_size: 256,
             param_change_rx: None,
@@ -561,6 +701,127 @@ impl Vst3Plugin {
                 self.processing = false;
                 self.error = Some("Plugin crashed during audio processing".to_string());
                 // Keep original samples (passthrough)
+            }
+        }
+    }
+
+    /// Process MIDI events through an instrument plugin, producing audio output.
+    ///
+    /// - `notes_on`: slice of (sample_offset, pitch, velocity) for note-on events
+    /// - `notes_off`: slice of (sample_offset, pitch) for note-off events
+    /// - `output`: mono output buffer to fill with generated audio
+    ///
+    /// The instrument receives no audio input — only MIDI events — and produces stereo
+    /// audio which is mixed down to mono in the output buffer.
+    pub fn process_with_midi(
+        &mut self,
+        notes_on: &[(i32, u8, u8)],
+        notes_off: &[(i32, u8)],
+        output: &mut [f32],
+    ) {
+        if self.crashed {
+            return;
+        }
+
+        let processor = match self.processor {
+            Some(p) if self.processing => p,
+            _ => return,
+        };
+
+        let n = output.len();
+        if n == 0 { return; }
+
+        // Resize pre-allocated buffers if needed
+        if self.proc_out_left.len() < n {
+            self.proc_out_left.resize(n, 0.0);
+            self.proc_out_right.resize(n, 0.0);
+        }
+
+        // Zero output buffers (instrument generates audio from scratch)
+        self.proc_out_left[..n].fill(0.0);
+        self.proc_out_right[..n].fill(0.0);
+
+        let mut out_ptrs = [self.proc_out_left.as_mut_ptr(), self.proc_out_right.as_mut_ptr()];
+
+        let mut output_bus = AudioBusBuffers {
+            numChannels: 2,
+            silenceFlags: 0,
+            __field0: AudioBusBuffers__type0 {
+                channelBuffers32: out_ptrs.as_mut_ptr(),
+            },
+        };
+
+        // Build event list from MIDI note data
+        let mut events: Vec<Event> = Vec::with_capacity(notes_on.len() + notes_off.len());
+        let mut note_id_counter: i32 = 0;
+
+        for &(sample_offset, pitch, velocity) in notes_on {
+            events.push(make_note_on_event(sample_offset, 0, pitch as i16, velocity as f32 / 127.0, note_id_counter));
+            note_id_counter += 1;
+        }
+        for &(sample_offset, pitch) in notes_off {
+            events.push(make_note_off_event(sample_offset, 0, pitch as i16, 0.0, -1));
+        }
+
+        // Sort events by sample offset for correct ordering
+        events.sort_by_key(|e| e.sampleOffset);
+
+        let mut event_list = Box::new(HostEventList {
+            vtbl: &HOST_EVENTLIST_VTBL,
+            ref_count: AtomicI32::new(1),
+            events,
+        });
+        let event_list_ptr = &mut *event_list as *mut HostEventList as *mut IEventList;
+
+        // Provide a valid ProcessContext
+        let mut process_context: ProcessContext = unsafe { std::mem::zeroed() };
+        process_context.sampleRate = self.sample_rate;
+        process_context.tempo = 120.0;
+        process_context.timeSigNumerator = 4;
+        process_context.timeSigDenominator = 4;
+        process_context.state = ProcessContext_::StatesAndFlags_::kTempoValid as u32
+            | ProcessContext_::StatesAndFlags_::kTimeSigValid as u32
+            | ProcessContext_::StatesAndFlags_::kPlaying as u32;
+
+        let mut data = ProcessData {
+            processMode: ProcessModes_::kRealtime as i32,
+            symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
+            numSamples: n as i32,
+            numInputs: 0,  // instruments have no audio inputs
+            numOutputs: 1,
+            inputs: ptr::null_mut(),
+            outputs: &mut output_bus,
+            inputParameterChanges: ptr::null_mut(),
+            outputParameterChanges: ptr::null_mut(),
+            inputEvents: event_list_ptr,
+            outputEvents: ptr::null_mut(),
+            processContext: &mut process_context,
+        };
+
+        let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            unsafe { ((*(*processor).vtbl).process)(processor, &mut data) }
+        }));
+
+        // Prevent event_list from being double-freed (we gave a raw pointer to ProcessData)
+        std::mem::forget(event_list);
+
+        match process_result {
+            Ok(result) => {
+                if result == 0 {
+                    let out_l = &self.proc_out_left[..n];
+                    let out_r = &self.proc_out_right[..n];
+                    // Mix stereo to mono
+                    for i in 0..n {
+                        output[i] = (out_l[i] + out_r[i]) * 0.5;
+                    }
+                }
+                // If result != 0, output stays zeroed
+            }
+            Err(_) => {
+                eprintln!("VST3 CRASH: instrument '{}' panicked during process() — disabling", self.name);
+                self.crashed = true;
+                self.processing = false;
+                self.error = Some("Plugin crashed during audio processing".to_string());
             }
         }
     }

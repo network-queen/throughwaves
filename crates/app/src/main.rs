@@ -2699,6 +2699,13 @@ impl DawApp {
                 input_channel: None,
                 output_target: None,
                 session_clips: Vec::new(),
+                synth_wave: "Saw".to_string(),
+                synth_attack: 10.0,
+                synth_decay: 100.0,
+                synth_sustain: 0.7,
+                synth_release: 200.0,
+                synth_cutoff: 8000.0,
+                instrument_plugin: None,
             };
             self.project.tracks.push(track);
             self.selected_track = Some(self.project.tracks.len() - 1);

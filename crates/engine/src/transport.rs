@@ -31,6 +31,12 @@ pub enum EngineCommand {
     UnloadVst3 { slot_id: Uuid },
     /// Attach a parameter change receiver to a loaded VST3 plugin (for editor UI sync)
     AttachParamRx { slot_id: Uuid, rx: crate::vst3_host::ParamChangeRx },
+    /// Load a VST3 instrument plugin for a MIDI track
+    LoadVsti { track_id: Uuid, path: PathBuf },
+    /// Unload a VST3 instrument plugin from a MIDI track
+    UnloadVsti { track_id: Uuid },
+    /// Attach a parameter change receiver to a loaded VSTi plugin
+    AttachVstiParamRx { track_id: Uuid, rx: crate::vst3_host::ParamChangeRx },
     /// Reset the integrated LUFS measurement and clipping flag.
     ResetLufs,
 }
@@ -158,6 +164,15 @@ fn engine_loop(
                 }
                 EngineCommand::AttachParamRx { slot_id, rx } => {
                     mixer.attach_param_rx(&slot_id, rx);
+                }
+                EngineCommand::LoadVsti { track_id, path } => {
+                    mixer.load_vsti(track_id, &path);
+                }
+                EngineCommand::UnloadVsti { track_id } => {
+                    mixer.unload_vsti(&track_id);
+                }
+                EngineCommand::AttachVstiParamRx { track_id, rx } => {
+                    mixer.attach_vsti_param_rx(&track_id, rx);
                 }
                 EngineCommand::ResetLufs => {
                     lufs_calc.reset();

@@ -145,6 +145,13 @@ impl Project {
             input_channel: None,
             output_target: None,
             session_clips: Vec::new(),
+            synth_wave: default_synth_wave(),
+            synth_attack: default_synth_attack(),
+            synth_decay: default_synth_decay(),
+            synth_sustain: default_synth_sustain(),
+            synth_release: default_synth_release(),
+            synth_cutoff: default_synth_cutoff(),
+            instrument_plugin: None,
         });
         id
     }
@@ -205,6 +212,28 @@ pub struct Track {
     /// Session clip slots — one per scene (None = empty slot)
     #[serde(default)]
     pub session_clips: Vec<Option<SessionClip>>,
+    /// Built-in synth waveform: "Saw", "Sine", "Square", "Triangle"
+    #[serde(default = "default_synth_wave")]
+    pub synth_wave: String,
+    /// Synth ADSR attack time in milliseconds
+    #[serde(default = "default_synth_attack")]
+    pub synth_attack: f32,
+    /// Synth ADSR decay time in milliseconds
+    #[serde(default = "default_synth_decay")]
+    pub synth_decay: f32,
+    /// Synth ADSR sustain level (0.0 - 1.0)
+    #[serde(default = "default_synth_sustain")]
+    pub synth_sustain: f32,
+    /// Synth ADSR release time in milliseconds
+    #[serde(default = "default_synth_release")]
+    pub synth_release: f32,
+    /// Synth low-pass filter cutoff in Hz
+    #[serde(default = "default_synth_cutoff")]
+    pub synth_cutoff: f32,
+    /// Optional VST3 instrument plugin for MIDI tracks.
+    /// When set, MIDI notes are routed to this plugin instead of the built-in synth.
+    #[serde(default)]
+    pub instrument_plugin: Option<EffectSlot>,
 }
 
 /// A send routes audio from this track to another track at a given level.
@@ -577,6 +606,13 @@ pub struct Clip {
     #[serde(default)]
     pub reversed: bool,
 }
+
+fn default_synth_wave() -> String { "Saw".to_string() }
+fn default_synth_attack() -> f32 { 10.0 }
+fn default_synth_decay() -> f32 { 100.0 }
+fn default_synth_sustain() -> f32 { 0.7 }
+fn default_synth_release() -> f32 { 200.0 }
+fn default_synth_cutoff() -> f32 { 8000.0 }
 
 fn default_playback_rate() -> f32 {
     1.0

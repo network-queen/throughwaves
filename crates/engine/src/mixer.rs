@@ -8,6 +8,7 @@ use uuid::Uuid;
 use jamhub_model::{ClipBufferId, Project};
 
 use crate::effects::EffectProcessor;
+use crate::synth::Synth;
 use crate::vst3_host::Vst3Plugin;
 
 /// PDC (Plugin Delay Compensation) information shared with the UI.
@@ -93,6 +94,8 @@ pub struct Mixer {
     processors: HashMap<Uuid, EffectProcessor>,
     /// Live VST3 plugin instances, keyed by EffectSlot ID
     vst_instances: HashMap<Uuid, Vst3Plugin>,
+    /// Live VST3 instrument plugin instances, keyed by track ID
+    vsti_instances: HashMap<Uuid, Vst3Plugin>,
     /// Dedicated effect processor for the master bus effects chain.
     master_processor: EffectProcessor,
     /// Per-track delay buffers for PDC compensation, keyed by track ID.
@@ -103,6 +106,8 @@ pub struct Mixer {
     output_buf: Vec<f32>,
     /// Pre-allocated reusable mono buffer for master effects downmix.
     master_mono_buf: Vec<f32>,
+    /// Built-in synthesizers for MIDI tracks, keyed by track ID.
+    synths: HashMap<Uuid, Synth>,
 }
 
 impl Mixer {
@@ -112,11 +117,13 @@ impl Mixer {
             channels,
             processors: HashMap::new(),
             vst_instances: HashMap::new(),
+            vsti_instances: HashMap::new(),
             master_processor: EffectProcessor::new(sample_rate),
             pdc_delays: HashMap::new(),
             pdc_info: PdcInfo::new(),
             output_buf: Vec::new(),
             master_mono_buf: Vec::new(),
+            synths: HashMap::new(),
         }
     }
 
@@ -156,6 +163,45 @@ impl Mixer {
         if self.vst_instances.remove(slot_id).is_some() {
             println!("Mixer: VST3 unloaded for slot {slot_id}");
         }
+    }
+
+    /// Load a VST3 instrument plugin for a MIDI track.
+    pub fn load_vsti(&mut self, track_id: Uuid, path: &PathBuf) {
+        println!("Mixer: loading VSTi for track {track_id} from {}", path.display());
+        let plugin = Vst3Plugin::load(path, self.sample_rate as f64, 256);
+        if plugin.loaded {
+            println!("Mixer: VSTi loaded for track {track_id}, instrument={}, processing={}",
+                plugin.is_instrument, plugin.processing);
+            self.vsti_instances.insert(track_id, plugin);
+        } else {
+            eprintln!(
+                "Mixer: VSTi load failed for track {track_id}: {}",
+                plugin.error.as_deref().unwrap_or("unknown")
+            );
+        }
+    }
+
+    /// Unload a VST3 instrument plugin from a MIDI track.
+    pub fn unload_vsti(&mut self, track_id: &Uuid) {
+        if self.vsti_instances.remove(track_id).is_some() {
+            println!("Mixer: VSTi unloaded for track {track_id}");
+        }
+    }
+
+    /// Attach a parameter change receiver to a loaded VSTi plugin.
+    pub fn attach_vsti_param_rx(&mut self, track_id: &Uuid, rx: crate::vst3_host::ParamChangeRx) {
+        if let Some(vst) = self.vsti_instances.get_mut(track_id) {
+            vst.param_change_rx = Some(rx);
+            println!("Mixer: attached param rx for VSTi on track {track_id}");
+        }
+    }
+
+    /// Return the set of track IDs whose VSTi instruments have crashed.
+    pub fn crashed_vsti_ids(&self) -> std::collections::HashSet<Uuid> {
+        self.vsti_instances.iter()
+            .filter(|(_, vst)| vst.crashed)
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     /// Compute the total VST3 plugin latency for a track's effect chain.
@@ -250,6 +296,15 @@ impl Mixer {
                 clip.start_sample < block_end && clip_end > position_samples
             });
             if !has_overlapping_clip {
+                continue;
+            }
+
+            // Render MIDI tracks through the built-in synth
+            if track.kind == jamhub_model::TrackKind::Midi {
+                let track_mono = self.render_midi_track(track, position_samples, block_size, &project.tempo);
+                if track_mono.iter().any(|&s| s != 0.0) {
+                    pre_effect_audio.insert(track.id, track_mono);
+                }
                 continue;
             }
 
@@ -481,6 +536,148 @@ impl Mixer {
         }
         // Stash the buffer back for reuse
         self.master_mono_buf = mono;
+    }
+
+    /// Collect MIDI note-on and note-off events for the current block from a track's clips.
+    /// Returns (notes_on, notes_off) where:
+    /// - notes_on: Vec<(sample_offset_in_block, pitch, velocity)>
+    /// - notes_off: Vec<(sample_offset_in_block, pitch)>
+    fn collect_midi_events(
+        track: &jamhub_model::Track,
+        position_samples: u64,
+        block_size: usize,
+        tempo: &jamhub_model::Tempo,
+        sample_rate: u32,
+    ) -> (Vec<(i32, u8, u8)>, Vec<(i32, u8)>) {
+        let mut notes_on: Vec<(i32, u8, u8)> = Vec::new();
+        let mut notes_off: Vec<(i32, u8)> = Vec::new();
+        let block_end = position_samples + block_size as u64;
+
+        let ticks_per_beat = 480.0_f64;
+        let samples_per_beat = tempo.samples_per_beat(sample_rate as f64);
+        let samples_per_tick = samples_per_beat / ticks_per_beat;
+
+        for clip in &track.clips {
+            if clip.muted { continue; }
+            let clip_visual_end = clip.start_sample + clip.visual_duration_samples();
+            if position_samples >= clip_visual_end || block_end <= clip.start_sample { continue; }
+
+            if let jamhub_model::ClipSource::Midi { ref notes, .. } = clip.source {
+                for note in notes {
+                    let note_on_abs = clip.start_sample + (note.start_tick as f64 * samples_per_tick) as u64;
+                    let note_off_abs = clip.start_sample + ((note.start_tick + note.duration_ticks) as f64 * samples_per_tick) as u64;
+
+                    if note_on_abs >= position_samples && note_on_abs < block_end {
+                        let offset = (note_on_abs - position_samples) as i32;
+                        notes_on.push((offset, note.pitch, note.velocity));
+                    }
+                    if note_off_abs >= position_samples && note_off_abs < block_end {
+                        let offset = (note_off_abs - position_samples) as i32;
+                        notes_off.push((offset, note.pitch));
+                    }
+                }
+            }
+        }
+
+        (notes_on, notes_off)
+    }
+
+    /// Render MIDI clips for a track through the built-in synthesizer or a VSTi plugin.
+    fn render_midi_track(
+        &mut self,
+        track: &jamhub_model::Track,
+        position_samples: u64,
+        block_size: usize,
+        tempo: &jamhub_model::Tempo,
+    ) -> Vec<f32> {
+        let synth = self.synths.entry(track.id).or_insert_with(Synth::new);
+
+        // Update synth parameters from track settings
+        synth.update_params(
+            &track.synth_wave,
+            track.synth_attack,
+            track.synth_decay,
+            track.synth_sustain,
+            track.synth_release,
+            track.synth_cutoff,
+        );
+
+        let mut track_mono = vec![0.0f32; block_size];
+        let block_end = position_samples + block_size as u64;
+
+        for clip in &track.clips {
+            if clip.muted {
+                continue;
+            }
+            let clip_visual_end = clip.start_sample + clip.visual_duration_samples();
+            if position_samples >= clip_visual_end || block_end <= clip.start_sample {
+                continue;
+            }
+
+            if let jamhub_model::ClipSource::Midi { ref notes, .. } = clip.source {
+                let rendered = synth.render_block(
+                    notes,
+                    clip.start_sample,
+                    position_samples,
+                    block_size,
+                    self.sample_rate,
+                    tempo,
+                );
+                // Mix this clip's audio into the track buffer
+                for i in 0..block_size {
+                    let global_sample = position_samples + i as u64;
+                    // Only add audio within the clip's visual boundaries
+                    if global_sample >= clip.start_sample && global_sample < clip_visual_end {
+                        let mut gain = 1.0f32;
+                        // Per-clip gain
+                        if clip.gain_db.abs() > 0.001 {
+                            gain *= 10.0_f32.powf(clip.gain_db / 20.0);
+                        }
+                        // Per-clip fade in
+                        if clip.fade_in_samples > 0 {
+                            let pos_in_clip = global_sample - clip.start_sample;
+                            if pos_in_clip < clip.fade_in_samples {
+                                gain *= pos_in_clip as f32 / clip.fade_in_samples as f32;
+                            }
+                        }
+                        // Per-clip fade out
+                        if clip.fade_out_samples > 0 {
+                            let pos_from_end = clip_visual_end - global_sample;
+                            if pos_from_end <= clip.fade_out_samples {
+                                gain *= pos_from_end as f32 / clip.fade_out_samples as f32;
+                            }
+                        }
+                        track_mono[i] += rendered[i] * gain;
+                    }
+                }
+            }
+        }
+
+        track_mono
+    }
+
+    /// Render MIDI clips for a track through a VSTi instrument plugin.
+    fn render_midi_track_vsti(
+        &mut self,
+        track: &jamhub_model::Track,
+        position_samples: u64,
+        block_size: usize,
+        tempo: &jamhub_model::Tempo,
+    ) -> Vec<f32> {
+        let mut track_mono = vec![0.0f32; block_size];
+
+        // Collect MIDI events for this block across all clips
+        let (notes_on, notes_off) = Self::collect_midi_events(
+            track, position_samples, block_size, tempo, self.sample_rate,
+        );
+
+        // Process through the VSTi plugin
+        if let Some(vsti) = self.vsti_instances.get_mut(&track.id) {
+            vsti.apply_pending_param_changes();
+            vsti.process_with_midi(&notes_on, &notes_off, &mut track_mono);
+        }
+
+        track_mono
     }
 
     /// Render the raw clip audio for a track (pre-effects) into a mono buffer.

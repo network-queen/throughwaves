@@ -237,15 +237,32 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
     };
 
     if app.project.tracks[track_idx].kind != TrackKind::Midi {
-        app.show_piano_roll = false;
-        app.set_status("Select a MIDI track to open piano roll");
+        let mut open = true;
+        egui::Window::new("Piano Roll")
+            .open(&mut open)
+            .default_size([400.0, 150.0])
+            .show(ctx, |ui| {
+                ui.add_space(20.0);
+                ui.label(
+                    egui::RichText::new("No MIDI track selected")
+                        .size(16.0)
+                        .color(egui::Color32::from_rgb(200, 180, 100)),
+                );
+                ui.add_space(8.0);
+                ui.label("Select a MIDI track or create one from Track > Add MIDI Track");
+            });
+        if !open {
+            app.show_piano_roll = false;
+        }
         return;
     }
 
     let mut open = true;
     egui::Window::new("Piano Roll")
         .open(&mut open)
-        .default_size([800.0, 500.0])
+        .default_size([1000.0, 700.0])
+        .min_size([600.0, 400.0])
+        .resizable(true)
         .show(ctx, |ui| {
             let track_name = app.project.tracks[track_idx].name.clone();
             ui.heading(format!("Piano Roll: {track_name}"));

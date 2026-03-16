@@ -108,7 +108,7 @@ impl FxBrowser {
     pub fn scan_and_load_all(&mut self, sample_rate: u32) {
         self.scan_if_needed();
         println!("FX Browser: loading {} plugins...", self.plugins.len());
-        for p in &self.plugins {
+        for p in &mut self.plugins {
             // Skip if already loaded
             if self.loaded_plugins.iter().any(|l| l.path == p.path) {
                 continue;
@@ -118,6 +118,11 @@ impl FxBrowser {
                 sample_rate as f64,
                 256,
             );
+            // Update instrument detection from actual plugin binary (more reliable than name heuristic)
+            if instance.loaded && instance.is_instrument {
+                p.is_instrument = true;
+                p.category = VstCategory::Instrument;
+            }
             self.loaded_plugins.push(
                 jamhub_engine::vst_loader::VstInstance {
                     name: instance.name.clone(),
@@ -130,6 +135,14 @@ impl FxBrowser {
         }
         let loaded_count = self.loaded_plugins.iter().filter(|p| p.loaded).count();
         println!("FX Browser: {loaded_count}/{} plugins loaded", self.plugins.len());
+    }
+
+    /// Return a list of instrument plugins (loaded + detected as instrument).
+    pub fn instrument_plugins(&self) -> Vec<&VstPluginInfo> {
+        self.plugins.iter()
+            .filter(|p| p.is_instrument)
+            .filter(|p| self.loaded_plugins.iter().any(|l| l.path == p.path && l.loaded))
+            .collect()
     }
 
     pub fn save_folders(&self) {
@@ -349,7 +362,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                 let filter_lower = app.fx_browser.filter.to_lowercase();
                 let selected_folder_idx = app.fx_browser.selected_folder;
 
-                let visible_plugins: Vec<(String, std::path::PathBuf, String, bool)> = app
+                let visible_plugins: Vec<(String, std::path::PathBuf, String, bool, bool)> = app
                     .fx_browser
                     .plugins
                     .iter()
@@ -375,9 +388,15 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                             .loaded_plugins
                             .iter()
                             .any(|l| l.path == p.path && l.loaded);
-                        (p.name.clone(), p.path.clone(), p.format.clone(), is_loaded)
+                        (p.name.clone(), p.path.clone(), p.format.clone(), is_loaded, p.is_instrument)
                     })
                     .collect();
+
+                // Check if selected track is a MIDI track (for instrument assignment)
+                let selected_is_midi = app.selected_track
+                    .and_then(|ti| app.project.tracks.get(ti))
+                    .map(|t| t.kind == jamhub_model::TrackKind::Midi)
+                    .unwrap_or(false);
 
                 // Track which folder we're viewing (for remove-from-folder)
                 let viewing_folder_idx = app.fx_browser.selected_folder;
@@ -499,7 +518,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                         ui.label("No plugins match the current filter.");
                     }
 
-                    for (plugin_name, plugin_path, format, is_loaded) in &visible_plugins {
+                    for (plugin_name, plugin_path, format, is_loaded, is_instrument) in &visible_plugins {
                         let format_tag = if format.is_empty() { "?" } else { format.as_str() };
 
                         egui::Frame::default()
@@ -520,7 +539,43 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                                 .color(egui::Color32::from_rgb(80, 200, 80)),
                                         );
 
-                                        // Add to selected track
+                                        // "Set Instrument" button for instrument plugins on MIDI tracks
+                                        if *is_instrument && selected_is_midi {
+                                            if ui
+                                                .small_button(
+                                                    egui::RichText::new("Instrument")
+                                                        .color(egui::Color32::from_rgb(200, 160, 60)),
+                                                )
+                                                .on_hover_text(
+                                                    "Set as instrument for this MIDI track (replaces built-in synth)",
+                                                )
+                                                .clicked()
+                                            {
+                                                if let Some(ti) = app.selected_track {
+                                                    if ti < app.project.tracks.len() {
+                                                        app.push_undo("Set VSTi instrument");
+                                                        let track_id = app.project.tracks[ti].id;
+                                                        let slot = EffectSlot::new(TrackEffect::Vst3Plugin {
+                                                            path: plugin_path.to_string_lossy().to_string(),
+                                                            name: plugin_name.clone(),
+                                                        });
+                                                        app.project.tracks[ti].instrument_plugin = Some(slot);
+                                                        app.send_command(
+                                                            jamhub_engine::EngineCommand::LoadVsti {
+                                                                track_id,
+                                                                path: plugin_path.clone(),
+                                                            },
+                                                        );
+                                                        app.sync_project();
+                                                        app.fx_browser.load_status = Some(format!(
+                                                            "Set {plugin_name} as instrument"
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Add to selected track's FX chain
                                         if ui
                                             .small_button("+ Track")
                                             .on_hover_text(
