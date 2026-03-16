@@ -1683,19 +1683,20 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.rubber_band_active = true;
                     } else {
                         // Check if dragging near a selection edge (Reaper-style resize)
-                        // Use a generous hit zone (12px) so it's easy to grab
-                        let edge_zone = 7.0;
+                        // MUST match the visual hover zone exactly (both 10px)
+                        let drag_zone = 10.0;
                         let mut started_edge_drag = false;
                         if let (Some(sel_s), Some(sel_e)) = (app.selection_start, app.selection_end) {
                             let s1 = sel_s.min(sel_e);
                             let s2 = sel_s.max(sel_e);
                             let sx1 = rect.min.x + (s1 as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
                             let sx2 = rect.min.x + (s2 as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
-                            // Check left edge first, then right
-                            if (pos.x - sx1).abs() < edge_zone && pos.y >= rect.min.y && pos.y <= rect.max.y {
+                            let dist_left = (pos.x - sx1).abs();
+                            let dist_right = (pos.x - sx2).abs();
+                            if dist_left < drag_zone && dist_left <= dist_right && pos.y >= rect.min.y && pos.y <= rect.max.y {
                                 app.dragging_selection_edge = 1;
                                 started_edge_drag = true;
-                            } else if (pos.x - sx2).abs() < edge_zone && pos.y >= rect.min.y && pos.y <= rect.max.y {
+                            } else if dist_right < drag_zone && pos.y >= rect.min.y && pos.y <= rect.max.y {
                                 app.dragging_selection_edge = 2;
                                 started_edge_drag = true;
                             }
@@ -2502,11 +2503,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
             let is_selected = app.selected_track == Some(i);
             let bg = if is_selected {
-                egui::Color32::from_rgba_premultiplied(42, 40, 58, 130)
+                egui::Color32::from_rgba_premultiplied(35, 35, 45, 60)
             } else if i % 2 == 0 {
-                egui::Color32::from_rgba_premultiplied(30, 30, 38, 90)
+                egui::Color32::from_rgba_premultiplied(28, 28, 34, 40)
             } else {
-                egui::Color32::from_rgba_premultiplied(24, 24, 30, 90)
+                egui::Color32::from_rgba_premultiplied(22, 22, 28, 40)
             };
             painter.rect_filled(lane_rect, 0.0, bg);
 
@@ -2565,7 +2566,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             painter.rect_filled(
                                 swipe_rect,
                                 0.0,
-                                egui::Color32::from_rgba_premultiplied(220, 180, 50, 30),
+                                egui::Color32::from_rgba_premultiplied(220, 180, 50, 8),
                             );
                         }
                     }
@@ -2617,11 +2618,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     color
                 };
                 let bg_alpha = if is_clip_muted {
-                    0.15
+                    0.12
                 } else if is_clip_selected {
-                    0.55
+                    0.30
                 } else {
-                    0.38
+                    0.20
                 };
                 // Subtle shadow/glow behind selected clips
                 if is_clip_selected && !is_clip_muted {
@@ -2630,14 +2631,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 }
                 // Base fill
                 painter.rect_filled(cr, clip_radius, draw_color.gamma_multiply(bg_alpha));
-                // Subtle top-to-bottom gradient overlay (lighter at top)
+                // Subtle top highlight for depth (single thin line, no split)
                 if !is_clip_muted {
-                    let grad_top = egui::Color32::from_rgba_premultiplied(255, 255, 255, 14);
-                    let grad_bottom = egui::Color32::from_rgba_premultiplied(0, 0, 0, 18);
-                    let top_half = egui::Rect::from_min_max(cr.min, egui::pos2(cr.max.x, cr.center().y));
-                    let bot_half = egui::Rect::from_min_max(egui::pos2(cr.min.x, cr.center().y), cr.max);
-                    painter.rect_filled(top_half, egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, grad_top);
-                    painter.rect_filled(bot_half, egui::CornerRadius { nw: 0, ne: 0, sw: 6, se: 6 }, grad_bottom);
+                    let highlight_rect = egui::Rect::from_min_max(
+                        cr.min,
+                        egui::pos2(cr.max.x, cr.min.y + 1.5),
+                    );
+                    painter.rect_filled(highlight_rect, egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
+                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 12));
                 }
 
                 // Clip content visualization
@@ -3050,8 +3051,15 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
-        // Loop region
-        if app.loop_enabled && app.loop_end > app.loop_start {
+        // Loop region — skip fill if selection covers the same area (avoid double overlay)
+        let selection_matches_loop = if let (Some(s), Some(e)) = (app.selection_start, app.selection_end) {
+            let s1 = s.min(e);
+            let s2 = s.max(e);
+            s1 == app.loop_start && s2 == app.loop_end
+        } else {
+            false
+        };
+        if app.loop_enabled && app.loop_end > app.loop_start && !selection_matches_loop {
             let ls = app.loop_start as f64 / sample_rate;
             let le = app.loop_end as f64 / sample_rate;
             let lx1 = rect.min.x + ls as f32 * pixels_per_second - app.scroll_x;
@@ -3063,7 +3071,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             painter.rect_filled(
                 loop_rect,
                 0.0,
-                egui::Color32::from_rgba_premultiplied(60, 100, 200, 15),
+                egui::Color32::from_rgba_premultiplied(60, 100, 200, 2),
             );
             for lx in [lx1, lx2] {
                 if lx >= rect.min.x && lx <= rect.max.x {
@@ -3091,7 +3099,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 painter.rect_filled(
                     sel_rect,
                     0.0,
-                    egui::Color32::from_rgba_premultiplied(255, 60, 60, 22),
+                    egui::Color32::from_rgba_premultiplied(255, 60, 60, 10),
                 );
                 // Punch region border
                 painter.rect_stroke(
@@ -3123,7 +3131,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 painter.rect_filled(
                     sel_rect,
                     0.0,
-                    egui::Color32::from_rgba_premultiplied(80, 130, 255, 8),
+                    egui::Color32::from_rgba_premultiplied(80, 130, 255, 3),
                 );
             }
 
@@ -3137,8 +3145,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             for (idx, sx) in [sx1, sx2].iter().enumerate() {
                 if *sx >= rect.min.x && *sx <= rect.max.x {
                     // Check if mouse is near this edge (for drag handle highlight)
+                    // Only highlight when cursor is directly on the edge line (2px)
                     let near_edge = hover_pos.map_or(false, |p| {
-                        (p.x - sx).abs() < 7.0 && p.y >= rect.min.y && p.y <= rect.max.y
+                        (p.x - sx).abs() < 2.0 && p.y >= rect.min.y && p.y <= rect.max.y
                     });
                     let dragging_this = app.dragging_selection_edge == (idx as u8 + 1);
                     let thickness = if near_edge || dragging_this { 3.0 } else { 1.0 };
@@ -3564,7 +3573,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     painter.rect_filled(
                         rb_rect,
                         0.0,
-                        egui::Color32::from_rgba_premultiplied(100, 180, 255, 25),
+                        egui::Color32::from_rgba_premultiplied(100, 180, 255, 6),
                     );
                     painter.rect_stroke(
                         rb_rect,
@@ -3927,30 +3936,30 @@ fn draw_waveform(
                 clipped.line_segment([w[0], w[1]], thick_stroke);
             }
         } else {
-            // Peak envelope — semi-transparent filled area
+            // Peak envelope — brighter filled area
             let mut peak_polygon = peak_top.clone();
             let mut bottom_rev = peak_bottom.clone();
             bottom_rev.reverse();
             peak_polygon.extend(bottom_rev);
             clipped.add(egui::Shape::convex_polygon(
                 peak_polygon,
-                color.gamma_multiply(0.35),
+                color.gamma_multiply(0.50),
                 egui::Stroke::NONE,
             ));
 
-            // RMS envelope — darker filled area inside the peak envelope
+            // RMS envelope — solid filled area inside the peak envelope
             let mut rms_polygon = rms_top.clone();
             let mut rms_bot_rev = rms_bottom.clone();
             rms_bot_rev.reverse();
             rms_polygon.extend(rms_bot_rev);
             clipped.add(egui::Shape::convex_polygon(
                 rms_polygon,
-                color.gamma_multiply(0.55),
+                color.gamma_multiply(0.75),
                 egui::Stroke::NONE,
             ));
 
             // Anti-aliased waveform edge lines (top and bottom outlines)
-            let top_stroke = egui::Stroke::new(1.0, color.gamma_multiply(0.7));
+            let top_stroke = egui::Stroke::new(1.0, color.gamma_multiply(0.85));
             for w in peak_top.windows(2) {
                 clipped.line_segment([w[0], w[1]], top_stroke);
             }
