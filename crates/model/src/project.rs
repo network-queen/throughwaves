@@ -13,7 +13,40 @@ pub struct Project {
     #[serde(default)]
     pub markers: Vec<Marker>,
     #[serde(default)]
+    pub groups: Vec<TrackGroup>,
+    #[serde(default)]
     pub tempo_map: crate::time::TempoMap,
+    /// Free-text notes/comments saved with the project
+    #[serde(default)]
+    pub notes: String,
+    /// ISO-8601 timestamp when the project was first created
+    #[serde(default)]
+    pub created_at: String,
+    /// Master track effect chain — applied to the summed output before final volume.
+    #[serde(default)]
+    pub master_effects: Vec<EffectSlot>,
+    /// Scenes for session/clip launcher view
+    #[serde(default)]
+    pub scenes: Vec<Scene>,
+}
+
+/// A scene in session view — a row of clip slots across all tracks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Scene {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// A clip in session view — lives in a track's slot for a particular scene.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionClip {
+    pub clip_id: Uuid,
+    pub name: String,
+    pub color: Option<[u8; 3]>,
+    /// Source audio/MIDI for this session clip
+    pub source: ClipSource,
+    /// Duration in samples (for looping)
+    pub duration_samples: u64,
 }
 
 /// A named position on the timeline.
@@ -22,6 +55,14 @@ pub struct Marker {
     pub id: Uuid,
     pub name: String,
     pub sample: u64,
+    pub color: [u8; 3],
+}
+
+/// A track group/folder that can contain multiple tracks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackGroup {
+    pub id: Uuid,
+    pub name: String,
     pub color: [u8; 3],
 }
 
@@ -34,7 +75,12 @@ impl Default for Project {
             sample_rate: 44100,
             tracks: Vec::new(),
             markers: Vec::new(),
+            groups: Vec::new(),
             tempo_map: crate::time::TempoMap::default(),
+            notes: String::new(),
+            created_at: String::new(),
+            master_effects: Vec::new(),
+            scenes: Vec::new(),
         }
     }
 }
@@ -60,6 +106,13 @@ impl Project {
             sends: Vec::new(),
             group_id: None,
             frozen: false,
+            frozen_buffer_id: None,
+            pre_freeze_clips: None,
+            pre_freeze_effects: None,
+            sidechain_track_id: None,
+            input_channel: None,
+            output_target: None,
+            session_clips: Vec::new(),
         });
         id
     }
@@ -78,7 +131,7 @@ pub struct Track {
     pub armed: bool,
     pub color: [u8; 3],
     #[serde(default)]
-    pub effects: Vec<TrackEffect>,
+    pub effects: Vec<EffectSlot>,
     /// Whether take lanes are expanded (showing all takes) or collapsed (showing only active)
     #[serde(default)]
     pub lanes_expanded: bool,
@@ -97,6 +150,29 @@ pub struct Track {
     /// Frozen track — effects baked, original preserved, CPU saved
     #[serde(default)]
     pub frozen: bool,
+    /// ID of the frozen audio buffer (rendered with effects baked in)
+    #[serde(default)]
+    pub frozen_buffer_id: Option<Uuid>,
+    /// Original clips preserved when track is frozen (for unfreeze restore)
+    #[serde(default)]
+    pub pre_freeze_clips: Option<Vec<Clip>>,
+    /// Original effects preserved when track is frozen (for unfreeze restore)
+    #[serde(default)]
+    pub pre_freeze_effects: Option<Vec<EffectSlot>>,
+    /// Sidechain source: if set, the compressor on this track uses the specified
+    /// track's pre-effect audio for level detection instead of the local signal.
+    #[serde(default)]
+    pub sidechain_track_id: Option<Uuid>,
+    /// Hardware input channel selection (None = default input).
+    #[serde(default)]
+    pub input_channel: Option<u16>,
+    /// Output routing target (None = master bus). If set, audio is sent to
+    /// this track (typically a Bus) instead of the master output.
+    #[serde(default)]
+    pub output_target: Option<Uuid>,
+    /// Session clip slots — one per scene (None = empty slot)
+    #[serde(default)]
+    pub session_clips: Vec<Option<SessionClip>>,
 }
 
 /// A send routes audio from this track to another track at a given level.
@@ -115,19 +191,27 @@ pub struct AutomationLane {
     pub visible: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutomationParam {
     Volume,
     Pan,
     Mute,
+    /// Automate a built-in effect parameter by slot index and parameter name.
+    EffectParam {
+        slot_index: usize,
+        param_name: String,
+    },
 }
 
 impl AutomationParam {
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> String {
         match self {
-            AutomationParam::Volume => "Volume",
-            AutomationParam::Pan => "Pan",
-            AutomationParam::Mute => "Mute",
+            AutomationParam::Volume => "Volume".to_string(),
+            AutomationParam::Pan => "Pan".to_string(),
+            AutomationParam::Mute => "Mute".to_string(),
+            AutomationParam::EffectParam { slot_index, param_name } => {
+                format!("FX{}: {}", slot_index + 1, param_name)
+            }
         }
     }
 
@@ -136,6 +220,9 @@ impl AutomationParam {
             AutomationParam::Volume => 1.0,
             AutomationParam::Pan => 0.0,
             AutomationParam::Mute => 0.0,
+            AutomationParam::EffectParam { param_name, .. } => {
+                effect_param_default(param_name)
+            }
         }
     }
 
@@ -144,7 +231,56 @@ impl AutomationParam {
             AutomationParam::Volume => (0.0, 1.5),
             AutomationParam::Pan => (-1.0, 1.0),
             AutomationParam::Mute => (0.0, 1.0),
+            AutomationParam::EffectParam { param_name, .. } => {
+                effect_param_range(param_name)
+            }
         }
+    }
+}
+
+/// Default values for built-in effect parameters.
+fn effect_param_default(param_name: &str) -> f32 {
+    match param_name {
+        "Gain dB" => 0.0,
+        "Cutoff Hz" => 1000.0,
+        "Time ms" => 250.0,
+        "Feedback" => 0.3,
+        "Decay" => 0.5,
+        "Mix" => 0.5,
+        "Threshold dB" => -10.0,
+        "Ratio" => 4.0,
+        "Attack ms" => 10.0,
+        "Release ms" => 100.0,
+        "Freq Hz" => 1000.0,
+        "Gain dB (EQ)" => 0.0,
+        "Q" => 1.0,
+        "Rate Hz" => 1.0,
+        "Depth" => 0.5,
+        "Drive" => 6.0,
+        _ => 0.5,
+    }
+}
+
+/// Ranges for built-in effect parameters.
+fn effect_param_range(param_name: &str) -> (f32, f32) {
+    match param_name {
+        "Gain dB" => (-24.0, 24.0),
+        "Cutoff Hz" => (20.0, 20000.0),
+        "Time ms" => (1.0, 2000.0),
+        "Feedback" => (0.0, 0.95),
+        "Decay" => (0.0, 0.99),
+        "Mix" => (0.0, 1.0),
+        "Threshold dB" => (-60.0, 0.0),
+        "Ratio" => (1.0, 20.0),
+        "Attack ms" => (0.1, 200.0),
+        "Release ms" => (10.0, 2000.0),
+        "Freq Hz" => (20.0, 20000.0),
+        "Gain dB (EQ)" => (-24.0, 24.0),
+        "Q" => (0.1, 10.0),
+        "Rate Hz" => (0.1, 10.0),
+        "Depth" => (0.0, 1.0),
+        "Drive" => (0.0, 36.0),
+        _ => (0.0, 1.0),
     }
 }
 
@@ -153,6 +289,91 @@ pub struct AutomationPoint {
     pub sample: u64,
     pub value: f32,
 }
+
+/// A slot in a track's effect chain — wraps an effect with identity and enable state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EffectSlot {
+    pub id: Uuid,
+    pub enabled: bool,
+    pub effect: TrackEffect,
+}
+
+impl EffectSlot {
+    pub fn new(effect: TrackEffect) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            enabled: true,
+            effect,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        self.effect.name()
+    }
+}
+
+/// EQ band filter type for parametric EQ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EqBandType {
+    LowShelf,
+    HighShelf,
+    Peak,
+    LowPass,
+    HighPass,
+    Notch,
+}
+
+impl Default for EqBandType {
+    fn default() -> Self {
+        EqBandType::Peak
+    }
+}
+
+impl EqBandType {
+    pub const ALL: [EqBandType; 6] = [
+        EqBandType::LowShelf,
+        EqBandType::HighShelf,
+        EqBandType::Peak,
+        EqBandType::LowPass,
+        EqBandType::HighPass,
+        EqBandType::Notch,
+    ];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            EqBandType::LowShelf => "Low Shelf",
+            EqBandType::HighShelf => "High Shelf",
+            EqBandType::Peak => "Peak",
+            EqBandType::LowPass => "Low Pass",
+            EqBandType::HighPass => "High Pass",
+            EqBandType::Notch => "Notch",
+        }
+    }
+}
+
+/// Parameters for a single band in a parametric EQ.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EqBandParams {
+    pub freq_hz: f32,
+    pub gain_db: f32,
+    pub q: f32,
+    #[serde(default)]
+    pub band_type: EqBandType,
+}
+
+impl Default for EqBandParams {
+    fn default() -> Self {
+        Self {
+            freq_hz: 1000.0,
+            gain_db: 0.0,
+            q: 1.0,
+            band_type: EqBandType::Peak,
+        }
+    }
+}
+
+/// Maximum number of bands in a parametric EQ.
+pub const MAX_EQ_BANDS: usize = 8;
 
 /// Effect types that can be applied to a track.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +386,8 @@ pub enum TrackEffect {
     Reverb { decay: f32, mix: f32 },
     Compressor { threshold_db: f32, ratio: f32, attack_ms: f32, release_ms: f32 },
     EqBand { freq_hz: f32, gain_db: f32, q: f32 },
+    /// Multi-band parametric EQ with up to 8 bands and various filter types.
+    ParametricEq { bands: Vec<EqBandParams> },
     Chorus { rate_hz: f32, depth: f32, mix: f32 },
     Distortion { drive: f32, mix: f32 },
     /// External VST3 plugin — path to the .vst3 bundle
@@ -181,10 +404,88 @@ impl TrackEffect {
             TrackEffect::Reverb { .. } => "Reverb",
             TrackEffect::Compressor { .. } => "Compressor",
             TrackEffect::EqBand { .. } => "EQ Band",
+            TrackEffect::ParametricEq { .. } => "Parametric EQ",
             TrackEffect::Chorus { .. } => "Chorus",
             TrackEffect::Distortion { .. } => "Distortion",
             TrackEffect::Vst3Plugin { ref name, .. } => name.as_str(),
         }
+    }
+
+    pub fn is_vst(&self) -> bool {
+        matches!(self, TrackEffect::Vst3Plugin { .. })
+    }
+
+    /// Returns the list of automatable parameter names for this effect type.
+    pub fn automatable_params(&self) -> Vec<&'static str> {
+        match self {
+            TrackEffect::Gain { .. } => vec!["Gain dB"],
+            TrackEffect::LowPass { .. } => vec!["Cutoff Hz"],
+            TrackEffect::HighPass { .. } => vec!["Cutoff Hz"],
+            TrackEffect::Delay { .. } => vec!["Time ms", "Feedback", "Mix"],
+            TrackEffect::Reverb { .. } => vec!["Decay", "Mix"],
+            TrackEffect::Compressor { .. } => vec!["Threshold dB", "Ratio", "Attack ms", "Release ms"],
+            TrackEffect::EqBand { .. } => vec!["Freq Hz", "Gain dB (EQ)", "Q"],
+            TrackEffect::ParametricEq { .. } => vec![], // Bands are edited via the EQ visualization
+            TrackEffect::Chorus { .. } => vec!["Rate Hz", "Depth", "Mix"],
+            TrackEffect::Distortion { .. } => vec!["Drive", "Mix"],
+            TrackEffect::Vst3Plugin { .. } => vec![], // VST3 automation deferred
+        }
+    }
+
+    /// Get the current value of a named parameter.
+    pub fn get_param(&self, param_name: &str) -> Option<f32> {
+        match (self, param_name) {
+            (TrackEffect::Gain { db }, "Gain dB") => Some(*db),
+            (TrackEffect::LowPass { cutoff_hz }, "Cutoff Hz") => Some(*cutoff_hz),
+            (TrackEffect::HighPass { cutoff_hz }, "Cutoff Hz") => Some(*cutoff_hz),
+            (TrackEffect::Delay { time_ms, .. }, "Time ms") => Some(*time_ms),
+            (TrackEffect::Delay { feedback, .. }, "Feedback") => Some(*feedback),
+            (TrackEffect::Delay { mix, .. }, "Mix") => Some(*mix),
+            (TrackEffect::Reverb { decay, .. }, "Decay") => Some(*decay),
+            (TrackEffect::Reverb { mix, .. }, "Mix") => Some(*mix),
+            (TrackEffect::Compressor { threshold_db, .. }, "Threshold dB") => Some(*threshold_db),
+            (TrackEffect::Compressor { ratio, .. }, "Ratio") => Some(*ratio),
+            (TrackEffect::Compressor { attack_ms, .. }, "Attack ms") => Some(*attack_ms),
+            (TrackEffect::Compressor { release_ms, .. }, "Release ms") => Some(*release_ms),
+            (TrackEffect::EqBand { freq_hz, .. }, "Freq Hz") => Some(*freq_hz),
+            (TrackEffect::EqBand { gain_db, .. }, "Gain dB (EQ)") => Some(*gain_db),
+            (TrackEffect::EqBand { q, .. }, "Q") => Some(*q),
+            (TrackEffect::Chorus { rate_hz, .. }, "Rate Hz") => Some(*rate_hz),
+            (TrackEffect::Chorus { depth, .. }, "Depth") => Some(*depth),
+            (TrackEffect::Chorus { mix, .. }, "Mix") => Some(*mix),
+            (TrackEffect::Distortion { drive, .. }, "Drive") => Some(*drive),
+            (TrackEffect::Distortion { mix, .. }, "Mix") => Some(*mix),
+            _ => None,
+        }
+    }
+
+    /// Return a copy of this effect with the named parameter overridden.
+    pub fn with_param(&self, param_name: &str, value: f32) -> TrackEffect {
+        let mut effect = self.clone();
+        match (&mut effect, param_name) {
+            (TrackEffect::Gain { db }, "Gain dB") => *db = value,
+            (TrackEffect::LowPass { cutoff_hz }, "Cutoff Hz") => *cutoff_hz = value,
+            (TrackEffect::HighPass { cutoff_hz }, "Cutoff Hz") => *cutoff_hz = value,
+            (TrackEffect::Delay { time_ms, .. }, "Time ms") => *time_ms = value,
+            (TrackEffect::Delay { feedback, .. }, "Feedback") => *feedback = value,
+            (TrackEffect::Delay { mix, .. }, "Mix") => *mix = value,
+            (TrackEffect::Reverb { decay, .. }, "Decay") => *decay = value,
+            (TrackEffect::Reverb { mix, .. }, "Mix") => *mix = value,
+            (TrackEffect::Compressor { threshold_db, .. }, "Threshold dB") => *threshold_db = value,
+            (TrackEffect::Compressor { ratio, .. }, "Ratio") => *ratio = value,
+            (TrackEffect::Compressor { attack_ms, .. }, "Attack ms") => *attack_ms = value,
+            (TrackEffect::Compressor { release_ms, .. }, "Release ms") => *release_ms = value,
+            (TrackEffect::EqBand { freq_hz, .. }, "Freq Hz") => *freq_hz = value,
+            (TrackEffect::EqBand { gain_db, .. }, "Gain dB (EQ)") => *gain_db = value,
+            (TrackEffect::EqBand { q, .. }, "Q") => *q = value,
+            (TrackEffect::Chorus { rate_hz, .. }, "Rate Hz") => *rate_hz = value,
+            (TrackEffect::Chorus { depth, .. }, "Depth") => *depth = value,
+            (TrackEffect::Chorus { mix, .. }, "Mix") => *mix = value,
+            (TrackEffect::Distortion { drive, .. }, "Drive") => *drive = value,
+            (TrackEffect::Distortion { mix, .. }, "Mix") => *mix = value,
+            _ => {}
+        }
+        effect
     }
 }
 
@@ -192,6 +493,8 @@ impl TrackEffect {
 pub enum TrackKind {
     Audio,
     Midi,
+    /// Bus/Aux track — receives audio only from sends, has no clips of its own.
+    Bus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,13 +507,76 @@ pub struct Clip {
     /// Muted clips are visible but don't play (used for takes management)
     #[serde(default)]
     pub muted: bool,
+    /// Fade in length in samples (linear gain ramp from 0 to 1 at clip start)
+    #[serde(default)]
+    pub fade_in_samples: u64,
+    /// Fade out length in samples (linear gain ramp from 1 to 0 at clip end)
+    #[serde(default)]
+    pub fade_out_samples: u64,
+    /// Custom clip color (None = inherit from track)
+    #[serde(default)]
+    pub color: Option<[u8; 3]>,
+    /// Playback rate: 1.0 = normal, 2.0 = double speed, 0.5 = half speed
+    #[serde(default = "default_playback_rate")]
+    pub playback_rate: f32,
+    /// When true, pitch is preserved when changing speed (basic OLA time-stretch)
+    #[serde(default)]
+    pub preserve_pitch: bool,
+    /// Loop count: 1 = play once (no looping), 2 = repeat twice, etc.
+    #[serde(default = "default_loop_count")]
+    pub loop_count: u32,
+    /// Clip gain in dB, applied before track volume. 0.0 = unity (no change).
+    #[serde(default)]
+    pub gain_db: f32,
+    /// Take index: clips with the same time region are different takes.
+    /// Higher index = recorded later. 0 = original, 1 = first re-record, etc.
+    #[serde(default)]
+    pub take_index: u32,
+}
+
+fn default_playback_rate() -> f32 {
+    1.0
+}
+
+fn default_loop_count() -> u32 {
+    1
+}
+
+impl Clip {
+    /// Visual duration in samples, accounting for playback rate and loop count.
+    /// A rate of 2.0 means the clip plays twice as fast, so it appears half as long.
+    /// A loop_count of 2 means the clip repeats twice, doubling the visual duration.
+    pub fn visual_duration_samples(&self) -> u64 {
+        if self.playback_rate <= 0.0 {
+            return self.duration_samples * self.effective_loop_count() as u64;
+        }
+        let single = (self.duration_samples as f64 / self.playback_rate as f64) as u64;
+        single * self.effective_loop_count() as u64
+    }
+
+    /// Effective loop count (at least 1).
+    pub fn effective_loop_count(&self) -> u32 {
+        self.loop_count.max(1)
+    }
+
+    /// Duration of a single loop iteration in visual samples (accounting for rate).
+    pub fn single_loop_visual_duration(&self) -> u64 {
+        if self.playback_rate <= 0.0 {
+            return self.duration_samples;
+        }
+        (self.duration_samples as f64 / self.playback_rate as f64) as u64
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClipSource {
     AudioFile { path: String },
     AudioBuffer { buffer_id: Uuid },
-    Midi { notes: Vec<MidiNote> },
+    Midi {
+        notes: Vec<MidiNote>,
+        #[serde(default)]
+        cc_events: Vec<MidiCC>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +585,54 @@ pub struct MidiNote {
     pub velocity: u8,
     pub start_tick: u64,
     pub duration_ticks: u64,
+}
+
+/// A MIDI Continuous Controller event at a point in time.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct MidiCC {
+    pub tick: u64,
+    pub cc_number: u8,
+    pub value: u8,
+}
+
+impl Track {
+    /// Count how many overlapping takes exist at a given sample position.
+    pub fn take_count_at(&self, sample: u64) -> usize {
+        self.clips
+            .iter()
+            .filter(|c| {
+                let c_end = c.start_sample + c.visual_duration_samples();
+                sample >= c.start_sample && sample < c_end
+            })
+            .count()
+    }
+
+    /// Maximum number of overlapping takes on this track.
+    pub fn max_take_count(&self) -> usize {
+        if self.clips.is_empty() {
+            return 0;
+        }
+        // Collect all clip boundaries
+        let mut events: Vec<(u64, i32)> = Vec::new();
+        for c in &self.clips {
+            let end = c.start_sample + c.visual_duration_samples();
+            events.push((c.start_sample, 1));
+            events.push((end, -1));
+        }
+        events.sort_by_key(|&(pos, delta)| (pos, -delta));
+        let mut depth = 0i32;
+        let mut max_depth = 0i32;
+        for (_, delta) in events {
+            depth += delta;
+            max_depth = max_depth.max(depth);
+        }
+        max_depth as usize
+    }
+
+    /// Returns true if this track has any overlapping clips (takes).
+    pub fn has_takes(&self) -> bool {
+        self.max_take_count() > 1
+    }
 }
 
 pub type ClipBufferId = Uuid;

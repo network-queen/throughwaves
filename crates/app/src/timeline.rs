@@ -1,5 +1,6 @@
 use eframe::egui;
 use jamhub_model::{ClipSource, TrackKind};
+use uuid::Uuid;
 
 use crate::DawApp;
 
@@ -8,34 +9,85 @@ const TAKE_LANE_HEIGHT: f32 = 42.0;
 const HEADER_WIDTH: f32 = 190.0;
 const RULER_HEIGHT: f32 = 26.0;
 const PIXELS_PER_SECOND_BASE: f32 = 100.0;
+const GROUP_HEADER_HEIGHT: f32 = 24.0;
+const GROUP_INDENT: f32 = 12.0;
+const MINIMAP_HEIGHT: f32 = 28.0;
 
-/// Compute the height of a track.
+/// Compute the height of a track, scaled by vertical zoom.
 /// If user has dragged a custom height, use that.
 /// Otherwise auto-compute from take lanes.
-fn track_height(track: &jamhub_model::Track) -> f32 {
+fn track_height(track: &jamhub_model::Track, vz: f32) -> f32 {
     if track.custom_height > 0.0 {
-        return track.custom_height.max(40.0);
+        return (track.custom_height * vz).max(40.0);
     }
     if !track.lanes_expanded {
-        return BASE_LANE_HEIGHT;
+        return BASE_LANE_HEIGHT * vz;
     }
     let lanes = compute_take_lanes(track);
     let max_lane = lanes.iter().map(|&(_, l)| l).max().unwrap_or(0);
     if max_lane == 0 {
-        BASE_LANE_HEIGHT
+        BASE_LANE_HEIGHT * vz
     } else {
-        ((max_lane + 1) as f32 * TAKE_LANE_HEIGHT).max(BASE_LANE_HEIGHT)
+        ((max_lane + 1) as f32 * TAKE_LANE_HEIGHT * vz).max(BASE_LANE_HEIGHT * vz)
     }
+}
+
+/// Determine the ordered list of group IDs that appear before each track.
+/// Returns a list of (group_id, first_track_index) for each unique group.
+fn group_order(app: &DawApp) -> Vec<(Uuid, usize)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for (i, track) in app.project.tracks.iter().enumerate() {
+        if let Some(gid) = track.group_id {
+            if seen.insert(gid) {
+                result.push((gid, i));
+            }
+        }
+    }
+    result
+}
+
+/// Check if a track is hidden because its group is collapsed.
+fn is_track_collapsed(app: &DawApp, track_idx: usize) -> bool {
+    if let Some(gid) = app.project.tracks[track_idx].group_id {
+        app.collapsed_groups.contains(&gid)
+    } else {
+        false
+    }
+}
+
+/// Compute the Y offset of each track (cumulative heights),
+/// accounting for group headers and collapsed groups.
+/// Returns (offsets_per_track, group_header_positions).
+/// group_header_positions: Vec<(group_id, y_position)>
+fn track_y_offsets_with_groups(app: &DawApp) -> (Vec<f32>, Vec<(Uuid, f32)>) {
+    let vz = app.track_height_zoom;
+    let _groups = group_order(app);
+    let mut offsets = Vec::with_capacity(app.project.tracks.len());
+    let mut group_headers: Vec<(Uuid, f32)> = Vec::new();
+    let mut y = 0.0;
+    let mut rendered_groups = std::collections::HashSet::new();
+
+    for (i, track) in app.project.tracks.iter().enumerate() {
+        // If this track belongs to a group and we haven't rendered the group header yet
+        if let Some(gid) = track.group_id {
+            if rendered_groups.insert(gid) {
+                group_headers.push((gid, y));
+                y += GROUP_HEADER_HEIGHT;
+            }
+        }
+
+        offsets.push(y);
+        if !is_track_collapsed(app, i) {
+            y += track_height(track, vz);
+        }
+    }
+    (offsets, group_headers)
 }
 
 /// Compute the Y offset of each track (cumulative heights).
 fn track_y_offsets(app: &DawApp) -> Vec<f32> {
-    let mut offsets = Vec::with_capacity(app.project.tracks.len());
-    let mut y = 0.0;
-    for track in &app.project.tracks {
-        offsets.push(y);
-        y += track_height(track);
-    }
+    let (offsets, _) = track_y_offsets_with_groups(app);
     offsets
 }
 
@@ -52,7 +104,7 @@ fn compute_take_lanes(track: &jamhub_model::Track) -> Vec<(usize, usize)> {
 
     for &ci in &sorted_indices {
         let clip = &track.clips[ci];
-        let clip_end = clip.start_sample + clip.duration_samples;
+        let clip_end = clip.start_sample + clip.visual_duration_samples();
 
         // Find first lane where this clip doesn't overlap
         let mut assigned_lane = None;
@@ -84,8 +136,9 @@ fn track_at_y(app: &DawApp, y: f32, tracks_y_start: f32) -> Option<usize> {
     if rel_y < 0.0 {
         return None;
     }
+    let vz = app.track_height_zoom;
     for (i, &offset) in offsets.iter().enumerate() {
-        let h = track_height(&app.project.tracks[i]);
+        let h = track_height(&app.project.tracks[i], vz);
         if rel_y >= offset && rel_y < offset + h {
             return Some(i);
         }
@@ -97,23 +150,159 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
     let pixels_per_second = PIXELS_PER_SECOND_BASE * app.zoom;
     let sample_rate = app.sample_rate() as f64;
 
-    // Pre-compute track Y offsets
-    let track_offsets = track_y_offsets(app);
-
     // Track headers (left panel)
     egui::SidePanel::left("track_headers")
         .exact_width(HEADER_WIDTH)
         .resizable(false)
         .show_inside(ui, |ui| {
-            ui.allocate_space(egui::vec2(HEADER_WIDTH, RULER_HEIGHT));
+            if app.show_automation {
+                // Automation parameter selector dropdown
+                ui.allocate_ui(egui::vec2(HEADER_WIDTH, RULER_HEIGHT), |ui| {
+                    ui.horizontal_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new("Auto:")
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(200, 170, 60)),
+                        );
+                        // Build list of available params: Volume, Pan, Mute + effect params
+                        let mut all_params: Vec<jamhub_model::AutomationParam> = vec![
+                            jamhub_model::AutomationParam::Volume,
+                            jamhub_model::AutomationParam::Pan,
+                            jamhub_model::AutomationParam::Mute,
+                        ];
+                        // Add effect params from the selected track (or first track with effects)
+                        let effect_track = app
+                            .selected_track
+                            .and_then(|i| app.project.tracks.get(i))
+                            .or_else(|| {
+                                app.project.tracks.iter().find(|t| !t.effects.is_empty())
+                            });
+                        if let Some(track) = effect_track {
+                            for (slot_index, slot) in track.effects.iter().enumerate() {
+                                if slot.effect.is_vst() {
+                                    continue;
+                                }
+                                for param_name in slot.effect.automatable_params() {
+                                    all_params.push(jamhub_model::AutomationParam::EffectParam {
+                                        slot_index,
+                                        param_name: param_name.to_string(),
+                                    });
+                                }
+                            }
+                        }
+                        let current_name = app.automation_param.name();
+                        egui::ComboBox::from_id_salt("auto_param_sel")
+                            .selected_text(
+                                egui::RichText::new(&current_name)
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(220, 200, 120)),
+                            )
+                            .width(110.0)
+                            .show_ui(ui, |ui| {
+                                for p in &all_params {
+                                    let label = p.name();
+                                    if ui
+                                        .selectable_label(
+                                            *p == app.automation_param,
+                                            egui::RichText::new(&label).size(10.0),
+                                        )
+                                        .clicked()
+                                    {
+                                        app.automation_param = p.clone();
+                                    }
+                                }
+                            });
+                    });
+                });
+            } else {
+                ui.allocate_space(egui::vec2(HEADER_WIDTH, RULER_HEIGHT));
+            }
             ui.separator();
 
             let mut track_actions: Vec<TrackAction> = Vec::new();
 
+            // Track which group headers we've already drawn
+            let mut rendered_group_headers = std::collections::HashSet::new();
+
             for (i, track) in app.project.tracks.iter().enumerate() {
-                let h = track_height(track);
+                // Draw group folder header if this is the first track of a group
+                if let Some(gid) = track.group_id {
+                    if rendered_group_headers.insert(gid) {
+                        // Find the group metadata
+                        let group_meta = app.project.groups.iter().find(|g| g.id == gid);
+                        let group_name = group_meta.map(|g| g.name.as_str()).unwrap_or("Group");
+                        let group_color = group_meta.map(|g| g.color).unwrap_or([120, 120, 180]);
+                        let gc = egui::Color32::from_rgb(group_color[0], group_color[1], group_color[2]);
+                        let is_collapsed = app.collapsed_groups.contains(&gid);
+
+                        ui.push_id(format!("grp_{}", gid), |ui| {
+                            ui.allocate_ui(egui::vec2(HEADER_WIDTH, GROUP_HEADER_HEIGHT), |ui| {
+                                let grp_rect = ui.max_rect();
+                                let grp_response = ui.interact(grp_rect, ui.id().with("grp_hdr"), egui::Sense::click());
+
+                                // Background
+                                ui.painter().rect_filled(grp_rect, 0.0, egui::Color32::from_rgb(30, 31, 40));
+                                // Color bar on left
+                                let bar_rect = egui::Rect::from_min_size(grp_rect.min, egui::vec2(3.0, grp_rect.height()));
+                                ui.painter().rect_filled(bar_rect, 0.0, gc);
+
+                                // Collapse arrow + name
+                                let arrow = if is_collapsed { "\u{25B6}" } else { "\u{25BC}" };
+
+                                // Count group children for mute/solo summary
+                                let child_count = app.project.tracks.iter().filter(|t| t.group_id == Some(gid)).count();
+                                let all_muted = app.project.tracks.iter().filter(|t| t.group_id == Some(gid)).all(|t| t.muted);
+                                let any_solo = app.project.tracks.iter().filter(|t| t.group_id == Some(gid)).any(|t| t.solo);
+
+                                ui.horizontal(|ui| {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new(arrow).size(10.0).color(gc));
+                                    ui.label(egui::RichText::new(group_name).size(11.0).strong().color(egui::Color32::from_rgb(200, 200, 210)));
+                                    ui.label(egui::RichText::new(format!("({})", child_count)).size(9.0).color(egui::Color32::from_rgb(110, 110, 120)));
+
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        let btn = egui::vec2(20.0, 18.0);
+                                        // Solo button
+                                        let s_bg = if any_solo { egui::Color32::from_rgb(50, 160, 60) } else { egui::Color32::from_rgb(36, 37, 44) };
+                                        let s_tc = if any_solo { egui::Color32::WHITE } else { egui::Color32::from_rgb(145, 142, 138) };
+                                        if ui.add_sized(btn, egui::Button::new(egui::RichText::new("S").size(9.0).color(s_tc)).fill(s_bg).corner_radius(9.0)).clicked() {
+                                            track_actions.push(TrackAction::ToggleGroupSolo(gid));
+                                        }
+                                        // Mute button
+                                        let m_bg = if all_muted { egui::Color32::from_rgb(200, 160, 30) } else { egui::Color32::from_rgb(36, 37, 44) };
+                                        let m_tc = if all_muted { egui::Color32::WHITE } else { egui::Color32::from_rgb(145, 142, 138) };
+                                        if ui.add_sized(btn, egui::Button::new(egui::RichText::new("M").size(9.0).color(m_tc)).fill(m_bg).corner_radius(9.0)).clicked() {
+                                            track_actions.push(TrackAction::ToggleGroupMute(gid));
+                                        }
+                                    });
+                                });
+
+                                // Click to toggle collapse
+                                if grp_response.clicked() {
+                                    track_actions.push(TrackAction::ToggleGroup(gid));
+                                }
+
+                                // Right-click context menu for group
+                                grp_response.context_menu(|ui| {
+                                    if ui.button("Ungroup").clicked() {
+                                        track_actions.push(TrackAction::DeleteGroup(gid));
+                                        ui.close_menu();
+                                    }
+                                });
+                            });
+                        });
+                    }
+                }
+
+                // Skip drawing this track if its group is collapsed
+                if is_track_collapsed(app, i) {
+                    continue;
+                }
+
+                let h = track_height(track, app.track_height_zoom);
                 let take_lanes = compute_take_lanes(track);
                 let num_lanes = take_lanes.iter().map(|&(_, l)| l).max().unwrap_or(0) + 1;
+                let is_grouped = track.group_id.is_some();
 
                 ui.push_id(i, |ui| {
                     let color = egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]);
@@ -140,35 +329,97 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             if num_lanes > 1 {
                                 let label = if track.lanes_expanded { "Collapse Takes" } else { "Expand Takes" };
                                 if ui.button(label).clicked() { track_actions.push(TrackAction::ToggleLanes(i)); ui.close_menu(); }
+                                let has_muted = track.clips.iter().any(|c| c.muted);
+                                if has_muted {
+                                    if ui.button("Flatten Comp").on_hover_text("Remove all inactive takes, keep only active clips").clicked() {
+                                        track_actions.push(TrackAction::FlattenComp(i));
+                                        ui.close_menu();
+                                    }
+                                }
                                 ui.separator();
                             }
+                            // Group/ungroup options
+                            if is_grouped {
+                                if ui.button("Remove from Group").clicked() { track_actions.push(TrackAction::RemoveFromGroup(i)); ui.close_menu(); }
+                            } else {
+                                if ui.button("Create Group").clicked() { track_actions.push(TrackAction::CreateGroupFromTrack(i)); ui.close_menu(); }
+                            }
+                            ui.separator();
+                            // Freeze / Unfreeze
+                            if track.frozen {
+                                if ui.button("Unfreeze Track").clicked() { track_actions.push(TrackAction::Unfreeze(i)); ui.close_menu(); }
+                            } else if track.kind == TrackKind::Audio && !track.clips.is_empty() {
+                                if ui.button("Freeze Track").clicked() { track_actions.push(TrackAction::Freeze(i)); ui.close_menu(); }
+                            }
+                            ui.separator();
+                            // Track reordering
+                            if i > 0 {
+                                if ui.button("Move Up [Alt+Up]").clicked() { track_actions.push(TrackAction::MoveUp(i)); ui.close_menu(); }
+                            }
+                            if i + 1 < app.project.tracks.len() {
+                                if ui.button("Move Down [Alt+Down]").clicked() { track_actions.push(TrackAction::MoveDown(i)); ui.close_menu(); }
+                            }
+                            ui.separator();
                             if ui.button("Delete").clicked() { track_actions.push(TrackAction::Delete(i)); ui.close_menu(); }
                         });
 
-                        // Background — subtle gradient feel
-                        let bg = if is_selected {
-                            egui::Color32::from_rgb(36, 38, 50)
+                        // Background — warm dark, slight lightening on hover; blue tint for frozen
+                        let bg_response_hovered = bg_response.hovered();
+                        let bg = if track.frozen {
+                            if is_selected {
+                                egui::Color32::from_rgb(28, 38, 58)
+                            } else if bg_response_hovered {
+                                egui::Color32::from_rgb(26, 35, 52)
+                            } else {
+                                egui::Color32::from_rgb(22, 30, 45)
+                            }
+                        } else if is_selected {
+                            egui::Color32::from_rgb(34, 36, 48)
+                        } else if bg_response_hovered {
+                            egui::Color32::from_rgb(32, 33, 40)
                         } else {
-                            egui::Color32::from_rgb(28, 28, 33)
+                            egui::Color32::from_rgb(26, 27, 32)
                         };
                         ui.painter().rect_filled(header_rect, 0.0, bg);
 
-                        // Colored left accent bar (always visible, brighter when selected)
-                        let bar_w = if is_selected { 3.0 } else { 2.0 };
-                        let bar_color = if is_selected { color } else { color.gamma_multiply(0.5) };
-                        let bar_rect = egui::Rect::from_min_size(header_rect.min, egui::vec2(bar_w, header_rect.height()));
-                        ui.painter().rect_filled(bar_rect, 0.0, bar_color);
+                        // Group color bar on left for grouped tracks
+                        if is_grouped {
+                            if let Some(gid) = track.group_id {
+                                let group_color = app.project.groups.iter()
+                                    .find(|g| g.id == gid)
+                                    .map(|g| egui::Color32::from_rgb(g.color[0], g.color[1], g.color[2]))
+                                    .unwrap_or(egui::Color32::from_rgb(120, 120, 180));
+                                let gbar = egui::Rect::from_min_size(header_rect.min, egui::vec2(GROUP_INDENT - 4.0, header_rect.height()));
+                                ui.painter().rect_filled(gbar, 0.0, group_color.gamma_multiply(0.2));
+                                // Vertical accent line
+                                let line_x = header_rect.min.x + 1.5;
+                                ui.painter().line_segment(
+                                    [egui::pos2(line_x, header_rect.min.y), egui::pos2(line_x, header_rect.max.y)],
+                                    egui::Stroke::new(2.0, group_color.gamma_multiply(0.6)),
+                                );
+                            }
+                        }
 
-                        ui.add_space(2.0);
+                        // Colored left accent stripe — 4px, always visible
+                        let bar_offset_x = if is_grouped { GROUP_INDENT } else { 0.0 };
+                        let bar_w = 4.0;
+                        let bar_color = if is_selected { color } else { color.gamma_multiply(0.65) };
+                        let bar_rect = egui::Rect::from_min_size(
+                            egui::pos2(header_rect.min.x + bar_offset_x, header_rect.min.y),
+                            egui::vec2(bar_w, header_rect.height()),
+                        );
+                        ui.painter().rect_filled(bar_rect, 2.0, bar_color);
+
+                        ui.add_space(if is_grouped { GROUP_INDENT + 2.0 } else { 2.0 });
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 2.0;
 
                             // Row 1: Track number + name
                             ui.horizontal(|ui| {
-                                // Number badge
+                                // Track number — subtle
                                 let num_text = egui::RichText::new(format!("{}", i + 1))
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgb(90, 90, 100));
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(100, 98, 94));
                                 ui.label(num_text);
 
                                 // Color dot — click to cycle through colors
@@ -191,48 +442,61 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         if r.lost_focus() { track_actions.push(TrackAction::FinishRename(i, buf)); }
                                         else { app.renaming_track = Some((i, buf)); }
                                     } else {
-                                        ui.label(egui::RichText::new(&track.name).strong().color(egui::Color32::from_rgb(220, 220, 225)));
+                                        ui.label(egui::RichText::new(&track.name).strong().color(egui::Color32::from_rgb(235, 233, 228)));
                                     }
                                 } else {
-                                    ui.label(egui::RichText::new(&track.name).strong().color(egui::Color32::from_rgb(220, 220, 225)));
+                                    ui.label(egui::RichText::new(&track.name).strong().color(egui::Color32::from_rgb(235, 233, 228)));
                                 }
 
+                                if track.frozen {
+                                    ui.label(egui::RichText::new("*").size(10.0).color(egui::Color32::from_rgb(100, 180, 255)))
+                                        .on_hover_text("Frozen — effects baked offline");
+                                }
                                 if track.armed {
                                     ui.label(egui::RichText::new("●").size(10.0).color(egui::Color32::from_rgb(220, 50, 50)));
                                 }
+                                // Takes badge — shows count when track has overlapping clips
+                                let max_takes = track.max_take_count();
+                                if max_takes > 1 {
+                                    ui.label(
+                                        egui::RichText::new(format!("Takes:{}", max_takes))
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(200, 170, 60))
+                                    ).on_hover_text(format!("{} overlapping takes on this track", max_takes));
+                                }
                             });
 
-                            // Row 2: Control buttons — consistent sizing
+                            // Row 2: Control buttons — circular toggles
                             ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 2.0;
-                                let btn = egui::vec2(22.0, 17.0);
-                                let btn_text_size = 10.0;
+                                ui.spacing_mut().item_spacing.x = 3.0;
+                                let circ_size = egui::vec2(20.0, 20.0);
+                                let btn_text_size = 9.0;
 
-                                let make_btn = |label: &str, active: bool, active_color: egui::Color32| -> (egui::RichText, egui::Color32) {
-                                    let bg = if active { active_color } else { egui::Color32::from_rgb(42, 42, 48) };
-                                    let tc = if active { egui::Color32::WHITE } else { egui::Color32::from_rgb(140, 140, 148) };
+                                let make_circ_btn = |label: &str, active: bool, active_color: egui::Color32| -> (egui::RichText, egui::Color32) {
+                                    let bg = if active { active_color } else { egui::Color32::from_rgb(36, 37, 44) };
+                                    let tc = if active { egui::Color32::WHITE } else { egui::Color32::from_rgb(145, 142, 138) };
                                     (egui::RichText::new(label).size(btn_text_size).color(tc), bg)
                                 };
 
-                                let (t, bg) = make_btn("M", track.muted, egui::Color32::from_rgb(170, 130, 20));
-                                if ui.add_sized(btn, egui::Button::new(t).fill(bg))
+                                let (t, bg) = make_circ_btn("M", track.muted, egui::Color32::from_rgb(200, 160, 30));
+                                if ui.add_sized(circ_size, egui::Button::new(t).fill(bg).corner_radius(10.0))
                                     .on_hover_text("Mute — silence this track").clicked() { track_actions.push(TrackAction::ToggleMute(i)); }
 
-                                let (t, bg) = make_btn("S", track.solo, egui::Color32::from_rgb(30, 120, 30));
-                                if ui.add_sized(btn, egui::Button::new(t).fill(bg))
+                                let (t, bg) = make_circ_btn("S", track.solo, egui::Color32::from_rgb(50, 160, 60));
+                                if ui.add_sized(circ_size, egui::Button::new(t).fill(bg).corner_radius(10.0))
                                     .on_hover_text("Solo — hear only this track").clicked() { track_actions.push(TrackAction::ToggleSolo(i)); }
 
-                                let (t, bg) = make_btn("R", track.armed, egui::Color32::from_rgb(170, 30, 30));
-                                if ui.add_sized(btn, egui::Button::new(t).fill(bg))
+                                let (t, bg) = make_circ_btn("R", track.armed, egui::Color32::from_rgb(200, 50, 50));
+                                if ui.add_sized(circ_size, egui::Button::new(t).fill(bg).corner_radius(10.0))
                                     .on_hover_text("Arm for recording [R to record]").clicked() { track_actions.push(TrackAction::ToggleArm(i)); }
 
                                 let fx_count = track.effects.len();
-                                let (t, bg) = make_btn(
+                                let (t, bg) = make_circ_btn(
                                     &if fx_count > 0 { format!("FX{fx_count}") } else { "FX".into() },
                                     fx_count > 0,
-                                    egui::Color32::from_rgb(80, 50, 130),
+                                    egui::Color32::from_rgb(100, 70, 170),
                                 );
-                                if ui.add_sized(egui::vec2(30.0, 17.0), egui::Button::new(t).fill(bg))
+                                if ui.add_sized(egui::vec2(30.0, 20.0), egui::Button::new(t).fill(bg).corner_radius(10.0))
                                     .on_hover_text("Effects chain [Cmd+E]").clicked() {
                                     track_actions.push(TrackAction::Select(i));
                                     track_actions.push(TrackAction::OpenFx);
@@ -241,12 +505,12 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 if num_lanes > 1 {
                                     ui.add_space(2.0);
                                     let arrow = if track.lanes_expanded { "▼" } else { "▶" };
-                                    let (t, bg) = make_btn(
+                                    let (t, bg) = make_circ_btn(
                                         &format!("{arrow}{num_lanes}"),
                                         track.lanes_expanded,
-                                        egui::Color32::from_rgb(100, 80, 30),
+                                        egui::Color32::from_rgb(140, 110, 40),
                                     );
-                                    if ui.add_sized(egui::vec2(28.0, 17.0), egui::Button::new(t).fill(bg))
+                                    if ui.add_sized(egui::vec2(28.0, 20.0), egui::Button::new(t).fill(bg).corner_radius(10.0))
                                         .on_hover_text("Toggle take lanes [T]").clicked() {
                                         track_actions.push(TrackAction::ToggleLanes(i));
                                     }
@@ -272,9 +536,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         });
                     });
 
-                    // Thin separator line
+                    // Thin separator line — subtle warm tone
                     let (_, sep) = ui.allocate_space(egui::vec2(HEADER_WIDTH, 1.0));
-                    ui.painter().rect_filled(sep, 0.0, egui::Color32::from_rgb(55, 55, 60));
+                    ui.painter().rect_filled(sep, 0.0, egui::Color32::from_rgb(44, 45, 52));
                 });
             }
 
@@ -300,7 +564,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                     TrackAction::Select(i) => {
                         app.selected_track = Some(i);
-                        app.selected_clip = None;
+                        app.selected_clips.clear();
                     }
                     TrackAction::Delete(i) => {
                         if app.project.tracks.len() > 1 {
@@ -308,7 +572,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             app.project.tracks.remove(i);
                             app.selected_track =
                                 Some(i.min(app.project.tracks.len() - 1));
-                            app.selected_clip = None;
+                            app.selected_clips.clear();
                             app.sync_project();
                         }
                     }
@@ -358,11 +622,114 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             !app.project.tracks[i].lanes_expanded;
                         app.project.tracks[i].custom_height = 0.0;
                     }
+                    TrackAction::CreateGroupFromTrack(i) => {
+                        app.push_undo("Create group");
+                        let group_id = Uuid::new_v4();
+                        let track_color = app.project.tracks[i].color;
+                        app.project.groups.push(jamhub_model::TrackGroup {
+                            id: group_id,
+                            name: format!("Group {}", app.project.groups.len() + 1),
+                            color: track_color,
+                        });
+                        app.project.tracks[i].group_id = Some(group_id);
+                        // Also add the next track to the group if it exists
+                        if i + 1 < app.project.tracks.len() && app.project.tracks[i + 1].group_id.is_none() {
+                            app.project.tracks[i + 1].group_id = Some(group_id);
+                        }
+                        app.sync_project();
+                    }
+                    TrackAction::RemoveFromGroup(i) => {
+                        app.push_undo("Remove from group");
+                        let old_gid = app.project.tracks[i].group_id;
+                        app.project.tracks[i].group_id = None;
+                        // If no more tracks in this group, remove the group
+                        if let Some(gid) = old_gid {
+                            let remaining = app.project.tracks.iter().filter(|t| t.group_id == Some(gid)).count();
+                            if remaining == 0 {
+                                app.project.groups.retain(|g| g.id != gid);
+                                app.collapsed_groups.remove(&gid);
+                            }
+                        }
+                        app.sync_project();
+                    }
+                    TrackAction::ToggleGroup(gid) => {
+                        if app.collapsed_groups.contains(&gid) {
+                            app.collapsed_groups.remove(&gid);
+                        } else {
+                            app.collapsed_groups.insert(gid);
+                        }
+                    }
+                    TrackAction::ToggleGroupMute(gid) => {
+                        app.push_undo("Toggle group mute");
+                        let all_muted = app.project.tracks.iter()
+                            .filter(|t| t.group_id == Some(gid))
+                            .all(|t| t.muted);
+                        let new_state = !all_muted;
+                        for track in app.project.tracks.iter_mut() {
+                            if track.group_id == Some(gid) {
+                                track.muted = new_state;
+                            }
+                        }
+                        app.sync_project();
+                    }
+                    TrackAction::ToggleGroupSolo(gid) => {
+                        app.push_undo("Toggle group solo");
+                        let any_solo = app.project.tracks.iter()
+                            .filter(|t| t.group_id == Some(gid))
+                            .any(|t| t.solo);
+                        let new_state = !any_solo;
+                        for track in app.project.tracks.iter_mut() {
+                            if track.group_id == Some(gid) {
+                                track.solo = new_state;
+                            }
+                        }
+                        app.sync_project();
+                    }
+                    TrackAction::DeleteGroup(gid) => {
+                        app.push_undo("Ungroup");
+                        for track in app.project.tracks.iter_mut() {
+                            if track.group_id == Some(gid) {
+                                track.group_id = None;
+                            }
+                        }
+                        app.project.groups.retain(|g| g.id != gid);
+                        app.collapsed_groups.remove(&gid);
+                        app.sync_project();
+                    }
+                    TrackAction::MoveUp(i) => {
+                        if i > 0 && i < app.project.tracks.len() {
+                            app.push_undo("Move track up");
+                            app.project.tracks.swap(i, i - 1);
+                            app.selected_track = Some(i - 1);
+                            app.selected_clips.clear();
+                            app.sync_project();
+                        }
+                    }
+                    TrackAction::MoveDown(i) => {
+                        if i + 1 < app.project.tracks.len() {
+                            app.push_undo("Move track down");
+                            app.project.tracks.swap(i, i + 1);
+                            app.selected_track = Some(i + 1);
+                            app.selected_clips.clear();
+                            app.sync_project();
+                        }
+                    }
+                    TrackAction::Freeze(i) => {
+                        app.selected_track = Some(i);
+                        app.freeze_selected_track();
+                    }
+                    TrackAction::Unfreeze(i) => {
+                        app.selected_track = Some(i);
+                        app.unfreeze_selected_track();
+                    }
+                    TrackAction::FlattenComp(i) => {
+                        app.flatten_comp(i);
+                    }
                 }
             }
 
             ui.add_space(8.0);
-            if ui.button("+ Add Track").clicked() {
+            if ui.button("+ Add Track").on_hover_text("Add a new audio track").clicked() {
                 app.push_undo("Add track");
                 let n = app.project.tracks.len() + 1;
                 app.project
@@ -396,6 +763,10 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         let clip_rects: Vec<(usize, usize, usize, egui::Rect)> = {
             let mut rects = Vec::new();
             for ti in 0..app.project.tracks.len() {
+                // Skip collapsed group tracks
+                if is_track_collapsed(app, ti) {
+                    continue;
+                }
                 let expanded = app.project.tracks[ti].lanes_expanded;
                 let lanes = compute_take_lanes(&app.project.tracks[ti]);
                 for (ci, lane) in lanes {
@@ -454,11 +825,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             // Activate: mute overlapping, unmute this
                             let start = app.project.tracks[ti].clips[ci].start_sample;
                             let end = start
-                                + app.project.tracks[ti].clips[ci].duration_samples;
+                                + app.project.tracks[ti].clips[ci].visual_duration_samples();
                             for (j, c) in
                                 app.project.tracks[ti].clips.iter_mut().enumerate()
                             {
-                                let c_end = c.start_sample + c.duration_samples;
+                                let c_end = c.start_sample + c.visual_duration_samples();
                                 if j != ci && start < c_end && end > c.start_sample {
                                     c.muted = true;
                                 }
@@ -470,12 +841,20 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.sync_project();
                         ui.close_menu();
                     }
+                    // Flatten Comp option — visible when there are muted takes on this track
+                    let has_muted_takes = app.project.tracks[ti].clips.iter().any(|c| c.muted);
+                    if has_muted_takes {
+                        if ui.button("Flatten Comp").on_hover_text("Remove all inactive takes, keep only active clips").clicked() {
+                            app.flatten_comp(ti);
+                            ui.close_menu();
+                        }
+                    }
                     ui.separator();
                     if ui.button("Duplicate Clip").clicked() {
                         app.push_undo("Duplicate clip");
                         let mut new_clip = app.project.tracks[ti].clips[ci].clone();
                         new_clip.id = uuid::Uuid::new_v4();
-                        new_clip.start_sample += new_clip.duration_samples;
+                        new_clip.start_sample += new_clip.visual_duration_samples();
                         new_clip.name = format!("{} (copy)", new_clip.name);
                         new_clip.muted = false;
                         app.project.tracks[ti].clips.push(new_clip);
@@ -485,36 +864,159 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     ui.separator();
                     ui.menu_button("Process", |ui| {
                         if ui.button("Normalize").on_hover_text("Normalize peak to 0dB").clicked() {
-                            app.selected_clip = Some((ti, ci));
+                            app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
                             app.normalize_clip();
                             ui.close_menu();
                         }
                         if ui.button("Reverse").on_hover_text("Reverse audio").clicked() {
-                            app.selected_clip = Some((ti, ci));
+                            app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
                             app.reverse_clip();
                             ui.close_menu();
                         }
                         if ui.button("Fade In").on_hover_text("100ms smooth fade in").clicked() {
-                            app.selected_clip = Some((ti, ci));
+                            app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
                             app.fade_in_clip();
                             ui.close_menu();
                         }
                         if ui.button("Fade Out").on_hover_text("100ms smooth fade out").clicked() {
-                            app.selected_clip = Some((ti, ci));
+                            app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
                             app.fade_out_clip();
                             ui.close_menu();
                         }
                         if ui.button("Invert Phase").on_hover_text("Flip polarity (phase invert)").clicked() {
-                            app.selected_clip = Some((ti, ci));
+                            app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
                             app.invert_clip();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Gain +3dB").on_hover_text("Boost level by 3dB").clicked() {
+                            app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
+                            app.gain_up_clip();
+                            ui.close_menu();
+                        }
+                        if ui.button("Gain -3dB").on_hover_text("Reduce level by 3dB").clicked() {
+                            app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
+                            app.gain_down_clip();
+                            ui.close_menu();
+                        }
+                        if ui.button("Silence").on_hover_text("Zero out all audio").clicked() {
+                            app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
+                            app.silence_clip();
                             ui.close_menu();
                         }
                     });
                     ui.separator();
+                    // Clip color picker
+                    ui.menu_button("Set Color", |ui| {
+                        let colors: &[([u8; 3], &str)] = &[
+                            ([220, 80, 80], "Red"),
+                            ([230, 150, 50], "Orange"),
+                            ([220, 200, 60], "Yellow"),
+                            ([80, 190, 80], "Green"),
+                            ([60, 160, 220], "Blue"),
+                            ([140, 100, 220], "Purple"),
+                            ([200, 100, 180], "Pink"),
+                            ([160, 160, 160], "Gray"),
+                        ];
+                        for &(color, name) in colors {
+                            let c = egui::Color32::from_rgb(color[0], color[1], color[2]);
+                            let resp = ui.horizontal(|ui| {
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                                ui.painter().rect_filled(rect, 2.0, c);
+                                ui.button(name)
+                            });
+                            if resp.inner.clicked() {
+                                app.push_undo("Set clip color");
+                                app.project.tracks[ti].clips[ci].color = Some(color);
+                                app.sync_project();
+                                ui.close_menu();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Reset to Track Color").clicked() {
+                            app.push_undo("Reset clip color");
+                            app.project.tracks[ti].clips[ci].color = None;
+                            app.sync_project();
+                            ui.close_menu();
+                        }
+                    });
+                    // Speed submenu
+                    ui.menu_button("Speed", |ui| {
+                        let current_rate = app.project.tracks[ti].clips[ci].playback_rate;
+                        let preserve = app.project.tracks[ti].clips[ci].preserve_pitch;
+                        let speeds: &[(f32, &str)] = &[
+                            (0.5, "Half Speed (0.5x)"),
+                            (0.75, "0.75x"),
+                            (1.0, "Normal (1x)"),
+                            (1.5, "1.5x"),
+                            (2.0, "Double Speed (2x)"),
+                        ];
+                        for &(rate, label) in speeds {
+                            let is_current = (current_rate - rate).abs() < 0.01;
+                            let text = if is_current {
+                                format!("{} \u{2713}", label)
+                            } else {
+                                label.to_string()
+                            };
+                            if ui.button(&text).clicked() {
+                                app.push_undo("Set clip speed");
+                                app.project.tracks[ti].clips[ci].playback_rate = rate;
+                                app.sync_project();
+                                ui.close_menu();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Custom...").clicked() {
+                            app.speed_input = Some(crate::SpeedInputState {
+                                track_idx: ti,
+                                clip_idx: ci,
+                                input_buf: format!("{:.2}", current_rate),
+                            });
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        let pitch_label = if preserve {
+                            "Preserve Pitch \u{2713}"
+                        } else {
+                            "Preserve Pitch"
+                        };
+                        if ui.button(pitch_label).clicked() {
+                            app.push_undo("Toggle preserve pitch");
+                            app.project.tracks[ti].clips[ci].preserve_pitch = !preserve;
+                            app.sync_project();
+                            ui.close_menu();
+                        }
+                    });
+                    ui.separator();
+                    // Loop submenu
+                    let current_loop = app.project.tracks[ti].clips[ci].loop_count.max(1);
+                    ui.menu_button(format!("Loop ({}x)", current_loop), |ui| {
+                        for &count in &[1u32, 2, 4, 8] {
+                            let label = if count == 1 { "1x (no loop)".to_string() } else { format!("{}x", count) };
+                            if ui.selectable_label(current_loop == count, label).clicked() {
+                                app.push_undo("Set clip loop");
+                                app.project.tracks[ti].clips[ci].loop_count = count;
+                                app.sync_project();
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    ui.separator();
+                    // Consolidate (needs multiple clips selected on same track)
+                    if app.selected_clips.len() >= 2 {
+                        let all_same_track = app.selected_clips.iter().all(|&(t, _)| t == ti);
+                        if all_same_track {
+                            if ui.button("Consolidate [Cmd+J]").clicked() {
+                                app.consolidate_selected_clips();
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                        }
+                    }
                     if ui.button("Delete Clip").clicked() {
                         app.push_undo("Delete clip");
                         app.project.tracks[ti].clips.remove(ci);
-                        app.selected_clip = None;
+                        app.selected_clips.clear();
                         app.sync_project();
                         ui.close_menu();
                     }
@@ -550,7 +1052,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 }
                 for &(ti, ci, _, cr) in &clip_rects {
                     if cr.contains(pos) {
-                        app.selected_clip = Some((ti, ci));
+                        app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
                         app.selected_track = Some(ti);
                     }
                 }
@@ -558,8 +1060,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         }
 
         // Single click: select track, select/activate take, set playhead
+        // Supports multi-select: Cmd+Click toggles, Shift+Click selects range
         if response.clicked_by(egui::PointerButton::Primary) {
             if let Some(pos) = response.interact_pointer_pos {
+                let modifiers = ui.input(|i| i.modifiers);
+
                 // Select track under cursor
                 if let Some(ti) = track_at_y(app, pos.y, tracks_y_start) {
                     app.selected_track = Some(ti);
@@ -575,7 +1080,41 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                 if let Some((ti, ci)) = clicked_clip {
                     let was_muted = app.project.tracks[ti].clips[ci].muted;
-                    app.selected_clip = Some((ti, ci));
+
+                    if modifiers.command {
+                        // Cmd+Click: toggle this clip in multi-selection
+                        if app.selected_clips.contains(&(ti, ci)) {
+                            app.selected_clips.remove(&(ti, ci));
+                        } else {
+                            app.selected_clips.insert((ti, ci));
+                        }
+                    } else if modifiers.shift && !app.selected_clips.is_empty() {
+                        // Shift+Click: select range of clips between first selected and clicked
+                        // Find the "anchor" clip (first selected clip on same track, or any)
+                        let anchor = app.selected_clips.iter()
+                            .find(|&&(t, _)| t == ti)
+                            .or_else(|| app.selected_clips.iter().next())
+                            .copied();
+                        if let Some((anchor_ti, anchor_ci)) = anchor {
+                            if anchor_ti == ti {
+                                // Same track: select all clips between anchor and clicked
+                                let lo = anchor_ci.min(ci);
+                                let hi = anchor_ci.max(ci);
+                                for idx in lo..=hi {
+                                    if idx < app.project.tracks[ti].clips.len() {
+                                        app.selected_clips.insert((ti, idx));
+                                    }
+                                }
+                            } else {
+                                // Different tracks: just add this clip
+                                app.selected_clips.insert((ti, ci));
+                            }
+                        }
+                    } else {
+                        // Plain click: select only this clip
+                        app.selected_clips.clear();
+                        app.selected_clips.insert((ti, ci));
+                    }
                     app.selected_track = Some(ti);
 
                     // Clicking a muted take activates it (Reaper behavior)
@@ -583,11 +1122,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.push_undo("Activate take");
                         let start = app.project.tracks[ti].clips[ci].start_sample;
                         let end =
-                            start + app.project.tracks[ti].clips[ci].duration_samples;
+                            start + app.project.tracks[ti].clips[ci].visual_duration_samples();
                         for (j, c) in
                             app.project.tracks[ti].clips.iter_mut().enumerate()
                         {
-                            let c_end = c.start_sample + c.duration_samples;
+                            let c_end = c.start_sample + c.visual_duration_samples();
                             if j != ci && start < c_end && end > c.start_sample {
                                 c.muted = true;
                             }
@@ -596,8 +1135,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.sync_project();
                     }
                 } else {
-                    // Click on empty area: set playhead
-                    app.selected_clip = None;
+                    // Click on empty area: set playhead, deselect clips
+                    app.selected_clips.clear();
                     let x_offset = pos.x - rect.min.x + app.scroll_x;
                     let seconds = x_offset as f64 / pixels_per_second as f64;
                     let sample_pos = (seconds * sample_rate) as u64;
@@ -607,13 +1146,110 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
-        // Clip dragging / edge trimming / selection range
+        // Double-click on empty area: clear selection/loop
+        if response.double_clicked() {
+            if let Some(pos) = response.interact_pointer_pos {
+                // Only if not on a clip
+                let on_clip = clip_rects.iter().any(|&(_, _, _, cr)| cr.contains(pos));
+                if !on_clip {
+                    app.selection_start = None;
+                    app.selection_end = None;
+                    app.loop_enabled = false;
+                    app.loop_start = 0;
+                    app.loop_end = 0;
+                    app.send_command(jamhub_engine::EngineCommand::SetLoop {
+                        enabled: false,
+                        start: 0,
+                        end: 0,
+                    });
+                }
+            }
+        }
+
+        // Clip dragging / edge trimming / fade handles / selection range
         if response.drag_started_by(egui::PointerButton::Primary) {
             if let Some(pos) = response.interact_pointer_pos {
                 let edge_zone = 8.0; // pixels from edge for trim detection
+                let fade_handle_zone = 20.0; // pixels for fade handle hit area
                 let mut action_taken = false;
 
-                // Check for edge trim first (higher priority than drag)
+                // Check for fade handle drag first (top corners, highest priority)
+                // Pre-scan to find target (avoids borrow conflict with app.push_undo)
+                let mut fade_target: Option<(usize, usize, bool, u64)> = None; // (ti, ci, is_fade_in, orig_samples)
+                for &(ti, ci, _, cr) in &clip_rects {
+                    if !cr.contains(pos) {
+                        continue;
+                    }
+                    if (pos.y - cr.top()) >= fade_handle_zone {
+                        continue;
+                    }
+                    let clip = &app.project.tracks[ti].clips[ci];
+                    if clip.muted {
+                        continue;
+                    }
+
+                    let fade_in_px = (clip.fade_in_samples as f64 / sample_rate) as f32 * pixels_per_second;
+                    let fi_handle_x = cr.left() + fade_in_px;
+                    let fade_out_px = (clip.fade_out_samples as f64 / sample_rate) as f32 * pixels_per_second;
+                    let fo_handle_x = cr.right() - fade_out_px;
+
+                    if (pos.x - fi_handle_x).abs() < fade_handle_zone {
+                        fade_target = Some((ti, ci, true, clip.fade_in_samples));
+                        break;
+                    } else if (pos.x - fo_handle_x).abs() < fade_handle_zone {
+                        fade_target = Some((ti, ci, false, clip.fade_out_samples));
+                        break;
+                    }
+                }
+                if let Some((ti, ci, is_fade_in, orig)) = fade_target {
+                    let label = if is_fade_in { "Adjust fade in" } else { "Adjust fade out" };
+                    app.push_undo(label);
+                    app.dragging_fade = Some(crate::FadeDragState {
+                        track_idx: ti,
+                        clip_idx: ci,
+                        fade_edge: if is_fade_in { crate::FadeEdge::FadeIn } else { crate::FadeEdge::FadeOut },
+                        original_fade_samples: orig,
+                    });
+                    action_taken = true;
+                }
+
+                // Check for clip gain handle drag (Cmd/Ctrl+drag on gain line area)
+                if !action_taken {
+                    let mods = ui.input(|i| i.modifiers);
+                    if mods.command {
+                        for &(ti, ci, _, cr) in &clip_rects {
+                            if !cr.contains(pos) {
+                                continue;
+                            }
+                            let clip_muted = app.project.tracks[ti].clips[ci].muted;
+                            let clip_gain = app.project.tracks[ti].clips[ci].gain_db;
+                            if clip_muted {
+                                continue;
+                            }
+                            let gain_range = 24.0_f32;
+                            let handle_y_min = cr.top() + 16.0;
+                            let handle_y_max = cr.top() + cr.height() * 0.4;
+                            let handle_y_center = (handle_y_min + handle_y_max) * 0.5;
+                            let handle_y = handle_y_center - (clip_gain / gain_range) * (handle_y_max - handle_y_min) * 0.5;
+                            let handle_y = handle_y.clamp(handle_y_min, handle_y_max);
+                            if (pos.y - handle_y).abs() < 10.0 {
+                                app.push_undo("Adjust clip gain");
+                                app.dragging_clip_gain = Some(crate::ClipGainDragState {
+                                    track_idx: ti,
+                                    clip_idx: ci,
+                                    start_y: pos.y,
+                                    original_gain_db: clip_gain,
+                                });
+                                action_taken = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Check for Alt+right-edge stretch or normal edge trim
+                if !action_taken {
+                let modifiers = ui.input(|i| i.modifiers);
                 for &(ti, ci, _, cr) in &clip_rects {
                     if !cr.contains(pos) {
                         continue;
@@ -621,6 +1257,21 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                     let left_edge = (pos.x - cr.left()).abs() < edge_zone;
                     let right_edge = (pos.x - cr.right()).abs() < edge_zone;
+
+                    // Alt+drag right edge = stretch (change playback rate)
+                    if right_edge && modifiers.alt {
+                        let orig_dur = app.project.tracks[ti].clips[ci].duration_samples;
+                        let orig_rate = app.project.tracks[ti].clips[ci].playback_rate;
+                        app.push_undo("Stretch clip");
+                        app.stretching_clip = Some(crate::ClipStretchState {
+                            track_idx: ti,
+                            clip_idx: ci,
+                            original_duration: orig_dur,
+                            original_rate: orig_rate,
+                        });
+                        action_taken = true;
+                        break;
+                    }
 
                     if left_edge || right_edge {
                         let orig_start = app.project.tracks[ti].clips[ci].start_sample;
@@ -641,6 +1292,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         break;
                     }
                 }
+                }
 
                 // If not trimming, check for automation point adding
                 if !action_taken && app.show_automation {
@@ -652,9 +1304,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         // Calculate value from Y position within track
                         let offsets = track_y_offsets(app);
                         let track_top = tracks_y_start + offsets[ti];
-                        let t_h = track_height(&app.project.tracks[ti]);
+                        let t_h = track_height(&app.project.tracks[ti], app.track_height_zoom);
                         let rel_y = (pos.y - track_top) / t_h;
-                        let param = app.automation_param;
+                        let param = app.automation_param.clone();
                         let (min_val, max_val) = param.range();
                         let value = max_val - rel_y * (max_val - min_val);
                         let value = value.clamp(min_val, max_val);
@@ -688,7 +1340,45 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                 }
 
-                // If not trimming or automation, try clip drag
+                // Swipe comping: when lanes are expanded and user drags on a muted take lane clip,
+                // start swipe comp gesture instead of clip drag
+                if !action_taken {
+                    let mut swipe_target: Option<(usize, usize, usize)> = None; // (ti, ci, lane)
+                    for &(ti, ci, lane, cr) in &clip_rects {
+                        if cr.contains(pos)
+                            && app.project.tracks[ti].lanes_expanded
+                            && app.project.tracks[ti].clips[ci].muted
+                        {
+                            swipe_target = Some((ti, ci, lane));
+                            break;
+                        }
+                    }
+                    if let Some((ti, ci, lane)) = swipe_target {
+                        app.push_undo("Swipe comp");
+                        // Calculate sample position from X
+                        let x_offset = pos.x - rect.min.x + app.scroll_x;
+                        let sample = (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
+                        app.swipe_comping = Some(crate::SwipeCompState {
+                            track_idx: ti,
+                            lane,
+                            start_sample: sample,
+                            current_sample: sample,
+                        });
+                        // Immediately activate the clicked take
+                        let clip_start = app.project.tracks[ti].clips[ci].start_sample;
+                        let clip_end = clip_start + app.project.tracks[ti].clips[ci].visual_duration_samples();
+                        for (j, c) in app.project.tracks[ti].clips.iter_mut().enumerate() {
+                            let c_end = c.start_sample + c.visual_duration_samples();
+                            if clip_start < c_end && clip_end > c.start_sample {
+                                c.muted = j != ci;
+                            }
+                        }
+                        app.sync_project();
+                        action_taken = true;
+                    }
+                }
+
+                // If not trimming, automation, or swipe comping, try clip drag
                 if !action_taken {
                     let mut drag_target: Option<(usize, usize, u64)> = None;
                     for &(ti, ci, _, cr) in &clip_rects {
@@ -700,33 +1390,199 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             ));
                         }
                     }
-                    if let Some((ti, ci, orig)) = drag_target {
-                        app.push_undo("Move clip");
-                        app.dragging_clip = Some(crate::ClipDragState {
-                            track_idx: ti,
-                            clip_idx: ci,
-                            start_x: pos.x,
-                            original_start_sample: orig,
-                        });
+                    if let Some((ti, ci, _orig)) = drag_target {
+                        // If dragging a selected clip with multiple selected, do multi-drag
+                        if app.selected_clips.contains(&(ti, ci)) && app.selected_clips.len() > 1 {
+                            app.push_undo("Move clips");
+                            let originals: Vec<(usize, usize, u64)> = app.selected_clips.iter()
+                                .filter_map(|&(t, c)| {
+                                    if t < app.project.tracks.len() && c < app.project.tracks[t].clips.len() {
+                                        Some((t, c, app.project.tracks[t].clips[c].start_sample))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            app.dragging_clips = Some(crate::MultiClipDragState {
+                                start_x: pos.x,
+                                originals,
+                            });
+                        } else {
+                            // Single clip drag (also selects it)
+                            app.push_undo("Move clip");
+                            let orig = app.project.tracks[ti].clips[ci].start_sample;
+                            app.dragging_clip = Some(crate::ClipDragState {
+                                track_idx: ti,
+                                clip_idx: ci,
+                                start_x: pos.x,
+                                original_start_sample: orig,
+                            });
+                            if !app.selected_clips.contains(&(ti, ci)) {
+                                app.selected_clips.clear();
+                                app.selected_clips.insert((ti, ci));
+                            }
+                        }
                         action_taken = true;
                     }
                 }
 
-                // If nothing else, start a selection range
+                // If nothing else, start rubber-band or time selection
                 if !action_taken {
-                    let x_offset = pos.x - rect.min.x + app.scroll_x;
-                    let sample =
-                        (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
-                    app.selection_start = Some(app.snap_position(sample));
-                    app.selection_end = app.selection_start;
-                    app.selecting = true;
+                    let modifiers = ui.input(|i| i.modifiers);
+                    if modifiers.alt {
+                        // Alt+drag: rubber-band (marquee) clip selection
+                        app.rubber_band_origin = Some(pos);
+                        app.rubber_band_active = true;
+                    } else {
+                        // Normal drag on empty area: time selection range
+                        let x_offset = pos.x - rect.min.x + app.scroll_x;
+                        let sample =
+                            (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
+                        app.selection_start = Some(app.snap_position(sample));
+                        app.selection_end = app.selection_start;
+                        app.selecting = true;
+                    }
                 }
             }
         }
 
         if response.dragged_by(egui::PointerButton::Primary) {
+            // Handle fade handle dragging
+            if let Some(ref fade_drag) = app.dragging_fade {
+                if let Some(pos) = response.interact_pointer_pos {
+                    let ti = fade_drag.track_idx;
+                    let ci = fade_drag.clip_idx;
+                    let fade_edge = &fade_drag.fade_edge;
+                    if ti < app.project.tracks.len()
+                        && ci < app.project.tracks[ti].clips.len()
+                    {
+                        let clip = &app.project.tracks[ti].clips[ci];
+                        let clip_x_start = rect.min.x
+                            + (clip.start_sample as f64 / sample_rate) as f32 * pixels_per_second
+                            - app.scroll_x;
+                        let visual_dur = clip.visual_duration_samples();
+                        let clip_x_end = clip_x_start
+                            + (visual_dur as f64 / sample_rate) as f32 * pixels_per_second;
+
+                        match fade_edge {
+                            crate::FadeEdge::FadeIn => {
+                                // Fade in: handle position is relative to clip start
+                                let dx = (pos.x - clip_x_start).max(0.0).min(clip_x_end - clip_x_start);
+                                let fade_seconds = dx as f64 / pixels_per_second as f64;
+                                let fade_samples = (fade_seconds * sample_rate) as u64;
+                                let fade_samples = fade_samples.min(visual_dur);
+                                app.project.tracks[ti].clips[ci].fade_in_samples = fade_samples;
+                            }
+                            crate::FadeEdge::FadeOut => {
+                                // Fade out: handle position is relative to clip end
+                                let dx = (clip_x_end - pos.x).max(0.0).min(clip_x_end - clip_x_start);
+                                let fade_seconds = dx as f64 / pixels_per_second as f64;
+                                let fade_samples = (fade_seconds * sample_rate) as u64;
+                                let fade_samples = fade_samples.min(visual_dur);
+                                app.project.tracks[ti].clips[ci].fade_out_samples = fade_samples;
+                            }
+                        }
+                    }
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                }
+            }
+            // Handle clip gain drag
+            else if let Some(ref gain_drag) = app.dragging_clip_gain {
+                if let Some(pos) = response.interact_pointer_pos {
+                    let ti = gain_drag.track_idx;
+                    let ci = gain_drag.clip_idx;
+                    let start_y = gain_drag.start_y;
+                    let orig_gain = gain_drag.original_gain_db;
+                    if ti < app.project.tracks.len()
+                        && ci < app.project.tracks[ti].clips.len()
+                    {
+                        // Dragging up = increase gain, down = decrease
+                        let dy = start_y - pos.y; // positive = up
+                        let db_per_pixel = 0.5; // 0.5 dB per pixel of drag
+                        let new_gain = (orig_gain + dy * db_per_pixel).clamp(-24.0, 24.0);
+                        app.project.tracks[ti].clips[ci].gain_db = new_gain;
+                    }
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                }
+            }
+            // Handle swipe comping drag — activate takes as mouse moves across take lanes
+            else if let Some(ref swipe) = app.swipe_comping {
+                if let Some(pos) = response.interact_pointer_pos {
+                    let ti = swipe.track_idx;
+                    let lane = swipe.lane;
+                    // Calculate current sample position from X
+                    let x_offset = pos.x - rect.min.x + app.scroll_x;
+                    let current_sample = (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
+
+                    // Find the lane assignments for this track
+                    if ti < app.project.tracks.len() {
+                        let take_lanes = compute_take_lanes(&app.project.tracks[ti]);
+                        // Find the clip in the swiped lane that covers the current position
+                        for &(ci, cl) in &take_lanes {
+                            if cl != lane {
+                                continue;
+                            }
+                            let clip = &app.project.tracks[ti].clips[ci];
+                            let clip_start = clip.start_sample;
+                            let clip_end = clip_start + clip.visual_duration_samples();
+                            if current_sample >= clip_start && current_sample < clip_end {
+                                // This clip should be active; mute all others overlapping it
+                                if app.project.tracks[ti].clips[ci].muted {
+                                    let cs = app.project.tracks[ti].clips[ci].start_sample;
+                                    let ce = cs + app.project.tracks[ti].clips[ci].visual_duration_samples();
+                                    for (j, c) in app.project.tracks[ti].clips.iter_mut().enumerate() {
+                                        let c_end = c.start_sample + c.visual_duration_samples();
+                                        if cs < c_end && ce > c.start_sample {
+                                            c.muted = j != ci;
+                                        }
+                                    }
+                                    app.sync_project();
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    // Update swipe state
+                    app.swipe_comping = Some(crate::SwipeCompState {
+                        track_idx: ti,
+                        lane,
+                        start_sample: swipe.start_sample,
+                        current_sample,
+                    });
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+            }
+            // Handle clip stretch dragging (Alt+drag right edge)
+            else if let Some(ref stretch) = app.stretching_clip {
+                if let Some(pos) = response.interact_pointer_pos {
+                    let ti = stretch.track_idx;
+                    let ci = stretch.clip_idx;
+                    let orig_dur = stretch.original_duration;
+                    let _orig_rate = stretch.original_rate;
+
+                    if ti < app.project.tracks.len()
+                        && ci < app.project.tracks[ti].clips.len()
+                    {
+                        let clip_start = app.project.tracks[ti].clips[ci].start_sample;
+                        let clip_x_start = rect.min.x
+                            + (clip_start as f64 / sample_rate) as f32 * pixels_per_second
+                            - app.scroll_x;
+                        // New visual width from mouse position
+                        let new_visual_px = (pos.x - clip_x_start).max(20.0);
+                        let new_visual_seconds = new_visual_px as f64 / pixels_per_second as f64;
+                        let new_visual_samples = (new_visual_seconds * sample_rate) as u64;
+                        // new_rate = original_duration / new_visual_duration
+                        let new_rate = orig_dur as f32 / new_visual_samples.max(1) as f32;
+                        // Clamp to reasonable range
+                        let new_rate = new_rate.clamp(0.1, 8.0);
+                        app.project.tracks[ti].clips[ci].playback_rate = new_rate;
+                    }
+
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                }
+            }
             // Handle clip trim dragging
-            if let Some(ref trim) = app.trimming_clip {
+            else if let Some(ref trim) = app.trimming_clip {
                 if let Some(pos) = response.interact_pointer_pos {
                     let x_offset = pos.x - rect.min.x + app.scroll_x;
                     let sample = (x_offset as f64 / pixels_per_second as f64 * sample_rate) as u64;
@@ -773,16 +1629,52 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     app.selection_end = Some(app.snap_position(sample));
                 }
             }
-            // Handle clip dragging
+            // Handle multi-clip dragging
+            else if let Some(ref multi_drag) = app.dragging_clips {
+                if let Some(pos) = response.interact_pointer_pos {
+                    let dx = pos.x - multi_drag.start_x;
+                    let d_seconds = dx as f64 / pixels_per_second as f64;
+                    let d_samples = (d_seconds * sample_rate) as i64;
+
+                    let originals = multi_drag.originals.clone();
+                    app.magnetic_snap_active = false;
+                    for &(ti, ci, orig_start) in &originals {
+                        if ti < app.project.tracks.len()
+                            && ci < app.project.tracks[ti].clips.len()
+                        {
+                            let new_start = (orig_start as i64 + d_samples).max(0) as u64;
+                            let snapped = if app.ctrl_held {
+                                new_start // Ctrl disables snap while dragging
+                            } else {
+                                let (s, did_snap) = app.magnetic_snap(new_start, pixels_per_second, 5.0);
+                                if did_snap {
+                                    app.magnetic_snap_active = true;
+                                    app.magnetic_snap_sample = s;
+                                }
+                                s
+                            };
+                            app.project.tracks[ti].clips[ci].start_sample = snapped;
+                        }
+                    }
+                }
+            }
+            // Handle single clip dragging
             else if let Some(ref drag) = app.dragging_clip {
                 if let Some(pos) = response.interact_pointer_pos {
-                    // Horizontal movement (time)
                     let dx = pos.x - drag.start_x;
                     let d_seconds = dx as f64 / pixels_per_second as f64;
                     let d_samples = (d_seconds * sample_rate) as i64;
                     let new_start =
                         (drag.original_start_sample as i64 + d_samples).max(0) as u64;
-                    let snapped = app.snap_position(new_start);
+                    let snapped = if app.ctrl_held {
+                        app.magnetic_snap_active = false;
+                        new_start // Ctrl disables snap while dragging
+                    } else {
+                        let (s, did_snap) = app.magnetic_snap(new_start, pixels_per_second, 5.0);
+                        app.magnetic_snap_active = did_snap;
+                        if did_snap { app.magnetic_snap_sample = s; }
+                        s
+                    };
 
                     if drag.track_idx < app.project.tracks.len()
                         && drag.clip_idx
@@ -814,9 +1706,36 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                 }
             }
+            // Handle rubber-band selection drag
+            else if app.rubber_band_active {
+                if let Some(pos) = response.interact_pointer_pos {
+                    if let Some(origin) = app.rubber_band_origin {
+                        let rb_rect = egui::Rect::from_two_pos(origin, pos);
+                        app.selected_clips.clear();
+                        for &(ti, ci, _, cr) in &clip_rects {
+                            if rb_rect.intersects(cr) {
+                                app.selected_clips.insert((ti, ci));
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if response.drag_stopped() {
+            app.magnetic_snap_active = false;
+            if app.dragging_fade.is_some() {
+                app.dragging_fade = None;
+                app.sync_project();
+            }
+            if app.dragging_clip_gain.is_some() {
+                app.dragging_clip_gain = None;
+                app.sync_project();
+            }
+            if app.dragging_clips.is_some() {
+                app.dragging_clips = None;
+                app.sync_project();
+            }
             if app.dragging_clip.is_some() {
                 app.dragging_clip = None;
                 app.sync_project();
@@ -824,6 +1743,18 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             if app.trimming_clip.is_some() {
                 app.trimming_clip = None;
                 app.sync_project();
+            }
+            if app.stretching_clip.is_some() {
+                app.stretching_clip = None;
+                app.sync_project();
+            }
+            if app.swipe_comping.is_some() {
+                app.swipe_comping = None;
+                app.sync_project();
+            }
+            if app.rubber_band_active {
+                app.rubber_band_active = false;
+                app.rubber_band_origin = None;
             }
             if app.selecting {
                 app.selecting = false;
@@ -838,6 +1769,16 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         if e2.saturating_sub(s2) < 100 {
                             app.selection_start = None;
                             app.selection_end = None;
+                        } else {
+                            // Auto-set as loop region
+                            app.loop_start = s2;
+                            app.loop_end = e2;
+                            app.loop_enabled = true;
+                            app.send_command(jamhub_engine::EngineCommand::SetLoop {
+                                enabled: true,
+                                start: s2,
+                                end: e2,
+                            });
                         }
                     }
                 }
@@ -846,7 +1787,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         // Scroll/zoom
         ui.input(|i| {
-            if i.modifiers.command {
+            if i.modifiers.command && i.modifiers.shift {
+                // Ctrl/Cmd + Shift + scroll = vertical track height zoom
+                let scroll = i.smooth_scroll_delta.y;
+                if scroll != 0.0 {
+                    app.track_height_zoom = (app.track_height_zoom * (1.0 + scroll * 0.005)).clamp(0.5, 3.0);
+                }
+            } else if i.modifiers.command {
+                // Cmd + scroll = horizontal time zoom
                 let scroll = i.smooth_scroll_delta.y;
                 if scroll != 0.0 {
                     app.zoom = (app.zoom * (1.0 + scroll * 0.005)).clamp(0.1, 10.0);
@@ -855,9 +1803,21 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 let scroll_x = i.smooth_scroll_delta.x - i.smooth_scroll_delta.y;
                 if scroll_x != 0.0 {
                     app.scroll_x = (app.scroll_x - scroll_x).max(0.0);
+                    // User is manually scrolling — suppress auto-follow temporarily
+                    app.user_scrolling = true;
                 }
             }
         });
+
+        // Middle mouse drag also counts as user scrolling
+        if response.dragged_by(egui::PointerButton::Middle) {
+            app.user_scrolling = true;
+        }
+
+        // Clear user_scrolling flag when transport stops
+        if app.transport_state() != jamhub_model::TransportState::Playing {
+            app.user_scrolling = false;
+        }
 
         let painter = ui.painter();
 
@@ -878,6 +1838,10 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         let start_beat = (app.scroll_x / pixels_per_beat).floor() as i32;
         let visible_beats = (available.x / pixels_per_beat).ceil() as i32 + 2;
 
+        // Grid subdivision based on grid_division setting
+        let grid_div = app.grid_division;
+        let grid_subdiv = grid_div.subdivisions_per_beat();
+
         for b in start_beat..(start_beat + visible_beats) {
             if b < 0 {
                 continue;
@@ -885,42 +1849,147 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             let x = rect.min.x + b as f32 * pixels_per_beat - app.scroll_x;
             let is_bar = b as f64 % beats_per_bar == 0.0;
 
-            painter.line_segment(
-                [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
-                egui::Stroke::new(
-                    if is_bar { 1.0 } else { 0.5 },
-                    if is_bar {
-                        egui::Color32::from_rgb(80, 80, 90)
-                    } else {
-                        egui::Color32::from_rgb(50, 50, 58)
-                    },
-                ),
-            );
+            // Always draw beat and bar lines (unless grid is None)
+            if grid_div != crate::GridDivision::None {
+                painter.line_segment(
+                    [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
+                    egui::Stroke::new(
+                        if is_bar { 1.0 } else { 0.5 },
+                        if is_bar {
+                            egui::Color32::from_rgb(80, 80, 90)
+                        } else {
+                            egui::Color32::from_rgb(50, 50, 58)
+                        },
+                    ),
+                );
+            } else if is_bar {
+                // Even with grid=None, show bar lines as faint reference
+                painter.line_segment(
+                    [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
+                    egui::Stroke::new(0.5, egui::Color32::from_rgb(40, 40, 46)),
+                );
+            }
+
+            // Sub-beat division lines based on grid division setting
+            if grid_subdiv > 1.0 {
+                let subdiv_count = grid_subdiv as i32;
+                for sub in 1..subdiv_count {
+                    let sub_x = x + (sub as f32 / subdiv_count as f32) * pixels_per_beat;
+                    if sub_x >= rect.min.x && sub_x <= rect.max.x {
+                        let alpha = if grid_subdiv >= 8.0 { 0.2 } else if grid_subdiv >= 4.0 { 0.25 } else { 0.3 };
+                        painter.line_segment(
+                            [egui::pos2(sub_x, tracks_y_start), egui::pos2(sub_x, rect.max.y)],
+                            egui::Stroke::new(alpha, egui::Color32::from_rgb(40, 40, 48)),
+                        );
+                    }
+                }
+            }
 
             if is_bar {
                 let bar = (b as f64 / beats_per_bar) as i32 + 1;
                 let bar_time_sec = b as f64 * seconds_per_beat;
                 let bar_min = (bar_time_sec / 60.0) as u32;
                 let bar_sec = bar_time_sec % 60.0;
-                let time_label = if bar_min > 0 {
-                    format!("Bar {bar}  {bar_min}:{bar_sec:04.1}")
+
+                // Bar number always shown
+                painter.text(
+                    egui::pos2(x + 4.0, rect.min.y + 2.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("{bar}"),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_rgb(170, 170, 180),
+                );
+
+                // Show minutes:seconds below bar number when zoomed out or always for orientation
+                let time_str = if bar_min > 0 {
+                    format!("{bar_min}:{bar_sec:04.1}")
                 } else {
-                    format!("Bar {bar}  {bar_sec:.1}s")
+                    format!("{bar_sec:.1}s")
                 };
                 painter.text(
-                    egui::pos2(x + 4.0, rect.min.y + 4.0),
+                    egui::pos2(x + 4.0, rect.min.y + 14.0),
                     egui::Align2::LEFT_TOP,
-                    time_label,
-                    egui::FontId::proportional(11.0),
-                    egui::Color32::from_rgb(160, 160, 170),
+                    time_str,
+                    egui::FontId::proportional(9.0),
+                    egui::Color32::from_rgb(110, 110, 120),
                 );
+            }
+        }
+
+        // Grid division label on the ruler (drawn with painter, no mutable ui borrow)
+        {
+            let grid_label = format!("Grid: {}", app.grid_division.label());
+            let grid_label_pos = egui::pos2(rect.max.x - 70.0, ruler_rect.min.y + 4.0);
+            painter.text(
+                grid_label_pos,
+                egui::Align2::LEFT_TOP,
+                &grid_label,
+                egui::FontId::proportional(9.0),
+                egui::Color32::from_rgb(140, 140, 155),
+            );
+
+            // Hit test: click to cycle grid division
+            let grid_btn_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.max.x - 72.0, ruler_rect.min.y + 1.0),
+                egui::vec2(70.0, 16.0),
+            );
+            if response.clicked_by(egui::PointerButton::Primary) {
+                if let Some(click_pos) = response.interact_pointer_pos {
+                    if grid_btn_rect.contains(click_pos) {
+                        use crate::GridDivision;
+                        app.grid_division = match app.grid_division {
+                            GridDivision::None => GridDivision::Bar,
+                            GridDivision::Bar => GridDivision::Half,
+                            GridDivision::Half => GridDivision::Beat,
+                            GridDivision::Beat => GridDivision::Eighth,
+                            GridDivision::Eighth => GridDivision::Sixteenth,
+                            GridDivision::Sixteenth => GridDivision::ThirtySecond,
+                            GridDivision::ThirtySecond => GridDivision::Triplet,
+                            GridDivision::Triplet => GridDivision::None,
+                        };
+                        app.set_status(&format!("Grid: {}", app.grid_division.label()));
+                    }
+                }
+            }
+        }
+
+        // Tempo change markers on the ruler
+        {
+            for tc in &app.project.tempo_map.changes {
+                let tc_sec = tc.sample as f64 / sample_rate;
+                let tc_x = rect.min.x + tc_sec as f32 * pixels_per_second - app.scroll_x;
+                if tc_x >= rect.min.x - 10.0 && tc_x <= rect.max.x + 10.0 {
+                    // Small tempo flag on the ruler
+                    let flag_y = ruler_rect.max.y - 8.0;
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(tc_x, flag_y - 6.0),
+                            egui::pos2(tc_x - 4.0, flag_y),
+                            egui::pos2(tc_x + 4.0, flag_y),
+                        ],
+                        egui::Color32::from_rgb(255, 160, 60),
+                        egui::Stroke::NONE,
+                    ));
+                    // Label with BPM
+                    painter.text(
+                        egui::pos2(tc_x + 5.0, flag_y - 6.0),
+                        egui::Align2::LEFT_TOP,
+                        format!("{:.0}", tc.bpm),
+                        egui::FontId::proportional(8.0),
+                        egui::Color32::from_rgb(255, 180, 80),
+                    );
+                }
             }
         }
 
         // Track lanes with take sub-lanes
         for (i, track) in app.project.tracks.iter().enumerate() {
+            // Skip collapsed group tracks
+            if is_track_collapsed(app, i) {
+                continue;
+            }
             let t_y = tracks_y_start + track_offsets[i];
-            let t_h = track_height(track);
+            let t_h = track_height(track, app.track_height_zoom);
             let lane_rect = egui::Rect::from_min_size(
                 egui::pos2(rect.min.x, t_y),
                 egui::vec2(available.x, t_h),
@@ -928,11 +1997,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
             let is_selected = app.selected_track == Some(i);
             let bg = if is_selected {
-                egui::Color32::from_rgb(40, 40, 50)
+                egui::Color32::from_rgba_premultiplied(40, 40, 55, 120)
             } else if i % 2 == 0 {
-                egui::Color32::from_rgb(35, 35, 40)
+                egui::Color32::from_rgba_premultiplied(35, 35, 42, 80)
             } else {
-                egui::Color32::from_rgb(30, 30, 35)
+                egui::Color32::from_rgba_premultiplied(28, 28, 34, 80)
             };
             painter.rect_filled(lane_rect, 0.0, bg);
 
@@ -945,19 +2014,56 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 egui::Stroke::new(0.5, egui::Color32::from_rgb(50, 50, 58)),
             );
 
-            // Take lane separators (only when expanded)
+            // Take lane separators and labels (only when expanded)
             let take_lanes = compute_take_lanes(track);
             let num_lanes = take_lanes.iter().map(|&(_, l)| l).max().unwrap_or(0) + 1;
             if num_lanes > 1 && track.lanes_expanded {
-                for lane in 1..num_lanes {
+                for lane in 0..num_lanes {
                     let ly = t_y + lane as f32 * TAKE_LANE_HEIGHT;
-                    painter.line_segment(
-                        [egui::pos2(rect.min.x, ly), egui::pos2(rect.max.x, ly)],
-                        egui::Stroke::new(
-                            0.5,
-                            egui::Color32::from_rgb(55, 50, 40),
-                        ),
+                    // Separator line (skip first lane)
+                    if lane > 0 {
+                        painter.line_segment(
+                            [egui::pos2(rect.min.x, ly), egui::pos2(rect.max.x, ly)],
+                            egui::Stroke::new(
+                                0.5,
+                                egui::Color32::from_rgb(55, 50, 40),
+                            ),
+                        );
+                    }
+                    // Lane label — small "T1", "T2", etc. on the left side
+                    let label = format!("T{}", lane + 1);
+                    let lane_active = take_lanes.iter().any(|&(ci, l)| l == lane && !track.clips[ci].muted);
+                    let label_color = if lane_active {
+                        egui::Color32::from_rgb(220, 190, 70)
+                    } else {
+                        egui::Color32::from_rgb(90, 88, 82)
+                    };
+                    painter.text(
+                        egui::pos2(rect.min.x + 3.0, ly + 2.0),
+                        egui::Align2::LEFT_TOP,
+                        &label,
+                        egui::FontId::proportional(9.0),
+                        label_color,
                     );
+
+                    // Swipe comp visual indicator — highlight the lane being swiped
+                    if let Some(ref swipe) = app.swipe_comping {
+                        if swipe.track_idx == i && swipe.lane == lane {
+                            let swipe_min = swipe.start_sample.min(swipe.current_sample);
+                            let swipe_max = swipe.start_sample.max(swipe.current_sample);
+                            let sx1 = rect.min.x + (swipe_min as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+                            let sx2 = rect.min.x + (swipe_max as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+                            let swipe_rect = egui::Rect::from_min_max(
+                                egui::pos2(sx1.max(rect.min.x), ly),
+                                egui::pos2(sx2.min(rect.max.x), ly + TAKE_LANE_HEIGHT),
+                            );
+                            painter.rect_filled(
+                                swipe_rect,
+                                0.0,
+                                egui::Color32::from_rgba_premultiplied(220, 180, 50, 30),
+                            );
+                        }
+                    }
                 }
             }
 
@@ -970,12 +2076,18 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 );
             }
 
-            let color =
+            let track_color =
                 egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]);
 
             // Draw clips in their take lanes
             for &(ci, lane) in &take_lanes {
                 let clip = &track.clips[ci];
+
+                // Use custom clip color if set, otherwise fall back to track color
+                let color = match clip.color {
+                    Some(c) => egui::Color32::from_rgb(c[0], c[1], c[2]),
+                    None => track_color,
+                };
 
                 // When collapsed, only show active (non-muted) clips, all in lane 0
                 let draw_lane = if track.lanes_expanded { lane } else { 0 };
@@ -989,10 +2101,10 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     continue;
                 }
 
-                let is_clip_selected = app.selected_clip == Some((i, ci));
+                let is_clip_selected = app.selected_clips.contains(&(i, ci));
                 let is_clip_muted = clip.muted;
 
-                // Background
+                // Background — rounded clip with subtle gradient
                 let draw_color = if is_clip_muted {
                     egui::Color32::from_rgb(70, 70, 70)
                 } else {
@@ -1005,49 +2117,182 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 } else {
                     0.35
                 };
-                painter.rect_filled(cr, 3.0, draw_color.gamma_multiply(bg_alpha));
+                // Base fill
+                painter.rect_filled(cr, 5.0, draw_color.gamma_multiply(bg_alpha));
+                // Subtle top-to-bottom gradient overlay (lighter at top)
+                if !is_clip_muted {
+                    let grad_top = egui::Color32::from_rgba_premultiplied(255, 255, 255, 12);
+                    let grad_bottom = egui::Color32::from_rgba_premultiplied(0, 0, 0, 15);
+                    let top_half = egui::Rect::from_min_max(cr.min, egui::pos2(cr.max.x, cr.center().y));
+                    let bot_half = egui::Rect::from_min_max(egui::pos2(cr.min.x, cr.center().y), cr.max);
+                    painter.rect_filled(top_half, egui::CornerRadius { nw: 5, ne: 5, sw: 0, se: 0 }, grad_top);
+                    painter.rect_filled(bot_half, egui::CornerRadius { nw: 0, ne: 0, sw: 5, se: 5 }, grad_bottom);
+                }
 
-                // Waveform
+                // Waveform — lighter shade of track color
                 if let ClipSource::AudioBuffer { buffer_id } = &clip.source {
                     if let Some(peaks) = app.waveform_cache.get(buffer_id) {
                         let wc = if is_clip_muted {
                             egui::Color32::from_rgb(90, 90, 90)
                         } else {
-                            color
+                            // Lighten the track color for waveform
+                            let lighten = |c: u8| -> u8 { ((c as u16 * 3 / 4) + 64).min(255) as u8 };
+                            egui::Color32::from_rgb(lighten(color.r()), lighten(color.g()), lighten(color.b()))
                         };
                         draw_waveform(painter, &peaks, cr, clip.duration_samples, wc);
                     }
                 }
 
-                // Border
+                // Border — golden amber glow for selected, teal for multi-select
+                let multi_selected = is_clip_selected && app.selected_clips.len() > 1;
                 let border_w = if is_clip_selected { 2.0 } else { 1.0 };
-                let border_c = if is_clip_selected {
-                    egui::Color32::WHITE
+                let border_c = if multi_selected {
+                    egui::Color32::from_rgb(80, 200, 190) // soft teal for multi-select
+                } else if is_clip_selected {
+                    egui::Color32::from_rgb(235, 180, 60) // warm amber glow
                 } else if is_clip_muted {
-                    egui::Color32::from_rgb(70, 70, 70)
+                    egui::Color32::from_rgb(55, 55, 58)
                 } else {
-                    color
+                    color.gamma_multiply(0.7)
                 };
                 painter.rect_stroke(
                     cr,
-                    3.0,
+                    5.0,
                     egui::Stroke::new(border_w, border_c),
                     egui::StrokeKind::Outside,
                 );
 
-                // Clip label
-                let label = if is_clip_muted {
-                    format!("{} (inactive)", clip.name)
+                // Loop markers — thin vertical lines at each loop boundary
+                if clip.loop_count > 1 && !is_clip_muted {
+                    let single_loop_dur = clip.single_loop_visual_duration();
+                    let loop_marker_color = egui::Color32::from_rgba_premultiplied(255, 255, 255, 120);
+                    for lp in 1..clip.loop_count {
+                        let marker_sample = single_loop_dur * lp as u64;
+                        let marker_px = (marker_sample as f64 / sample_rate) as f32 * pixels_per_second;
+                        let x = cr.left() + marker_px;
+                        if x > cr.left() && x < cr.right() {
+                            painter.with_clip_rect(cr).line_segment(
+                                [egui::pos2(x, cr.top()), egui::pos2(x, cr.bottom())],
+                                egui::Stroke::new(1.0, loop_marker_color),
+                            );
+                            // Small loop repeat indicator at top
+                            painter.with_clip_rect(cr).text(
+                                egui::pos2(x + 2.0, cr.top() + 1.0),
+                                egui::Align2::LEFT_TOP,
+                                "\u{21BB}",
+                                egui::FontId::proportional(8.0),
+                                loop_marker_color,
+                            );
+                        }
+                    }
+                }
+
+                // Fade in/out visual overlays (triangular semi-transparent regions)
+                if !is_clip_muted {
+                    let fade_color = egui::Color32::from_rgba_premultiplied(0, 0, 0, 60);
+                    let fade_line_color = egui::Color32::from_rgba_premultiplied(255, 255, 255, 100);
+
+                    // Fade in overlay
+                    if clip.fade_in_samples > 0 {
+                        let fade_in_px = (clip.fade_in_samples as f64 / sample_rate) as f32 * pixels_per_second;
+                        let fade_in_px = fade_in_px.min(cr.width());
+                        // Dark triangle: top-left corner to fade_in point at bottom
+                        // This represents the "silenced" portion being faded in
+                        let p1 = egui::pos2(cr.left(), cr.top());      // top-left
+                        let p2 = egui::pos2(cr.left(), cr.bottom());   // bottom-left
+                        let p3 = egui::pos2(cr.left() + fade_in_px, cr.top()); // fade end at top
+                        painter.with_clip_rect(cr).add(egui::Shape::convex_polygon(
+                            vec![p1, p2, p3],
+                            fade_color,
+                            egui::Stroke::NONE,
+                        ));
+                        // Diagonal fade line
+                        painter.with_clip_rect(cr).line_segment(
+                            [egui::pos2(cr.left(), cr.bottom()), egui::pos2(cr.left() + fade_in_px, cr.top())],
+                            egui::Stroke::new(1.0, fade_line_color),
+                        );
+                    }
+
+                    // Fade out overlay
+                    if clip.fade_out_samples > 0 {
+                        let fade_out_px = (clip.fade_out_samples as f64 / sample_rate) as f32 * pixels_per_second;
+                        let fade_out_px = fade_out_px.min(cr.width());
+                        // Dark triangle: top-right corner to fade_out point at bottom
+                        let p1 = egui::pos2(cr.right(), cr.top());       // top-right
+                        let p2 = egui::pos2(cr.right(), cr.bottom());    // bottom-right
+                        let p3 = egui::pos2(cr.right() - fade_out_px, cr.top()); // fade start at top
+                        painter.with_clip_rect(cr).add(egui::Shape::convex_polygon(
+                            vec![p1, p2, p3],
+                            fade_color,
+                            egui::Stroke::NONE,
+                        ));
+                        // Diagonal fade line
+                        painter.with_clip_rect(cr).line_segment(
+                            [egui::pos2(cr.right() - fade_out_px, cr.top()), egui::pos2(cr.right(), cr.bottom())],
+                            egui::Stroke::new(1.0, fade_line_color),
+                        );
+                    }
+
+                    // Fade handles (small squares at top corners when hovering)
+                    if let Some(hover_pos) = ui.input(|inp| inp.pointer.hover_pos()) {
+                        if cr.contains(hover_pos) {
+                            let handle_size = 6.0;
+                            let handle_zone = 20.0;
+
+                            // Fade in handle (top-left area)
+                            let fade_in_px = (clip.fade_in_samples as f64 / sample_rate) as f32 * pixels_per_second;
+                            let fi_handle_x = cr.left() + fade_in_px;
+                            if (hover_pos.x - fi_handle_x).abs() < handle_zone && (hover_pos.y - cr.top()) < handle_zone {
+                                let handle_rect = egui::Rect::from_center_size(
+                                    egui::pos2(fi_handle_x, cr.top() + handle_size),
+                                    egui::vec2(handle_size * 2.0, handle_size * 2.0),
+                                );
+                                painter.rect_filled(handle_rect, 2.0, egui::Color32::from_rgb(255, 200, 80));
+                                painter.rect_stroke(handle_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::WHITE), egui::StrokeKind::Outside);
+                            }
+
+                            // Fade out handle (top-right area)
+                            let fade_out_px = (clip.fade_out_samples as f64 / sample_rate) as f32 * pixels_per_second;
+                            let fo_handle_x = cr.right() - fade_out_px;
+                            if (hover_pos.x - fo_handle_x).abs() < handle_zone && (hover_pos.y - cr.top()) < handle_zone {
+                                let handle_rect = egui::Rect::from_center_size(
+                                    egui::pos2(fo_handle_x, cr.top() + handle_size),
+                                    egui::vec2(handle_size * 2.0, handle_size * 2.0),
+                                );
+                                painter.rect_filled(handle_rect, 2.0, egui::Color32::from_rgb(255, 200, 80));
+                                painter.rect_stroke(handle_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::WHITE), egui::StrokeKind::Outside);
+                            }
+                        }
+                    }
+                }
+
+                // Clip label — small tag with background at top-left
+                let speed_suffix = if (clip.playback_rate - 1.0).abs() > 0.01 {
+                    format!(" [{:.2}x]", clip.playback_rate)
                 } else {
-                    clip.name.clone()
+                    String::new()
+                };
+                let label = if is_clip_muted {
+                    format!("{} (inactive){}", clip.name, speed_suffix)
+                } else {
+                    format!("{}{}", clip.name, speed_suffix)
                 };
                 let text_color = if is_clip_muted {
                     egui::Color32::from_rgb(130, 130, 130)
                 } else {
-                    egui::Color32::WHITE
+                    egui::Color32::from_rgb(240, 238, 234)
                 };
+                // Draw tag background behind clip name
+                if !is_clip_muted {
+                    let tag_w = (label.len() as f32 * 5.5 + 8.0).min(cr.width() - 4.0);
+                    let tag_rect = egui::Rect::from_min_size(
+                        egui::pos2(cr.left() + 2.0, cr.top() + 1.0),
+                        egui::vec2(tag_w, 14.0),
+                    );
+                    painter.with_clip_rect(cr).rect_filled(tag_rect, 3.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, 100));
+                }
                 painter.with_clip_rect(cr.shrink(2.0)).text(
-                    egui::pos2(cr.left() + 4.0, cr.top() + 2.0),
+                    egui::pos2(cr.left() + 5.0, cr.top() + 2.0),
                     egui::Align2::LEFT_TOP,
                     label,
                     egui::FontId::proportional(10.0),
@@ -1061,6 +2306,64 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         3.0,
                         egui::Color32::from_rgb(80, 220, 80),
                     );
+                }
+
+                // --- Clip gain handle ---
+                if !is_clip_muted {
+                    let clip_gain = clip.gain_db;
+                    let gain_range = 24.0_f32;
+                    let handle_y_min = cr.top() + 16.0;
+                    let handle_y_max = cr.top() + cr.height() * 0.4;
+                    let handle_y_center = (handle_y_min + handle_y_max) * 0.5;
+                    let handle_y = handle_y_center - (clip_gain / gain_range) * (handle_y_max - handle_y_min) * 0.5;
+                    let handle_y = handle_y.clamp(handle_y_min, handle_y_max);
+
+                    let show_gain_line = clip_gain.abs() > 0.01;
+                    let hovering_gain = if let Some(hover_pos) = ui.input(|inp| inp.pointer.hover_pos()) {
+                        cr.contains(hover_pos) && (hover_pos.y - handle_y).abs() < 8.0
+                            && hover_pos.x > cr.left() + 4.0 && hover_pos.x < cr.right() - 4.0
+                    } else {
+                        false
+                    };
+
+                    if show_gain_line || hovering_gain {
+                        let line_color = if clip_gain > 0.01 {
+                            egui::Color32::from_rgb(255, 180, 60)
+                        } else if clip_gain < -0.01 {
+                            egui::Color32::from_rgb(100, 180, 255)
+                        } else {
+                            egui::Color32::from_rgb(160, 160, 170)
+                        };
+                        let line_alpha = if hovering_gain { 1.0 } else { 0.6 };
+                        painter.with_clip_rect(cr).line_segment(
+                            [egui::pos2(cr.left() + 4.0, handle_y), egui::pos2(cr.right() - 4.0, handle_y)],
+                            egui::Stroke::new(if hovering_gain { 2.0 } else { 1.5 }, line_color.gamma_multiply(line_alpha)),
+                        );
+                        let diamond_x = cr.center().x;
+                        let ds = 4.0;
+                        let diamond = vec![
+                            egui::pos2(diamond_x, handle_y - ds),
+                            egui::pos2(diamond_x + ds, handle_y),
+                            egui::pos2(diamond_x, handle_y + ds),
+                            egui::pos2(diamond_x - ds, handle_y),
+                        ];
+                        painter.with_clip_rect(cr).add(egui::Shape::convex_polygon(
+                            diamond,
+                            line_color.gamma_multiply(line_alpha),
+                            egui::Stroke::NONE,
+                        ));
+                    }
+
+                    if clip_gain.abs() > 0.01 {
+                        let gain_label = format!("{:+.1} dB", clip_gain);
+                        painter.with_clip_rect(cr).text(
+                            egui::pos2(cr.right() - 4.0, handle_y - 2.0),
+                            egui::Align2::RIGHT_BOTTOM,
+                            gain_label,
+                            egui::FontId::proportional(8.0),
+                            egui::Color32::from_rgb(200, 200, 210),
+                        );
+                    }
                 }
             }
         }
@@ -1078,7 +2381,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             painter.rect_filled(
                 loop_rect,
                 0.0,
-                egui::Color32::from_rgba_premultiplied(60, 100, 200, 25),
+                egui::Color32::from_rgba_premultiplied(60, 100, 200, 15),
             );
             for lx in [lx1, lx2] {
                 if lx >= rect.min.x && lx <= rect.max.x {
@@ -1100,17 +2403,59 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 egui::pos2(sx1.max(rect.min.x), rect.min.y),
                 egui::pos2(sx2.min(rect.max.x), rect.max.y),
             );
-            painter.rect_filled(
-                sel_rect,
-                0.0,
-                egui::Color32::from_rgba_premultiplied(100, 150, 255, 30),
-            );
+
+            // Punch region indicator — distinct color when punch recording is enabled
+            if app.punch_recording {
+                painter.rect_filled(
+                    sel_rect,
+                    0.0,
+                    egui::Color32::from_rgba_premultiplied(255, 60, 60, 22),
+                );
+                // Punch region border
+                painter.rect_stroke(
+                    sel_rect,
+                    0.0,
+                    egui::Stroke::new(1.5, egui::Color32::from_rgb(220, 70, 70)),
+                    egui::StrokeKind::Outside,
+                );
+                // "PUNCH IN" / "PUNCH OUT" labels at edges
+                if sx1 >= rect.min.x && sx1 <= rect.max.x {
+                    painter.text(
+                        egui::pos2(sx1 + 2.0, rect.min.y + 2.0),
+                        egui::Align2::LEFT_TOP,
+                        "IN",
+                        egui::FontId::proportional(9.0),
+                        egui::Color32::from_rgb(255, 100, 100),
+                    );
+                }
+                if sx2 >= rect.min.x && sx2 <= rect.max.x {
+                    painter.text(
+                        egui::pos2(sx2 - 2.0, rect.min.y + 2.0),
+                        egui::Align2::RIGHT_TOP,
+                        "OUT",
+                        egui::FontId::proportional(9.0),
+                        egui::Color32::from_rgb(255, 100, 100),
+                    );
+                }
+            } else {
+                painter.rect_filled(
+                    sel_rect,
+                    0.0,
+                    egui::Color32::from_rgba_premultiplied(80, 130, 255, 18),
+                );
+            }
+
             // Selection edges
+            let edge_color = if app.punch_recording {
+                egui::Color32::from_rgb(220, 70, 70)
+            } else {
+                egui::Color32::from_rgb(100, 150, 255)
+            };
             for sx in [sx1, sx2] {
                 if sx >= rect.min.x && sx <= rect.max.x {
                     painter.line_segment(
                         [egui::pos2(sx, rect.min.y), egui::pos2(sx, rect.max.y)],
-                        egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255)),
+                        egui::Stroke::new(1.0, edge_color),
                     );
                 }
             }
@@ -1118,12 +2463,15 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         // Automation curves (when visible)
         if app.show_automation {
-            let param = app.automation_param;
+            let param = app.automation_param.clone();
             let (min_val, max_val) = param.range();
 
             for (i, track) in app.project.tracks.iter().enumerate() {
+                if is_track_collapsed(app, i) {
+                    continue;
+                }
                 let t_y = tracks_y_start + track_offsets[i];
-                let t_h = track_height(track);
+                let t_h = track_height(track, app.track_height_zoom);
 
                 if let Some(lane) = track.automation.iter().find(|l| l.parameter == param) {
                     if lane.points.len() >= 2 {
@@ -1173,55 +2521,283 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
-        // Trim cursor hint — change cursor when hovering near clip edges
-        if app.trimming_clip.is_none() && app.dragging_clip.is_none() {
+        // Trim / fade cursor hint — change cursor when hovering near clip edges or fade handles
+        if app.trimming_clip.is_none() && app.dragging_clip.is_none() && app.dragging_fade.is_none() {
             if let Some(hover_pos) = ui.input(|i| i.pointer.hover_pos()) {
                 let edge_zone = 8.0;
-                let mut near_edge = false;
-                for &(_, _, _, cr) in &clip_rects {
-                    if cr.contains(hover_pos) {
-                        if (hover_pos.x - cr.left()).abs() < edge_zone
-                            || (hover_pos.x - cr.right()).abs() < edge_zone
+                let fade_handle_zone = 20.0;
+                let mut near_interactive = false;
+                for &(ti, ci, _, cr) in &clip_rects {
+                    if !cr.contains(hover_pos) {
+                        continue;
+                    }
+                    // Check fade handles (top corners)
+                    if (hover_pos.y - cr.top()) < fade_handle_zone {
+                        let clip = &app.project.tracks[ti].clips[ci];
+                        let fade_in_px = (clip.fade_in_samples as f64 / sample_rate) as f32 * pixels_per_second;
+                        let fi_handle_x = cr.left() + fade_in_px;
+                        let fade_out_px = (clip.fade_out_samples as f64 / sample_rate) as f32 * pixels_per_second;
+                        let fo_handle_x = cr.right() - fade_out_px;
+                        if (hover_pos.x - fi_handle_x).abs() < fade_handle_zone
+                            || (hover_pos.x - fo_handle_x).abs() < fade_handle_zone
                         {
-                            near_edge = true;
+                            near_interactive = true;
                             break;
                         }
                     }
+                    // Check trim edges
+                    if (hover_pos.x - cr.left()).abs() < edge_zone
+                        || (hover_pos.x - cr.right()).abs() < edge_zone
+                    {
+                        near_interactive = true;
+                        break;
+                    }
                 }
-                if near_edge {
+                if near_interactive {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                 }
             }
         }
 
-        // Markers on ruler
-        for marker in &app.project.markers {
-            let mx = rect.min.x + (marker.sample as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
-            if mx >= rect.min.x && mx <= rect.max.x {
-                let mc = egui::Color32::from_rgb(marker.color[0], marker.color[1], marker.color[2]);
-                // Vertical line
+        // Markers on ruler — interactive: click to jump, right-click to rename/delete, drag to move
+        {
+            let marker_hit_zone = 10.0;
+
+            // Collect marker screen positions for hit testing
+            let marker_positions: Vec<(usize, f32)> = app.project.markers.iter().enumerate().map(|(mi, marker)| {
+                let mx = rect.min.x + (marker.sample as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+                (mi, mx)
+            }).collect();
+
+            // Handle active marker drag
+            if let Some(drag_idx) = app.dragging_marker {
+                if response.dragged_by(egui::PointerButton::Primary) {
+                    if let Some(pos) = response.interact_pointer_pos {
+                        let x_offset = pos.x - rect.min.x + app.scroll_x;
+                        let seconds = x_offset as f64 / pixels_per_second as f64;
+                        let new_sample = (seconds * sample_rate).max(0.0) as u64;
+                        let snapped = app.snap_position(new_sample);
+                        if drag_idx < app.project.markers.len() {
+                            app.project.markers[drag_idx].sample = snapped;
+                        }
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
+                }
+                if response.drag_stopped() {
+                    app.dragging_marker = None;
+                }
+            }
+
+            // Check for hover/click on markers in the ruler
+            if app.dragging_marker.is_none() {
+                if let Some(hover_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                    if hover_pos.y >= ruler_rect.min.y && hover_pos.y <= ruler_rect.max.y {
+                        for &(mi, mx) in &marker_positions {
+                            if (hover_pos.x - mx).abs() < marker_hit_zone {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+
+                                // Left click: jump playhead to marker position
+                                if response.clicked_by(egui::PointerButton::Primary) {
+                                    let sample = app.project.markers[mi].sample;
+                                    app.send_command(jamhub_engine::EngineCommand::SetPosition(sample));
+                                    app.set_status(&format!("Jumped to: {}", app.project.markers[mi].name));
+                                }
+
+                                // Begin marker drag
+                                if response.drag_started_by(egui::PointerButton::Primary) {
+                                    app.push_undo("Move marker");
+                                    app.dragging_marker = Some(mi);
+                                }
+
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Right-click on ruler: marker rename if on a marker, or context menu to add marker/tempo change
+            if response.secondary_clicked() {
+                if let Some(click_pos) = response.interact_pointer_pos {
+                    if click_pos.y >= ruler_rect.min.y && click_pos.y <= ruler_rect.max.y {
+                        let mut on_marker = false;
+                        for &(mi, mx) in &marker_positions {
+                            if (click_pos.x - mx).abs() < marker_hit_zone {
+                                app.renaming_marker = Some((mi, app.project.markers[mi].name.clone()));
+                                on_marker = true;
+                                break;
+                            }
+                        }
+                        // Right-click on empty ruler area: store position for context menu
+                        if !on_marker {
+                            let x_offset = click_pos.x - rect.min.x + app.scroll_x;
+                            let seconds = x_offset as f64 / pixels_per_second as f64;
+                            let sample = (seconds * sample_rate).max(0.0) as u64;
+                            app.ruler_context_sample = Some(sample);
+                        }
+                    }
+                }
+            }
+
+            // Ruler context menu popup (Add Marker / Add Tempo Change)
+            if app.ruler_context_sample.is_some() {
+                let popup_id = egui::Id::new("ruler_context_menu");
+                ui.memory_mut(|mem| mem.open_popup(popup_id));
+                egui::popup::popup_above_or_below_widget(ui, popup_id, &response, egui::AboveOrBelow::Below, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                    ui.set_min_width(160.0);
+                    if ui.button("Add Marker").clicked() {
+                        if let Some(sample) = app.ruler_context_sample.take() {
+                            app.push_undo("Add marker");
+                            let marker_count = app.project.markers.len() + 1;
+                            app.project.markers.push(jamhub_model::Marker {
+                                id: uuid::Uuid::new_v4(),
+                                name: format!("Marker {}", marker_count),
+                                sample: app.snap_position(sample),
+                                color: [255, 200, 50],
+                            });
+                            app.set_status("Marker added");
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Add Tempo Change").clicked() {
+                        if let Some(sample) = app.ruler_context_sample.take() {
+                            let current_bpm = app.project.tempo_map.bpm_at(sample, app.project.tempo.bpm);
+                            app.tempo_change_input = Some(crate::TempoChangeInput {
+                                sample: app.snap_position(sample),
+                                bpm_text: format!("{:.1}", current_bpm),
+                            });
+                        }
+                    }
+                    if !app.project.tempo_map.changes.is_empty() {
+                        ui.separator();
+                        if ui.button("Clear All Tempo Changes").clicked() {
+                            app.push_undo("Clear tempo changes");
+                            app.project.tempo_map.changes.clear();
+                            app.set_status("Tempo changes cleared");
+                            app.ruler_context_sample = None;
+                        }
+                    }
+                });
+                // Close context menu if nothing was clicked
+                if !ui.memory(|mem| mem.is_popup_open(popup_id)) {
+                    app.ruler_context_sample = None;
+                }
+            }
+
+            // Draw markers
+            for (mi, marker) in app.project.markers.iter().enumerate() {
+                let mx = rect.min.x + (marker.sample as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
+                if mx >= rect.min.x - 20.0 && mx <= rect.max.x + 20.0 {
+                    let mc = egui::Color32::from_rgb(marker.color[0], marker.color[1], marker.color[2]);
+                    let is_being_dragged = app.dragging_marker == Some(mi);
+
+                    // Vertical line through timeline
+                    painter.line_segment(
+                        [egui::pos2(mx, rect.min.y), egui::pos2(mx, rect.max.y)],
+                        egui::Stroke::new(
+                            if is_being_dragged { 1.5 } else { 1.0 },
+                            mc.gamma_multiply(if is_being_dragged { 0.7 } else { 0.4 }),
+                        ),
+                    );
+
+                    // Triangle flag on ruler
+                    let tri = if is_being_dragged { 6.0 } else { 5.0 };
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(mx, ruler_rect.min.y),
+                            egui::pos2(mx - tri, ruler_rect.min.y + tri * 1.5),
+                            egui::pos2(mx + tri, ruler_rect.min.y + tri * 1.5),
+                        ],
+                        mc,
+                        if is_being_dragged { egui::Stroke::new(1.0, egui::Color32::WHITE) } else { egui::Stroke::NONE },
+                    ));
+
+                    // Marker name label
+                    let label_color = if is_being_dragged { egui::Color32::WHITE } else { mc };
+                    painter.text(
+                        egui::pos2(mx + 3.0, ruler_rect.min.y + 1.0),
+                        egui::Align2::LEFT_TOP,
+                        &marker.name,
+                        egui::FontId::proportional(9.0),
+                        label_color,
+                    );
+                }
+            }
+        }
+
+        // Marker rename/delete popup window
+        if let Some((rename_mi, ref _buf)) = app.renaming_marker {
+            if rename_mi < app.project.markers.len() {
+                let mut open = true;
+                egui::Window::new("Marker")
+                    .collapsible(false)
+                    .resizable(false)
+                    .open(&mut open)
+                    .fixed_size(egui::vec2(200.0, 70.0))
+                    .show(ui.ctx(), |ui| {
+                        let mut buf = if let Some((_, ref b)) = app.renaming_marker {
+                            b.clone()
+                        } else {
+                            String::new()
+                        };
+                        let r = ui.text_edit_singleline(&mut buf);
+                        app.renaming_marker = Some((rename_mi, buf.clone()));
+                        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            if !buf.is_empty() {
+                                app.project.markers[rename_mi].name = buf.clone();
+                            }
+                            app.renaming_marker = None;
+                        }
+                        ui.horizontal(|ui| {
+                            if ui.button("OK").clicked() {
+                                if !buf.is_empty() {
+                                    app.project.markers[rename_mi].name = buf.clone();
+                                }
+                                app.renaming_marker = None;
+                            }
+                            if ui.button("Delete").clicked() {
+                                app.push_undo("Delete marker");
+                                app.project.markers.remove(rename_mi);
+                                app.renaming_marker = None;
+                            }
+                        });
+                    });
+                if !open {
+                    app.renaming_marker = None;
+                }
+            } else {
+                app.renaming_marker = None;
+            }
+        }
+
+        // Rubber-band selection rectangle
+        if app.rubber_band_active {
+            if let Some(origin) = app.rubber_band_origin {
+                if let Some(current) = ui.input(|i| i.pointer.hover_pos()) {
+                    let rb_rect = egui::Rect::from_two_pos(origin, current);
+                    painter.rect_filled(
+                        rb_rect,
+                        0.0,
+                        egui::Color32::from_rgba_premultiplied(100, 180, 255, 25),
+                    );
+                    painter.rect_stroke(
+                        rb_rect,
+                        0.0,
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 180, 255)),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+            }
+        }
+
+        // Magnetic snap indicator — bright line when clip edge snaps to grid
+        if app.magnetic_snap_active && (app.dragging_clip.is_some() || app.dragging_clips.is_some()) {
+            let snap_sec = app.magnetic_snap_sample as f64 / sample_rate;
+            let snap_x = rect.min.x + snap_sec as f32 * pixels_per_second - app.scroll_x;
+            if snap_x >= rect.min.x && snap_x <= rect.max.x {
                 painter.line_segment(
-                    [egui::pos2(mx, rect.min.y), egui::pos2(mx, rect.max.y)],
-                    egui::Stroke::new(1.0, mc.gamma_multiply(0.4)),
-                );
-                // Triangle on ruler
-                let tri = 5.0;
-                painter.add(egui::Shape::convex_polygon(
-                    vec![
-                        egui::pos2(mx, ruler_rect.min.y),
-                        egui::pos2(mx - tri, ruler_rect.min.y + tri * 1.5),
-                        egui::pos2(mx + tri, ruler_rect.min.y + tri * 1.5),
-                    ],
-                    mc,
-                    egui::Stroke::NONE,
-                ));
-                // Label
-                painter.text(
-                    egui::pos2(mx + 3.0, ruler_rect.min.y + 1.0),
-                    egui::Align2::LEFT_TOP,
-                    &marker.name,
-                    egui::FontId::proportional(9.0),
-                    mc,
+                    [egui::pos2(snap_x, rect.min.y), egui::pos2(snap_x, rect.max.y)],
+                    egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 220, 255)),
                 );
             }
         }
@@ -1252,15 +2828,113 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             ));
         }
 
-        // Auto-scroll
-        if app.transport_state() == jamhub_model::TransportState::Playing {
+        // Auto-follow playhead during playback
+        if app.follow_playhead && !app.user_scrolling
+            && app.transport_state() == jamhub_model::TransportState::Playing
+        {
             let playhead_px = pos_sec as f32 * pixels_per_second;
             let view_left = app.scroll_x;
-            if playhead_px > view_left + available.x * 0.8 {
-                let target = playhead_px - available.x * 0.2;
-                app.scroll_x += (target - app.scroll_x) * 0.1;
+
+            // If playhead moves past 75% of visible area, scroll to keep it at 25% from left
+            if playhead_px > view_left + available.x * 0.75 {
+                let target = playhead_px - available.x * 0.25;
+                app.scroll_x += (target - app.scroll_x) * 0.15;
             } else if playhead_px < view_left {
+                // Playhead went behind viewport (e.g. loop restart)
                 app.scroll_x = (playhead_px - available.x * 0.1).max(0.0);
+            }
+        }
+
+        // === MINIMAP / Overview bar ===
+
+        if app.show_minimap {
+            draw_minimap(app, ui, rect, available, pixels_per_second, sample_rate);
+        }
+
+        // Custom speed input dialog
+        if app.speed_input.is_some() {
+            let mut apply = false;
+            let mut cancel = false;
+            egui::Window::new("Custom Speed")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ui.ctx(), |ui| {
+                    ui.label("Enter playback rate (e.g. 1.25):");
+                    if let Some(ref mut state) = app.speed_input {
+                        let resp = ui.text_edit_singleline(&mut state.input_buf);
+                        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            apply = true;
+                        }
+                        ui.horizontal(|ui| {
+                            if ui.button("Apply").clicked() {
+                                apply = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancel = true;
+                            }
+                        });
+                    }
+                });
+
+            if apply {
+                if let Some(ref state) = app.speed_input {
+                    if let Ok(rate) = state.input_buf.parse::<f32>() {
+                        let rate = rate.clamp(0.1, 8.0);
+                        let ti = state.track_idx;
+                        let ci = state.clip_idx;
+                        if ti < app.project.tracks.len() && ci < app.project.tracks[ti].clips.len() {
+                            app.push_undo("Set custom speed");
+                            app.project.tracks[ti].clips[ci].playback_rate = rate;
+                            app.sync_project();
+                        }
+                    }
+                }
+                app.speed_input = None;
+            } else if cancel {
+                app.speed_input = None;
+            }
+        }
+
+        // Tempo change input dialog
+        if let Some(ref mut tc_state) = app.tempo_change_input {
+            let mut apply = false;
+            let mut cancel = false;
+            let pos_sec = tc_state.sample as f64 / sample_rate;
+            let pos_label = format!("Position: {:.2}s", pos_sec);
+            egui::Window::new("Add Tempo Change")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ui.ctx(), |ui| {
+                    ui.label(&pos_label);
+                    ui.label("BPM:");
+                    let resp = ui.text_edit_singleline(&mut tc_state.bpm_text);
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        apply = true;
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Add").clicked() {
+                            apply = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+
+            if apply {
+                if let Ok(bpm) = tc_state.bpm_text.parse::<f64>() {
+                    let bpm = bpm.clamp(20.0, 999.0);
+                    let sample = tc_state.sample;
+                    app.push_undo("Add tempo change");
+                    app.project.tempo_map.add_change(sample, bpm);
+                    app.set_status(&format!("Tempo change added: {:.1} BPM", bpm));
+                    app.sync_project();
+                }
+                app.tempo_change_input = None;
+            } else if cancel {
+                app.tempo_change_input = None;
             }
         }
     });
@@ -1278,7 +2952,7 @@ fn make_clip_rect(
     let clip_x = rect_min_x
         + (clip.start_sample as f64 / sample_rate) as f32 * pixels_per_second
         - scroll_x;
-    let clip_w = (clip.duration_samples as f64 / sample_rate) as f32 * pixels_per_second;
+    let clip_w = (clip.visual_duration_samples() as f64 / sample_rate) as f32 * pixels_per_second;
     let y = track_y + lane as f32 * TAKE_LANE_HEIGHT;
     let h = TAKE_LANE_HEIGHT - 2.0;
     egui::Rect::from_min_size(egui::pos2(clip_x, y + 1.0), egui::vec2(clip_w, h))
@@ -1298,14 +2972,17 @@ fn draw_waveform(
 
     let samples_per_pixel = total_samples as f64 / width as f64;
     let peak_data = peaks.get_peaks_for_resolution(samples_per_pixel);
+    let rms_data = peaks.get_rms_for_resolution(samples_per_pixel);
     let block_size = peaks.block_size_for_level(samples_per_pixel) as f64;
 
     let center_y = clip_rect.center().y;
     let half_height = clip_rect.height() * 0.4;
 
     let num_pixels = (width as usize).min(2000);
-    let mut points_top: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
-    let mut points_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
+    let mut peak_top: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
+    let mut peak_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
+    let mut rms_top: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
+    let mut rms_bottom: Vec<egui::Pos2> = Vec::with_capacity(num_pixels + 2);
 
     for px in 0..num_pixels {
         let sample_start = px as f64 * samples_per_pixel;
@@ -1319,31 +2996,182 @@ fn draw_waveform(
 
         let mut min = f32::MAX;
         let mut max = f32::MIN;
+        let mut rms_max: f32 = 0.0;
         for pi in peak_start..peak_end {
             let (lo, hi) = peak_data[pi];
             if lo < min { min = lo; }
             if hi > max { max = hi; }
+            if pi < rms_data.len() {
+                rms_max = rms_max.max(rms_data[pi]);
+            }
         }
 
         let x = clip_rect.min.x + px as f32;
-        points_top.push(egui::pos2(x, center_y - max * half_height));
-        points_bottom.push(egui::pos2(x, center_y - min * half_height));
+        peak_top.push(egui::pos2(x, center_y - max * half_height));
+        peak_bottom.push(egui::pos2(x, center_y - min * half_height));
+        rms_top.push(egui::pos2(x, center_y - rms_max * half_height));
+        rms_bottom.push(egui::pos2(x, center_y + rms_max * half_height));
     }
 
-    if points_top.len() >= 2 {
-        points_bottom.reverse();
-        let mut polygon = points_top;
-        polygon.extend(points_bottom);
-        painter
-            .with_clip_rect(clip_rect)
-            .add(egui::Shape::convex_polygon(
-                polygon,
-                color.gamma_multiply(0.45),
-                egui::Stroke::NONE,
-            ));
+    let clipped = painter.with_clip_rect(clip_rect);
+
+    // Center line (zero crossing) — subtle reference line
+    clipped.line_segment(
+        [
+            egui::pos2(clip_rect.min.x, center_y),
+            egui::pos2(clip_rect.max.x, center_y),
+        ],
+        egui::Stroke::new(0.5, color.gamma_multiply(0.15)),
+    );
+
+    if peak_top.len() >= 2 {
+        // Peak envelope — semi-transparent filled area
+        let mut peak_polygon = peak_top.clone();
+        let mut bottom_rev = peak_bottom.clone();
+        bottom_rev.reverse();
+        peak_polygon.extend(bottom_rev);
+        clipped.add(egui::Shape::convex_polygon(
+            peak_polygon,
+            color.gamma_multiply(0.3),
+            egui::Stroke::NONE,
+        ));
+
+        // RMS envelope — darker filled area inside the peak envelope
+        let mut rms_polygon = rms_top.clone();
+        let mut rms_bot_rev = rms_bottom.clone();
+        rms_bot_rev.reverse();
+        rms_polygon.extend(rms_bot_rev);
+        clipped.add(egui::Shape::convex_polygon(
+            rms_polygon,
+            color.gamma_multiply(0.55),
+            egui::Stroke::NONE,
+        ));
+
+        // Anti-aliased waveform edge lines (top and bottom outlines)
+        // Use PathStroke for smooth anti-aliased rendering
+        let top_stroke = egui::Stroke::new(1.0, color.gamma_multiply(0.7));
+        for w in peak_top.windows(2) {
+            clipped.line_segment([w[0], w[1]], top_stroke);
+        }
+        for w in peak_bottom.windows(2) {
+            clipped.line_segment([w[0], w[1]], top_stroke);
+        }
     }
 }
 
+/// Draw a minimap overview bar at the bottom of the timeline area.
+/// Shows the entire project as a miniature view with clip blocks,
+/// and a highlighted rectangle for the currently visible portion.
+fn draw_minimap(
+    app: &mut DawApp,
+    ui: &mut egui::Ui,
+    timeline_rect: egui::Rect,
+    available: egui::Vec2,
+    pixels_per_second: f32,
+    sample_rate: f64,
+) {
+    // Determine total project duration (end of last clip + some padding)
+    let end_sample = app.project.tracks.iter()
+        .flat_map(|t| t.clips.iter())
+        .map(|c| c.start_sample + c.visual_duration_samples())
+        .max()
+        .unwrap_or(0);
+
+    if end_sample == 0 { return; }
+
+    let sr = sample_rate;
+    let total_duration_sec = end_sample as f64 / sr;
+    // Add 10% padding
+    let padded_duration = total_duration_sec * 1.1;
+
+    // Minimap rect: thin bar at bottom of timeline area
+    let minimap_rect = egui::Rect::from_min_size(
+        egui::pos2(timeline_rect.min.x, timeline_rect.max.y - MINIMAP_HEIGHT),
+        egui::vec2(available.x, MINIMAP_HEIGHT),
+    );
+
+    let painter = ui.painter();
+
+    // Background
+    painter.rect_filled(minimap_rect, 0.0, egui::Color32::from_rgb(20, 20, 24));
+    painter.rect_stroke(
+        minimap_rect, 0.0,
+        egui::Stroke::new(0.5, egui::Color32::from_rgb(45, 45, 52)),
+        egui::StrokeKind::Inside,
+    );
+
+    let mm_width = minimap_rect.width();
+    let px_per_sec_mm = mm_width as f64 / padded_duration;
+
+    // Draw clip blocks as small colored rectangles
+    let num_tracks = app.project.tracks.len().max(1);
+    let track_h = (MINIMAP_HEIGHT - 4.0) / num_tracks as f32;
+
+    for (ti, track) in app.project.tracks.iter().enumerate() {
+        let color = egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]);
+        let ty = minimap_rect.min.y + 2.0 + ti as f32 * track_h;
+
+        for clip in &track.clips {
+            if clip.muted { continue; }
+            let cx = minimap_rect.min.x + (clip.start_sample as f64 / sr * px_per_sec_mm) as f32;
+            let cw = ((clip.visual_duration_samples() as f64 / sr * px_per_sec_mm) as f32).max(1.0);
+            let clip_rect = egui::Rect::from_min_size(
+                egui::pos2(cx, ty),
+                egui::vec2(cw, (track_h - 1.0).max(1.0)),
+            );
+            painter.rect_filled(clip_rect, 1.0, color.gamma_multiply(0.6));
+        }
+    }
+
+    // Draw the visible viewport rectangle
+    let view_start_sec = app.scroll_x as f64 / pixels_per_second as f64;
+    let view_end_sec = view_start_sec + available.x as f64 / pixels_per_second as f64;
+    let vx1 = minimap_rect.min.x + (view_start_sec * px_per_sec_mm) as f32;
+    let vx2 = minimap_rect.min.x + (view_end_sec * px_per_sec_mm) as f32;
+    let vx1 = vx1.max(minimap_rect.min.x);
+    let vx2 = vx2.min(minimap_rect.max.x);
+
+    let viewport_rect = egui::Rect::from_min_max(
+        egui::pos2(vx1, minimap_rect.min.y + 1.0),
+        egui::pos2(vx2, minimap_rect.max.y - 1.0),
+    );
+    painter.rect_filled(viewport_rect, 1.0, egui::Color32::from_rgba_premultiplied(235, 180, 60, 20));
+    painter.rect_stroke(
+        viewport_rect, 1.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(235, 180, 60)),
+        egui::StrokeKind::Outside,
+    );
+
+    // Playhead indicator in minimap
+    let pos = app.position_samples();
+    let pos_sec = pos as f64 / sr;
+    let ph_x = minimap_rect.min.x + (pos_sec * px_per_sec_mm) as f32;
+    if ph_x >= minimap_rect.min.x && ph_x <= minimap_rect.max.x {
+        painter.line_segment(
+            [egui::pos2(ph_x, minimap_rect.min.y), egui::pos2(ph_x, minimap_rect.max.y)],
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 80, 80)),
+        );
+    }
+
+    // Click/drag on minimap to navigate
+    let mm_response = ui.interact(
+        minimap_rect,
+        ui.id().with("minimap_nav"),
+        egui::Sense::click_and_drag(),
+    );
+
+    if mm_response.clicked() || mm_response.dragged() {
+        if let Some(mpos) = mm_response.interact_pointer_pos {
+            let click_fraction = ((mpos.x - minimap_rect.min.x) / mm_width).clamp(0.0, 1.0);
+            let click_sec = click_fraction as f64 * padded_duration;
+            // Center the viewport on the clicked position
+            let half_view_sec = available.x as f64 / pixels_per_second as f64 / 2.0;
+            let target_sec = (click_sec - half_view_sec).max(0.0);
+            app.scroll_x = (target_sec as f32 * pixels_per_second).max(0.0);
+            app.user_scrolling = true; // manual navigation
+        }
+    }
+}
 enum TrackAction {
     ToggleMute(usize),
     ToggleSolo(usize),
@@ -1357,4 +3185,26 @@ enum TrackAction {
     ToggleLanes(usize),
     OpenFx,
     CycleColor(usize),
+    /// Create a new group from the selected track
+    CreateGroupFromTrack(usize),
+    /// Remove a track from its group
+    RemoveFromGroup(usize),
+    /// Toggle collapse/expand of a group
+    ToggleGroup(Uuid),
+    /// Toggle mute on all tracks in a group
+    ToggleGroupMute(Uuid),
+    /// Toggle solo on all tracks in a group
+    ToggleGroupSolo(Uuid),
+    /// Delete a group (ungroup tracks, don't delete them)
+    DeleteGroup(Uuid),
+    /// Move track up in arrangement order
+    MoveUp(usize),
+    /// Move track down in arrangement order
+    MoveDown(usize),
+    /// Freeze track (render effects offline)
+    Freeze(usize),
+    /// Unfreeze track (restore original clips and effects)
+    Unfreeze(usize),
+    /// Flatten comp — remove inactive takes, keep only active clips
+    FlattenComp(usize),
 }

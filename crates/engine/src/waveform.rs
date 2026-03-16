@@ -11,21 +11,26 @@ pub struct WaveformPeaks {
     /// Level 0 = 1 sample per peak, Level 1 = 2 samples per peak, etc.
     /// We store levels at powers of 2: 256, 512, 1024, 2048, 4096 samples per peak.
     pub levels: Vec<Vec<(f32, f32)>>,
+    /// RMS values at the same resolutions as `levels`.
+    pub rms_levels: Vec<Vec<f32>>,
     pub total_samples: usize,
 }
 
 impl WaveformPeaks {
     pub fn from_samples(samples: &[f32]) -> Self {
         let mut levels = Vec::new();
+        let mut rms_levels = Vec::new();
 
         // Build mip-map levels: 256, 512, 1024, 2048, 4096 samples per peak
         for &block_size in &[256, 512, 1024, 2048, 4096] {
             let num_peaks = (samples.len() + block_size - 1) / block_size;
             let mut peaks = Vec::with_capacity(num_peaks);
+            let mut rms_vals = Vec::with_capacity(num_peaks);
 
             for chunk in samples.chunks(block_size) {
                 let mut min = f32::MAX;
                 let mut max = f32::MIN;
+                let mut sum_sq = 0.0_f64;
                 for &s in chunk {
                     if s < min {
                         min = s;
@@ -33,14 +38,18 @@ impl WaveformPeaks {
                     if s > max {
                         max = s;
                     }
+                    sum_sq += (s as f64) * (s as f64);
                 }
                 peaks.push((min, max));
+                rms_vals.push((sum_sq / chunk.len() as f64).sqrt() as f32);
             }
             levels.push(peaks);
+            rms_levels.push(rms_vals);
         }
 
         Self {
             levels,
+            rms_levels,
             total_samples: samples.len(),
         }
     }
@@ -55,6 +64,18 @@ impl WaveformPeaks {
             }
         }
         &self.levels[best]
+    }
+
+    /// Get the RMS values for the best mip-map level.
+    pub fn get_rms_for_resolution(&self, samples_per_pixel: f64) -> &[f32] {
+        let block_sizes = [256, 512, 1024, 2048, 4096];
+        let mut best = 0;
+        for (i, &bs) in block_sizes.iter().enumerate() {
+            if (bs as f64) <= samples_per_pixel * 2.0 {
+                best = i;
+            }
+        }
+        &self.rms_levels[best]
     }
 
     pub fn block_size_for_level(&self, samples_per_pixel: f64) -> usize {
@@ -89,5 +110,9 @@ impl WaveformCache {
 
     pub fn get(&self, id: &Uuid) -> Option<WaveformPeaks> {
         self.inner.read().get(id).cloned()
+    }
+
+    pub fn remove(&self, id: Uuid) {
+        self.inner.write().remove(&id);
     }
 }

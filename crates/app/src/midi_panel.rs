@@ -106,7 +106,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
 
                                 if has_midi_clip {
                                     for clip in &mut app.project.tracks[ti].clips {
-                                        if let jamhub_model::ClipSource::Midi { notes: ref mut existing } = clip.source {
+                                        if let jamhub_model::ClipSource::Midi { notes: ref mut existing, .. } = clip.source {
                                             existing.extend(notes.clone());
                                         }
                                     }
@@ -119,8 +119,16 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                         name: "MIDI Recording".into(),
                                         start_sample: 0,
                                         duration_samples: (max_tick as f64 * samples_per_tick) as u64,
-                                        source: jamhub_model::ClipSource::Midi { notes },
+                                        source: jamhub_model::ClipSource::Midi { notes, cc_events: Vec::new() },
                                         muted: false,
+                                        fade_in_samples: 0,
+                                        fade_out_samples: 0,
+                                        color: None,
+                                        playback_rate: 1.0,
+                                        preserve_pitch: false,
+                                        loop_count: 1,
+                                        gain_db: 0.0,
+                                        take_index: 0,
                                     });
                                 }
                                 app.sync_project();

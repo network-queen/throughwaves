@@ -1,4 +1,132 @@
-use jamhub_model::TrackEffect;
+use jamhub_model::{EqBandParams, EqBandType, TrackEffect, MAX_EQ_BANDS};
+
+/// Biquad filter state for a single second-order section.
+#[derive(Clone)]
+struct BiquadState {
+    x: [f32; 2], // input history
+    y: [f32; 2], // output history
+}
+
+impl Default for BiquadState {
+    fn default() -> Self {
+        Self {
+            x: [0.0; 2],
+            y: [0.0; 2],
+        }
+    }
+}
+
+/// Biquad filter coefficients (normalized by a0).
+#[derive(Clone, Copy)]
+pub struct BiquadCoeffs {
+    pub b0: f32,
+    pub b1: f32,
+    pub b2: f32,
+    pub a1: f32,
+    pub a2: f32,
+}
+
+impl BiquadCoeffs {
+    /// Compute biquad coefficients for a given band type, frequency, gain, Q, and sample rate.
+    pub fn from_band(band: &EqBandParams, sample_rate: f32) -> Self {
+        let w0 = 2.0 * std::f32::consts::PI * band.freq_hz / sample_rate;
+        let cos_w0 = w0.cos();
+        let sin_w0 = w0.sin();
+        let alpha = sin_w0 / (2.0 * band.q.max(0.1));
+        let a = 10.0_f32.powf(band.gain_db / 40.0);
+
+        let (b0, b1, b2, a0, a1, a2) = match band.band_type {
+            EqBandType::Peak => {
+                let b0 = 1.0 + alpha * a;
+                let b1 = -2.0 * cos_w0;
+                let b2 = 1.0 - alpha * a;
+                let a0 = 1.0 + alpha / a;
+                let a1 = -2.0 * cos_w0;
+                let a2 = 1.0 - alpha / a;
+                (b0, b1, b2, a0, a1, a2)
+            }
+            EqBandType::LowShelf => {
+                let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+                let b0 = a * ((a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
+                let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos_w0);
+                let b2 = a * ((a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
+                let a0 = (a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
+                let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos_w0);
+                let a2 = (a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
+                (b0, b1, b2, a0, a1, a2)
+            }
+            EqBandType::HighShelf => {
+                let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+                let b0 = a * ((a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
+                let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0);
+                let b2 = a * ((a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
+                let a0 = (a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
+                let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos_w0);
+                let a2 = (a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
+                (b0, b1, b2, a0, a1, a2)
+            }
+            EqBandType::LowPass => {
+                let b0 = (1.0 - cos_w0) / 2.0;
+                let b1 = 1.0 - cos_w0;
+                let b2 = (1.0 - cos_w0) / 2.0;
+                let a0 = 1.0 + alpha;
+                let a1 = -2.0 * cos_w0;
+                let a2 = 1.0 - alpha;
+                (b0, b1, b2, a0, a1, a2)
+            }
+            EqBandType::HighPass => {
+                let b0 = (1.0 + cos_w0) / 2.0;
+                let b1 = -(1.0 + cos_w0);
+                let b2 = (1.0 + cos_w0) / 2.0;
+                let a0 = 1.0 + alpha;
+                let a1 = -2.0 * cos_w0;
+                let a2 = 1.0 - alpha;
+                (b0, b1, b2, a0, a1, a2)
+            }
+            EqBandType::Notch => {
+                let b0 = 1.0;
+                let b1 = -2.0 * cos_w0;
+                let b2 = 1.0;
+                let a0 = 1.0 + alpha;
+                let a1 = -2.0 * cos_w0;
+                let a2 = 1.0 - alpha;
+                (b0, b1, b2, a0, a1, a2)
+            }
+        };
+
+        // Normalize
+        Self {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: a1 / a0,
+            a2: a2 / a0,
+        }
+    }
+
+    /// Evaluate the frequency response magnitude (in dB) at a given frequency.
+    pub fn magnitude_db(&self, freq_hz: f32, sample_rate: f32) -> f32 {
+        let w = 2.0 * std::f32::consts::PI * freq_hz / sample_rate;
+        let cos_w = w.cos();
+        let cos_2w = (2.0 * w).cos();
+        let sin_w = w.sin();
+        let sin_2w = (2.0 * w).sin();
+
+        let num_re = self.b0 + self.b1 * cos_w + self.b2 * cos_2w;
+        let num_im = -(self.b1 * sin_w + self.b2 * sin_2w);
+        let den_re = 1.0 + self.a1 * cos_w + self.a2 * cos_2w;
+        let den_im = -(self.a1 * sin_w + self.a2 * sin_2w);
+
+        let num_mag_sq = num_re * num_re + num_im * num_im;
+        let den_mag_sq = den_re * den_re + den_im * den_im;
+
+        if den_mag_sq < 1e-20 {
+            return 0.0;
+        }
+
+        10.0 * (num_mag_sq / den_mag_sq).log10()
+    }
+}
 
 /// Processes audio through an effect chain.
 pub struct EffectProcessor {
@@ -10,13 +138,15 @@ pub struct EffectProcessor {
     reverb_pos: Vec<usize>,
     // Compressor state
     comp_envelope: f32,
-    // EQ state (biquad)
+    // EQ state (biquad) for legacy single-band EqBand
     eq_x: [f32; 2],
     eq_y: [f32; 2],
     // Chorus state
     chorus_buffer: Vec<f32>,
     chorus_write_pos: usize,
     chorus_phase: f32,
+    // Parametric EQ state: up to MAX_EQ_BANDS cascaded biquad filters
+    peq_states: Vec<BiquadState>,
 }
 
 impl EffectProcessor {
@@ -43,6 +173,7 @@ impl EffectProcessor {
             chorus_buffer: vec![0.0; chorus_max],
             chorus_write_pos: 0,
             chorus_phase: 0.0,
+            peq_states: (0..MAX_EQ_BANDS).map(|_| BiquadState::default()).collect(),
         }
     }
 
@@ -63,6 +194,9 @@ impl EffectProcessor {
         self.chorus_buffer.fill(0.0);
         self.chorus_write_pos = 0;
         self.chorus_phase = 0.0;
+        for state in &mut self.peq_states {
+            *state = BiquadState::default();
+        }
     }
 
     pub fn process(&mut self, samples: &mut [f32], effect: &TrackEffect, sample_rate: u32) {
@@ -122,24 +256,10 @@ impl EffectProcessor {
                 }
             }
             TrackEffect::Compressor { threshold_db, ratio, attack_ms, release_ms } => {
-                let threshold = 10.0_f32.powf(*threshold_db / 20.0);
-                let attack_coeff = (-1.0 / (attack_ms * 0.001 * sample_rate as f32)).exp();
-                let release_coeff = (-1.0 / (release_ms * 0.001 * sample_rate as f32)).exp();
-                for s in samples.iter_mut() {
-                    let level = s.abs();
-                    let coeff = if level > self.comp_envelope { attack_coeff } else { release_coeff };
-                    self.comp_envelope = coeff * self.comp_envelope + (1.0 - coeff) * level;
-
-                    if self.comp_envelope > threshold {
-                        let db_over = 20.0 * (self.comp_envelope / threshold).log10();
-                        let db_reduction = db_over * (1.0 - 1.0 / ratio);
-                        let gain = 10.0_f32.powf(-db_reduction / 20.0);
-                        *s *= gain;
-                    }
-                }
+                self.process_compressor(samples, None, *threshold_db, *ratio, *attack_ms, *release_ms, sample_rate);
             }
             TrackEffect::EqBand { freq_hz, gain_db, q } => {
-                // Peaking EQ biquad filter
+                // Peaking EQ biquad filter (legacy single-band)
                 let a = 10.0_f32.powf(*gain_db / 40.0);
                 let w0 = 2.0 * std::f32::consts::PI * freq_hz / sample_rate as f32;
                 let alpha = w0.sin() / (2.0 * q);
@@ -161,6 +281,9 @@ impl EffectProcessor {
                     self.eq_y[0] = y0;
                     *s = y0;
                 }
+            }
+            TrackEffect::ParametricEq { bands } => {
+                self.process_parametric_eq(samples, bands, sample_rate);
             }
             TrackEffect::Chorus { rate_hz, depth, mix } => {
                 let buf_len = self.chorus_buffer.len();
@@ -195,4 +318,81 @@ impl EffectProcessor {
             }
         }
     }
+
+    /// Process multi-band parametric EQ using cascaded biquad filters.
+    fn process_parametric_eq(&mut self, samples: &mut [f32], bands: &[EqBandParams], sample_rate: u32) {
+        let num_bands = bands.len().min(MAX_EQ_BANDS);
+        if num_bands == 0 {
+            return;
+        }
+
+        // Pre-compute coefficients for all active bands
+        let coeffs: Vec<BiquadCoeffs> = bands[..num_bands]
+            .iter()
+            .map(|b| BiquadCoeffs::from_band(b, sample_rate as f32))
+            .collect();
+
+        // Process each sample through cascaded biquads
+        for s in samples.iter_mut() {
+            let mut x = *s;
+            for (bi, c) in coeffs.iter().enumerate() {
+                let state = &mut self.peq_states[bi];
+                let y = c.b0 * x + c.b1 * state.x[0] + c.b2 * state.x[1]
+                    - c.a1 * state.y[0] - c.a2 * state.y[1];
+                state.x[1] = state.x[0];
+                state.x[0] = x;
+                state.y[1] = state.y[0];
+                state.y[0] = y;
+                x = y;
+            }
+            *s = x;
+        }
+    }
+
+    /// Process a compressor with an optional sidechain signal.
+    /// If `sidechain` is Some, its samples are used for level detection
+    /// instead of the main audio signal. The gain reduction is still
+    /// applied to `samples`.
+    pub fn process_compressor(
+        &mut self,
+        samples: &mut [f32],
+        sidechain: Option<&[f32]>,
+        threshold_db: f32,
+        ratio: f32,
+        attack_ms: f32,
+        release_ms: f32,
+        sample_rate: u32,
+    ) {
+        let threshold = 10.0_f32.powf(threshold_db / 20.0);
+        let attack_coeff = (-1.0 / (attack_ms * 0.001 * sample_rate as f32)).exp();
+        let release_coeff = (-1.0 / (release_ms * 0.001 * sample_rate as f32)).exp();
+        for (idx, s) in samples.iter_mut().enumerate() {
+            let level = if let Some(sc) = sidechain {
+                // Use sidechain signal for detection, fall back to 0.0 if out-of-bounds
+                sc.get(idx).map(|v| v.abs()).unwrap_or(0.0)
+            } else {
+                s.abs()
+            };
+            let coeff = if level > self.comp_envelope { attack_coeff } else { release_coeff };
+            self.comp_envelope = coeff * self.comp_envelope + (1.0 - coeff) * level;
+
+            if self.comp_envelope > threshold {
+                let db_over = 20.0 * (self.comp_envelope / threshold).log10();
+                let db_reduction = db_over * (1.0 - 1.0 / ratio);
+                let gain = 10.0_f32.powf(-db_reduction / 20.0);
+                *s *= gain;
+            }
+        }
+    }
+}
+
+/// Compute the combined frequency response (in dB) of multiple EQ bands at a given frequency.
+/// Used by the UI visualization.
+pub fn compute_eq_response(bands: &[EqBandParams], freq_hz: f32, sample_rate: f32) -> f32 {
+    let mut total_db = 0.0;
+    for band in bands {
+        let coeffs = BiquadCoeffs::from_band(band, sample_rate);
+        total_db += coeffs.magnitude_db(freq_hz, sample_rate);
+    }
+    total_db
 }

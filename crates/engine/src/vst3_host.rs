@@ -3,9 +3,109 @@
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
 
+use crossbeam_channel::{bounded, Sender, Receiver};
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
+
+// --- Parameter change forwarding ---
+/// A parameter change from the editor UI to the audio processor.
+pub struct ParamChange {
+    pub id: u32,
+    pub value: f64,
+}
+
+/// Receiver for parameter changes — polled by the audio engine.
+pub type ParamChangeRx = Receiver<ParamChange>;
+
+// --- IComponentHandler implementation ---
+// Captures parameter edits from the plugin UI and forwards them via a channel.
+
+#[repr(C)]
+struct HostComponentHandler {
+    vtbl: *const IComponentHandlerVtbl,
+    ref_count: AtomicI32,
+    param_tx: Sender<ParamChange>,
+}
+
+unsafe extern "system" fn handler_query_interface(
+    this: *mut FUnknown,
+    iid: *const TUID,
+    obj: *mut *mut c_void,
+) -> tresult {
+    let iid_slice = unsafe { &*iid };
+    if *iid_slice == IComponentHandler_iid || *iid_slice == FUnknown_iid {
+        handler_add_ref(this);
+        *obj = this as *mut c_void;
+        0
+    } else {
+        *obj = ptr::null_mut();
+        -1
+    }
+}
+
+unsafe extern "system" fn handler_add_ref(this: *mut FUnknown) -> u32 {
+    let handler = this as *mut HostComponentHandler;
+    (*handler).ref_count.fetch_add(1, Ordering::SeqCst) as u32 + 1
+}
+
+unsafe extern "system" fn handler_release(this: *mut FUnknown) -> u32 {
+    let handler = this as *mut HostComponentHandler;
+    let prev = (*handler).ref_count.fetch_sub(1, Ordering::SeqCst);
+    if prev <= 1 {
+        drop(Box::from_raw(handler));
+        0
+    } else {
+        (prev - 1) as u32
+    }
+}
+
+unsafe extern "system" fn handler_begin_edit(
+    _this: *mut IComponentHandler, _id: ParamID,
+) -> tresult { 0 }
+
+unsafe extern "system" fn handler_perform_edit(
+    this: *mut IComponentHandler, id: ParamID, value: ParamValue,
+) -> tresult {
+    let handler = this as *mut HostComponentHandler;
+    let _ = (*handler).param_tx.try_send(ParamChange { id, value });
+    0
+}
+
+unsafe extern "system" fn handler_end_edit(
+    _this: *mut IComponentHandler, _id: ParamID,
+) -> tresult { 0 }
+
+unsafe extern "system" fn handler_restart_component(
+    _this: *mut IComponentHandler, _flags: int32,
+) -> tresult { 0 }
+
+static HOST_HANDLER_VTBL: IComponentHandlerVtbl = IComponentHandlerVtbl {
+    base: FUnknownVtbl {
+        queryInterface: handler_query_interface,
+        addRef: handler_add_ref,
+        release: handler_release,
+    },
+    beginEdit: handler_begin_edit,
+    performEdit: handler_perform_edit,
+    endEdit: handler_end_edit,
+    restartComponent: handler_restart_component,
+};
+
+/// Create a component handler that forwards parameter changes to the returned receiver.
+fn create_component_handler() -> (*mut IComponentHandler, ParamChangeRx) {
+    let (tx, rx) = bounded::<ParamChange>(256);
+    let handler = Box::new(HostComponentHandler {
+        vtbl: &HOST_HANDLER_VTBL,
+        ref_count: AtomicI32::new(1),
+        param_tx: tx,
+    });
+    (Box::into_raw(handler) as *mut IComponentHandler, rx)
+}
+
+// --- End IComponentHandler ---
 
 /// A hosted VST3 plugin instance ready for audio processing.
 pub struct Vst3Plugin {
@@ -15,14 +115,26 @@ pub struct Vst3Plugin {
     pub processing: bool,
     pub error: Option<String>,
     pub num_params: i32,
+    pub has_editor: bool,
     _lib: Option<libloading::Library>,
     component: Option<*mut IComponent>,
     processor: Option<*mut IAudioProcessor>,
+    controller: Option<*mut IEditController>,
     sample_rate: f64,
     block_size: i32,
+    /// Receives parameter changes from the editor UI's IComponentHandler
+    pub param_change_rx: Option<ParamChangeRx>,
 }
 
 unsafe impl Send for Vst3Plugin {}
+
+/// Info about a VST3 parameter.
+pub struct Vst3ParamInfo {
+    pub id: u32,
+    pub name: String,
+    pub default_value: f64,
+    pub step_count: i32,
+}
 
 impl Vst3Plugin {
     pub fn load(path: &Path, sample_rate: f64, block_size: i32) -> Self {
@@ -123,7 +235,7 @@ impl Vst3Plugin {
         // Set active
         unsafe { ((*(*component).vtbl).setActive)(component, 1); }
 
-        // Query IAudioProcessor — use FUnknown::queryInterface via vtbl
+        // Query IAudioProcessor
         let mut processor_raw: *mut c_void = ptr::null_mut();
         let qr = unsafe {
             ((*(*component).vtbl).base.base.queryInterface)(
@@ -133,48 +245,143 @@ impl Vst3Plugin {
             )
         };
 
-        if qr != 0 || processor_raw.is_null() {
-            return Self {
-                name: found_name,
-                path: path.to_path_buf(),
-                loaded: true,
-                processing: false,
-                error: Some("No audio processor interface".into()),
-                num_params: 0,
-                _lib: Some(lib),
-                component: Some(component),
-                processor: None,
-                sample_rate,
-                block_size,
-            };
-        }
-
-        let processor = processor_raw as *mut IAudioProcessor;
-
-        // Setup processing
-        let mut setup = ProcessSetup {
-            processMode: ProcessModes_::kRealtime as i32,
-            symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
-            maxSamplesPerBlock: block_size,
-            sampleRate: sample_rate,
+        let processor = if qr == 0 && !processor_raw.is_null() {
+            Some(processor_raw as *mut IAudioProcessor)
+        } else {
+            None
         };
-        unsafe { ((*(*processor).vtbl).setupProcessing)(processor, &mut setup); }
-        unsafe { ((*(*processor).vtbl).setProcessing)(processor, 1); }
 
-        println!("VST3: '{found_name}' — processing active!");
+        // Setup processing if we got a processor
+        let processing = if let Some(proc) = processor {
+            let mut setup = ProcessSetup {
+                processMode: ProcessModes_::kRealtime as i32,
+                symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
+                maxSamplesPerBlock: block_size,
+                sampleRate: sample_rate,
+            };
+            unsafe { ((*(*proc).vtbl).setupProcessing)(proc, &mut setup); }
+            unsafe { ((*(*proc).vtbl).setProcessing)(proc, 1); }
+            println!("VST3: '{found_name}' — processing active!");
+            true
+        } else {
+            false
+        };
+
+        // Query IEditController — first try queryInterface (combined component)
+        let mut controller_raw: *mut c_void = ptr::null_mut();
+        let ec_result = unsafe {
+            ((*(*component).vtbl).base.base.queryInterface)(
+                component as *mut FUnknown,
+                &IEditController_iid as *const _ as *const _,
+                &mut controller_raw,
+            )
+        };
+
+        let mut param_change_rx = None;
+        let controller = if ec_result == 0 && !controller_raw.is_null() {
+            let ctrl = controller_raw as *mut IEditController;
+            let (handler, rx) = create_component_handler();
+            param_change_rx = Some(rx);
+            unsafe {
+                ((*(*ctrl).vtbl).setComponentHandler)(ctrl, handler);
+            }
+            println!("VST3: '{found_name}' — edit controller (combined, handler set)");
+            Some(ctrl)
+        } else {
+            // Separate controller: get the controller class ID from the component,
+            // then create it from the factory
+            let mut ctrl_cid: TUID = [0i8; 16];
+            let cid_result = unsafe {
+                ((*(*component).vtbl).getControllerClassId)(component, &mut ctrl_cid)
+            };
+            if cid_result == 0 {
+                let cid_hex: String = ctrl_cid.iter()
+                    .map(|b| format!("{:02X}", *b as u8))
+                    .collect::<Vec<_>>().join("");
+                println!("VST3: controller class ID = {cid_hex}");
+                let mut ctrl_raw: *mut c_void = ptr::null_mut();
+                let create_result = unsafe {
+                    ((*(*factory).vtbl).createInstance)(
+                        factory,
+                        ctrl_cid.as_ptr(),
+                        IEditController_iid.as_ptr() as *const i8,
+                        &mut ctrl_raw,
+                    )
+                };
+                if create_result == 0 && !ctrl_raw.is_null() {
+                    let ctrl = ctrl_raw as *mut IEditController;
+                    // Initialize the controller
+                    unsafe {
+                        ((*(*ctrl).vtbl).base.initialize)(ctrl as *mut IPluginBase, ptr::null_mut());
+                    }
+                    // Set component handler — required for many plugins to create their editor
+                    let (handler, rx) = create_component_handler();
+                    param_change_rx = Some(rx);
+                    unsafe {
+                        ((*(*ctrl).vtbl).setComponentHandler)(ctrl, handler);
+                    }
+
+                    // Connect component and controller via IConnectionPoint
+                    let mut comp_cp_raw: *mut c_void = ptr::null_mut();
+                    let mut ctrl_cp_raw: *mut c_void = ptr::null_mut();
+                    unsafe {
+                        let _ = ((*(*component).vtbl).base.base.queryInterface)(
+                            component as *mut FUnknown,
+                            &IConnectionPoint_iid as *const _ as *const _,
+                            &mut comp_cp_raw,
+                        );
+                        let _ = ((*(*ctrl).vtbl).base.base.queryInterface)(
+                            ctrl as *mut FUnknown,
+                            &IConnectionPoint_iid as *const _ as *const _,
+                            &mut ctrl_cp_raw,
+                        );
+                        if !comp_cp_raw.is_null() && !ctrl_cp_raw.is_null() {
+                            let comp_cp = comp_cp_raw as *mut IConnectionPoint;
+                            let ctrl_cp = ctrl_cp_raw as *mut IConnectionPoint;
+                            ((*(*comp_cp).vtbl).connect)(comp_cp, ctrl_cp);
+                            ((*(*ctrl_cp).vtbl).connect)(ctrl_cp, comp_cp);
+                            println!("VST3: '{found_name}' — component <-> controller connected");
+                        }
+                    }
+
+                    println!("VST3: '{found_name}' — edit controller (separate, handler set)");
+                    Some(ctrl)
+                } else {
+                    println!("VST3: '{found_name}' — failed to create separate controller");
+                    None
+                }
+            } else {
+                println!("VST3: '{found_name}' — no controller class ID");
+                None
+            }
+        };
+
+        let num_params = controller.map_or(0, |c| unsafe {
+            ((*(*c).vtbl).getParameterCount)(c)
+        });
+
+        // If we have a controller, assume editor is available
+        // (createView will be called when user actually opens the UI)
+        let has_editor = controller.is_some();
+        if has_editor {
+            println!("VST3: '{found_name}' — editor UI likely available (has controller)");
+        }
 
         Self {
             name: found_name,
             path: path.to_path_buf(),
             loaded: true,
-            processing: true,
-            error: None,
-            num_params: 0,
+            processing,
+            error: if processor.is_none() { Some("No audio processor interface".into()) } else { None },
+            num_params,
+            has_editor,
             _lib: Some(lib),
             component: Some(component),
-            processor: Some(processor),
+            processor,
+            controller,
             sample_rate,
             block_size,
+            param_change_rx,
         }
     }
 
@@ -183,45 +390,82 @@ impl Vst3Plugin {
             name, path: path.to_path_buf(),
             loaded: false, processing: false,
             error: Some(error.to_string()),
-            num_params: 0,
-            _lib: None, component: None, processor: None,
+            num_params: 0, has_editor: false,
+            _lib: None, component: None, processor: None, controller: None,
             sample_rate: 44100.0, block_size: 256,
+            param_change_rx: None,
         }
     }
 
-    /// Process audio through the plugin.
+    /// Apply any pending parameter changes from the editor UI.
+    /// Should be called before process() on the audio thread.
+    pub fn apply_pending_param_changes(&mut self) {
+        let controller = match self.controller {
+            Some(c) => c,
+            None => return,
+        };
+        let rx = match &self.param_change_rx {
+            Some(rx) => rx,
+            None => return,
+        };
+        while let Ok(change) = rx.try_recv() {
+            unsafe {
+                ((*(*controller).vtbl).setParamNormalized)(controller, change.id, change.value);
+            }
+        }
+    }
+
+    /// Process audio through the plugin (mono samples).
+    /// Sends stereo to the VST3 plugin and mixes output back to mono.
     pub fn process(&mut self, samples: &mut [f32]) {
         let processor = match self.processor {
             Some(p) if self.processing => p,
-            _ => return,
+            _ => return, // passthrough if not ready
         };
 
-        let n = samples.len() as i32;
+        let n = samples.len();
         if n == 0 { return; }
 
-        let mut in_ptr = samples.as_mut_ptr();
-        let mut out_buf = vec![0.0f32; samples.len()];
-        let mut out_ptr = out_buf.as_mut_ptr();
+        // Duplicate mono to stereo for input
+        let mut in_left = samples.to_vec();
+        let mut in_right = samples.to_vec();
+        // Separate output buffers
+        let mut out_left = vec![0.0f32; n];
+        let mut out_right = vec![0.0f32; n];
+
+        let mut in_ptrs = [in_left.as_mut_ptr(), in_right.as_mut_ptr()];
+        let mut out_ptrs = [out_left.as_mut_ptr(), out_right.as_mut_ptr()];
 
         let mut input_bus = AudioBusBuffers {
-            numChannels: 1,
+            numChannels: 2,
             silenceFlags: 0,
             __field0: AudioBusBuffers__type0 {
-                channelBuffers32: &mut in_ptr,
+                channelBuffers32: in_ptrs.as_mut_ptr(),
             },
         };
         let mut output_bus = AudioBusBuffers {
-            numChannels: 1,
+            numChannels: 2,
             silenceFlags: 0,
             __field0: AudioBusBuffers__type0 {
-                channelBuffers32: &mut out_ptr,
+                channelBuffers32: out_ptrs.as_mut_ptr(),
             },
         };
+
+        // Provide a valid ProcessContext — some plugins (nih-plug) require it
+        let mut process_context: ProcessContext = unsafe { std::mem::zeroed() };
+        process_context.sampleRate = self.sample_rate;
+        process_context.tempo = 120.0;
+        process_context.timeSigNumerator = 4;
+        process_context.timeSigDenominator = 4;
+        // Set flags indicating which fields are valid
+        process_context.state = ProcessContext_::StatesAndFlags_::kTempoValid as u32
+            | ProcessContext_::StatesAndFlags_::kTimeSigValid as u32
+            | ProcessContext_::StatesAndFlags_::kPlaying as u32;
 
         let mut data = ProcessData {
             processMode: ProcessModes_::kRealtime as i32,
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
-            numSamples: n,
+            numSamples: n as i32,
             numInputs: 1,
             numOutputs: 1,
             inputs: &mut input_bus,
@@ -230,12 +474,120 @@ impl Vst3Plugin {
             outputParameterChanges: ptr::null_mut(),
             inputEvents: ptr::null_mut(),
             outputEvents: ptr::null_mut(),
-            processContext: ptr::null_mut(),
+            processContext: &mut process_context,
         };
 
         let result = unsafe { ((*(*processor).vtbl).process)(processor, &mut data) };
+
         if result == 0 {
-            samples.copy_from_slice(&out_buf);
+            // Check if output has any signal
+            let has_output = out_left.iter().any(|s| *s != 0.0) || out_right.iter().any(|s| *s != 0.0);
+            if has_output {
+                // Mix stereo output back to mono
+                for i in 0..n {
+                    samples[i] = (out_left[i] + out_right[i]) * 0.5;
+                }
+            }
+            // If output is all zeros, keep original samples (passthrough)
+            // This handles plugins that don't produce output until they have enough data
+        }
+        // If result != 0, keep original samples (passthrough)
+    }
+
+    /// Get parameter count.
+    pub fn get_parameter_count(&self) -> i32 {
+        self.num_params
+    }
+
+    /// Get info about a parameter.
+    pub fn get_parameter_info(&self, index: i32) -> Option<Vst3ParamInfo> {
+        let controller = self.controller?;
+        let mut info: ParameterInfo = unsafe { std::mem::zeroed() };
+        let res = unsafe {
+            ((*(*controller).vtbl).getParameterInfo)(controller, index, &mut info)
+        };
+        if res != 0 { return None; }
+
+        let name: String = info.title.iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| char::from(c as u8))
+            .collect();
+
+        Some(Vst3ParamInfo {
+            id: info.id,
+            name,
+            default_value: info.defaultNormalizedValue,
+            step_count: info.stepCount,
+        })
+    }
+
+    /// Get normalized parameter value (0.0 to 1.0).
+    pub fn get_param_normalized(&self, id: u32) -> f64 {
+        match self.controller {
+            Some(c) => unsafe { ((*(*c).vtbl).getParamNormalized)(c, id) },
+            None => 0.0,
+        }
+    }
+
+    /// Set normalized parameter value (0.0 to 1.0).
+    pub fn set_param_normalized(&self, id: u32, value: f64) {
+        if let Some(c) = self.controller {
+            unsafe { ((*(*c).vtbl).setParamNormalized)(c, id, value); }
+        }
+    }
+
+    /// Create the plugin's editor view. Returns a raw IPlugView pointer.
+    /// The caller is responsible for attaching it to a native window and releasing it.
+    /// Returns None if the plugin doesn't have an editor.
+    pub fn create_editor_view(&self) -> Option<*mut IPlugView> {
+        let controller = self.controller?;
+
+        // Try both "editor" (standard) view types
+        let view_types: &[&[u8]] = &[b"editor\0"];
+
+        for vt in view_types {
+            println!("VST3: trying createView({:?}) for '{}'...",
+                std::str::from_utf8(&vt[..vt.len()-1]).unwrap_or("?"), self.name);
+            let view = unsafe {
+                ((*(*controller).vtbl).createView)(controller, vt.as_ptr() as *const i8)
+            };
+            if !view.is_null() {
+                // Check if NSView is supported
+                let platform = b"NSView\0";
+                let supported = unsafe {
+                    ((*(*view).vtbl).isPlatformTypeSupported)(view, platform.as_ptr() as *const i8)
+                };
+                println!("VST3: createView succeeded, NSView supported={}", supported == 0);
+                return Some(view);
+            }
+        }
+
+        // If createView fails, try queryInterface for IPlugView directly on the controller
+        let mut view_raw: *mut c_void = ptr::null_mut();
+        let qr = unsafe {
+            ((*(*controller).vtbl).base.base.queryInterface)(
+                controller as *mut FUnknown,
+                &IPlugView_iid as *const _ as *const _,
+                &mut view_raw,
+            )
+        };
+        if qr == 0 && !view_raw.is_null() {
+            println!("VST3: got IPlugView via queryInterface for '{}'", self.name);
+            return Some(view_raw as *mut IPlugView);
+        }
+
+        println!("VST3: no editor view available for '{}'", self.name);
+        None
+    }
+
+    /// Get the editor view size.
+    pub fn get_editor_size(view: *mut IPlugView) -> (i32, i32) {
+        let mut rect: ViewRect = unsafe { std::mem::zeroed() };
+        let res = unsafe { ((*(*view).vtbl).getSize)(view, &mut rect) };
+        if res == 0 {
+            (rect.right - rect.left, rect.bottom - rect.top)
+        } else {
+            (800, 600) // default fallback
         }
     }
 
@@ -245,15 +597,10 @@ impl Vst3Plugin {
 
 impl Drop for Vst3Plugin {
     fn drop(&mut self) {
-        if let Some(p) = self.processor {
-            unsafe { ((*(*p).vtbl).setProcessing)(p, 0); }
-        }
-        if let Some(c) = self.component {
-            unsafe {
-                ((*(*c).vtbl).setActive)(c, 0);
-                ((*(*c).vtbl).base.terminate)(c as *mut IPluginBase);
-            }
-        }
+        // Intentionally no-op. JUCE-based plugins deadlock on setActive(0)
+        // and terminate() when called from the main thread because their
+        // internal threads need the run loop. The dylib stays loaded
+        // (macOS doesn't unload dylibs anyway) and resources are freed on exit.
     }
 }
 

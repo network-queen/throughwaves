@@ -85,3 +85,10 @@ pub fn apply_gain_db(samples: &mut [f32], db: f32) {
         *s *= gain;
     }
 }
+
+/// Zero out all samples (silence).
+pub fn silence(samples: &mut [f32]) {
+    for s in samples.iter_mut() {
+        *s = 0.0;
+    }
+}
