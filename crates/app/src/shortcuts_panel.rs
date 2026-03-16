@@ -86,7 +86,12 @@ fn all_shortcuts() -> Vec<ShortcutEntry> {
         ShortcutEntry { key: "Cmd+V", description: "Paste clips", category: ShortcutCategory::Editing },
         ShortcutEntry { key: "Cmd+I", description: "Import audio file", category: ShortcutCategory::Editing },
         ShortcutEntry { key: "Cmd+B", description: "Bounce track", category: ShortcutCategory::Editing },
-        ShortcutEntry { key: "Cmd+M", description: "Add marker at playhead", category: ShortcutCategory::Editing },
+        ShortcutEntry { key: "Cmd+Shift+B", description: "Bounce selection range", category: ShortcutCategory::Editing },
+        ShortcutEntry { key: "Cmd+M", description: "Mute/unmute selected track", category: ShortcutCategory::Editing },
+        ShortcutEntry { key: "Cmd+Shift+M", description: "Add marker at playhead", category: ShortcutCategory::Editing },
+        ShortcutEntry { key: "Cmd+Shift+S", description: "Solo/unsolo selected track", category: ShortcutCategory::Editing },
+        ShortcutEntry { key: "Cmd+J", description: "Consolidate clips", category: ShortcutCategory::Editing },
+        ShortcutEntry { key: "Shift+R", description: "Toggle ripple editing", category: ShortcutCategory::Editing },
 
         // Navigation
         ShortcutEntry { key: "Up / Down", description: "Switch tracks", category: ShortcutCategory::Navigation },

@@ -271,6 +271,14 @@ impl LufsCalculator {
                     self.block_ring.pop_front();
                 }
                 self.integrated_blocks.push(ms);
+                // Cap integrated blocks to ~1 hour of 100ms blocks (36000)
+                // to prevent unbounded memory growth in long sessions.
+                const MAX_INTEGRATED_BLOCKS: usize = 36_000;
+                if self.integrated_blocks.len() > MAX_INTEGRATED_BLOCKS {
+                    // Keep the second half to preserve recent gating accuracy
+                    let drain_count = self.integrated_blocks.len() - MAX_INTEGRATED_BLOCKS / 2;
+                    self.integrated_blocks.drain(..drain_count);
+                }
                 self.block_accum = 0.0;
                 self.block_count = 0;
             }

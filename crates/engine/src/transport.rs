@@ -39,6 +39,10 @@ pub enum EngineCommand {
     AttachVstiParamRx { track_id: Uuid, rx: crate::vst3_host::ParamChangeRx },
     /// Reset the integrated LUFS measurement and clipping flag.
     ResetLufs,
+    /// Trigger a preview note through the built-in synth (for piano key audition).
+    /// (pitch, velocity, track_id for synth params). velocity=0 means note-off.
+    PreviewNoteOn { pitch: u8, velocity: u8, track_id: Uuid },
+    PreviewNoteOff { pitch: u8 },
 }
 
 pub struct EngineHandle {
@@ -138,6 +142,8 @@ fn engine_loop(
     let mut loop_end: u64 = 0;
     let mut master_volume: f32 = 1.0;
     let mut lufs_calc = LufsCalculator::new(sample_rate, channels as usize);
+    let mut preview_synth = crate::synth::Synth::new();
+    let mut preview_position: u64 = 0;
 
     loop {
         while let Ok(cmd) = cmd_rx.try_recv() {
@@ -178,6 +184,41 @@ fn engine_loop(
                     lufs_calc.reset();
                     lufs_meter.reset_integrated();
                 }
+                EngineCommand::PreviewNoteOn { pitch, velocity, track_id } => {
+                    // Update preview synth params from the track if available
+                    if let Some(track) = project.tracks.iter().find(|t| t.id == track_id) {
+                        preview_synth.update_params(
+                            &track.synth_wave,
+                            track.synth_attack,
+                            track.synth_decay,
+                            track.synth_sustain,
+                            track.synth_release,
+                            track.synth_cutoff,
+                        );
+                    }
+                    // Trigger note-on using a synthetic MidiNote
+                    let notes = vec![jamhub_model::MidiNote {
+                        pitch,
+                        velocity,
+                        start_tick: 0,
+                        duration_ticks: 480 * 100, // very long note, release via NoteOff
+                    }];
+                    // Render a tiny block to trigger the note-on event
+                    preview_synth.render_block(&notes, preview_position, preview_position, 1, sample_rate, &project.tempo);
+                }
+                EngineCommand::PreviewNoteOff { pitch } => {
+                    // Trigger note-off by rendering a short note that ends now
+                    let notes = vec![jamhub_model::MidiNote {
+                        pitch,
+                        velocity: 100,
+                        start_tick: 0,
+                        duration_ticks: 0, // zero-length triggers immediate off
+                    }];
+                    // The synth note_off is triggered when global_sample == note_off_sample
+                    // We need clip_start + tick_to_sample(start_tick + duration_ticks) == preview_position
+                    // With start_tick=0, duration_ticks=0: note_off at clip_start_sample = preview_position
+                    preview_synth.render_block(&notes, preview_position, preview_position, 1, sample_rate, &project.tempo);
+                }
             }
         }
 
@@ -192,8 +233,28 @@ fn engine_loop(
             }
         }
 
+        // Render preview synth into its own buffer (always, even when stopped)
+        let preview_block = {
+            let empty_notes: Vec<jamhub_model::MidiNote> = vec![];
+            let mono = preview_synth.render_block(&empty_notes, preview_position, preview_position, block_size, sample_rate, &project.tempo);
+            preview_position += block_size as u64;
+            mono
+        };
+        let has_preview = preview_block.iter().any(|&s| s.abs() > 0.0001);
+
         if transport == TransportState::Playing {
             let mut block = mixer.render_block(&project, position, block_size, &audio_buffers);
+
+            // Mix preview synth into output
+            if has_preview {
+                let ch = channels as usize;
+                for i in 0..block_size {
+                    let s = preview_block[i] * 0.3; // preview at reduced volume
+                    for c in 0..ch {
+                        block[i * ch + c] += s;
+                    }
+                }
+            }
 
             metronome.render(
                 &mut block,
@@ -239,6 +300,23 @@ fn engine_loop(
                         position = loop_start;
                     }
                 }
+                Err(_) => break,
+            }
+        } else if has_preview {
+            // When stopped but preview note is playing, send preview audio
+            let ch = channels as usize;
+            let mut block = vec![0.0f32; block_size * ch];
+            for i in 0..block_size {
+                let s = preview_block[i] * 0.3;
+                for c in 0..ch {
+                    block[i * ch + c] = s;
+                }
+            }
+            for s in block.iter_mut() {
+                *s = s.clamp(-1.0, 1.0);
+            }
+            match audio_tx.send(block) {
+                Ok(()) => {}
                 Err(_) => break,
             }
         } else {

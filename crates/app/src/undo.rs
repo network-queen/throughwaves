@@ -144,8 +144,11 @@ impl UndoManager {
             self.redo_stack.push(snap);
         }
 
-        // Pop the target entry
-        let target = self.undo_stack.pop().unwrap();
+        // Pop the target entry — guaranteed to exist since we checked `index < len` above
+        let target = match self.undo_stack.pop() {
+            Some(t) => t,
+            None => return None,
+        };
         Some(target.project)
     }
 
@@ -172,8 +175,11 @@ impl UndoManager {
             self.undo_stack.push(snap);
         }
 
-        // Pop the target
-        let target = self.redo_stack.pop().unwrap();
+        // Pop the target — guaranteed to exist since we checked `index < len` above
+        let target = match self.redo_stack.pop() {
+            Some(t) => t,
+            None => return None,
+        };
         // Everything below index stays in redo
         Some(target.project)
     }

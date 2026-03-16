@@ -168,6 +168,8 @@ enum DragMode {
     VelocityEdit,
     /// Drawing CC values in the CC lane.
     CCEdit,
+    /// Clicking/holding a piano key to audition a note.
+    KeyPreview,
 }
 
 /// Persistent state for the piano roll editor.
@@ -191,6 +193,9 @@ pub struct PianoRollState {
     pub cc_number: u8,
     /// Simple LCG random state for humanize.
     rng_state: u64,
+    /// Preview note currently being played by clicking on a piano key.
+    /// (MIDI pitch) — None when no key is held.
+    pub preview_note: Option<u8>,
 }
 
 impl PianoRollState {
@@ -222,6 +227,7 @@ impl Default for PianoRollState {
             show_cc_lane: false,
             cc_number: 1, // Mod Wheel
             rng_state: 12345,
+            preview_note: None,
         }
     }
 }
@@ -533,8 +539,12 @@ fn show_note_grid(app: &mut DawApp, ui: &mut egui::Ui, track_idx: usize) {
         let is_black = matches!(note % 12, 1 | 3 | 6 | 8 | 10);
         let in_scale = scale.contains_pitch(root, note);
 
+        let is_preview = app.piano_roll_state.preview_note == Some(note);
+
         // Highlight scale notes on the keyboard
-        let key_color = if !is_black && in_scale && scale != Scale::Chromatic {
+        let key_color = if is_preview {
+            egui::Color32::from_rgb(100, 160, 220) // bright blue for previewed key
+        } else if !is_black && in_scale && scale != Scale::Chromatic {
             egui::Color32::from_rgb(65, 70, 80) // brighter for in-scale white keys
         } else if is_black && in_scale && scale != Scale::Chromatic {
             egui::Color32::from_rgb(50, 55, 65)
@@ -753,7 +763,21 @@ fn show_note_grid(app: &mut DawApp, ui: &mut egui::Ui, track_idx: usize) {
     if response.drag_started() {
         if let Some(pos) = pointer_pos {
             let grid_x = pos.x - rect.min.x - KEY_WIDTH;
-            if grid_x > 0.0 {
+            if grid_x <= 0.0 {
+                // Clicked on a piano key — audition the note
+                let grid_y = (rect.max.y - pos.y).max(0.0);
+                let pitch = visible_notes_start + (grid_y / note_h) as u8;
+                let pitch = pitch.min(visible_notes_end - 1);
+                app.piano_roll_state.preview_note = Some(pitch);
+                app.piano_roll_state.drag_mode = Some(DragMode::KeyPreview);
+                // Send note-on to engine
+                let track_id = app.project.tracks[track_idx].id;
+                app.send_command(jamhub_engine::EngineCommand::PreviewNoteOn {
+                    pitch,
+                    velocity: 100,
+                    track_id,
+                });
+            } else if grid_x > 0.0 {
                 // Check if we hit an existing note's resize handle
                 let mut hit_resize = None;
                 let mut hit_note = None;
@@ -887,6 +911,25 @@ fn show_note_grid(app: &mut DawApp, ui: &mut egui::Ui, track_idx: usize) {
                         }
                     }
                 }
+                Some(DragMode::KeyPreview) => {
+                    // Update preview note if the mouse moves to a different key
+                    let grid_y = (rect.max.y - pos.y).max(0.0);
+                    let pitch = visible_notes_start + (grid_y / note_h) as u8;
+                    let pitch = pitch.min(visible_notes_end - 1);
+                    if app.piano_roll_state.preview_note != Some(pitch) {
+                        // Release old note, trigger new one
+                        if let Some(old_pitch) = app.piano_roll_state.preview_note {
+                            app.send_command(jamhub_engine::EngineCommand::PreviewNoteOff { pitch: old_pitch });
+                        }
+                        app.piano_roll_state.preview_note = Some(pitch);
+                        let track_id = app.project.tracks[track_idx].id;
+                        app.send_command(jamhub_engine::EngineCommand::PreviewNoteOn {
+                            pitch,
+                            velocity: 100,
+                            track_id,
+                        });
+                    }
+                }
                 Some(DragMode::VelocityEdit) | Some(DragMode::CCEdit) => {
                     // Handled in their own sections
                 }
@@ -897,6 +940,13 @@ fn show_note_grid(app: &mut DawApp, ui: &mut egui::Ui, track_idx: usize) {
 
     // --- Drag end ---
     if response.drag_stopped() {
+        // Release preview note if we were auditioning a piano key
+        if matches!(app.piano_roll_state.drag_mode, Some(DragMode::KeyPreview)) {
+            if let Some(pitch) = app.piano_roll_state.preview_note.take() {
+                app.send_command(jamhub_engine::EngineCommand::PreviewNoteOff { pitch });
+            }
+        }
+
         // Snap notes to scale after move
         if matches!(
             app.piano_roll_state.drag_mode,

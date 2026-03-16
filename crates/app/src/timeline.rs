@@ -842,23 +842,6 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     TrackAction::OpenFx => {
                         app.show_effects = true;
                     }
-                    TrackAction::CycleColor(i) => {
-                        // Cycle through preset colors
-                        let colors: &[[u8; 3]] = &[
-                            [220, 80, 80],   // red
-                            [220, 140, 60],  // orange
-                            [200, 200, 60],  // yellow
-                            [80, 200, 80],   // green
-                            [60, 180, 200],  // cyan
-                            [100, 120, 220], // blue
-                            [160, 90, 220],  // purple
-                            [220, 90, 180],  // pink
-                            [180, 180, 180], // grey
-                        ];
-                        let current = app.project.tracks[i].color;
-                        let idx = colors.iter().position(|c| *c == current).map(|i| i + 1).unwrap_or(0);
-                        app.project.tracks[i].color = colors[idx % colors.len()];
-                    }
                     TrackAction::ToggleLanes(i) => {
                         app.project.tracks[i].lanes_expanded =
                             !app.project.tracks[i].lanes_expanded;
@@ -4301,7 +4284,6 @@ enum TrackAction {
     FinishRename(usize, String),
     ToggleLanes(usize),
     OpenFx,
-    CycleColor(usize),
     /// Create a new group from the selected track
     CreateGroupFromTrack(usize),
     /// Remove a track from its group
