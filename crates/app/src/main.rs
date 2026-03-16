@@ -7,6 +7,7 @@ mod midi_mapping;
 mod midi_panel;
 mod mixer_view;
 mod piano_roll;
+mod platform_panel;
 mod session_panel;
 mod session_view;
 mod spectrum;
@@ -276,6 +277,7 @@ pub struct DawApp {
     pub audio_buffers: HashMap<Uuid, Vec<f32>>,
     pub project_path: Option<PathBuf>,
     pub session: SessionPanel,
+    pub platform: platform_panel::PlatformPanel,
     pub metronome_enabled: bool,
     pub snap_mode: SnapMode,
     // Clip dragging state
@@ -1029,6 +1031,7 @@ impl DawApp {
             audio_buffers: HashMap::new(),
             project_path: None,
             session: SessionPanel::default(),
+            platform: platform_panel::PlatformPanel::default(),
             metronome_enabled: false,
             snap_mode: SnapMode::Off,
             dragging_clip: None,
@@ -4121,6 +4124,7 @@ impl eframe::App for DawApp {
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::S) { actions.push("toggle_solo_selected".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::F) { actions.push("fx_browser".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::J) { actions.push("consolidate".into()); }
+            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::U) { actions.push("toggle_platform".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::Comma) { actions.push("preferences".into()); }
             // Zoom presets: Cmd+1/2/3/4
             if i.modifiers.command && i.key_pressed(egui::Key::Num1) { actions.push("zoom_fit_all".into()); }
@@ -4676,6 +4680,9 @@ impl eframe::App for DawApp {
                 "preferences" => {
                     self.show_preferences = !self.show_preferences;
                 }
+                "toggle_platform" => {
+                    self.platform.show_panel = !self.platform.show_panel;
+                }
                 "new_session" => {
                     self.show_template_picker = true;
                 }
@@ -4984,6 +4991,23 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                     }
                 });
+                ui.menu_button("Share", |ui| {
+                    let label = if self.platform.logged_in {
+                        "Platform (connected)"
+                    } else {
+                        "Platform"
+                    };
+                    if ui.button(format!("{label}    Cmd+Shift+U")).clicked() {
+                        self.platform.show_panel = !self.platform.show_panel;
+                        ui.close_menu();
+                    }
+                    if self.platform.logged_in {
+                        if ui.button("Upload Current Mixdown").clicked() {
+                            self.platform.show_panel = true;
+                            ui.close_menu();
+                        }
+                    }
+                });
                 ui.menu_button("View", |ui| {
                     if ui
                         .selectable_label(self.view == View::Arrange, "Arrange")
@@ -5246,6 +5270,9 @@ impl eframe::App for DawApp {
 
         // Session panel (right side)
         session_panel::show(self, ctx);
+
+        // Platform integration panel
+        platform_panel::show(self, ctx);
 
         // Floating panels
         effects_panel::show(self, ctx);

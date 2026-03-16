@@ -1,21 +1,58 @@
-use clap::Parser;
-use jamhub_network::server::SessionServer;
+mod auth;
+mod models;
+mod projects;
+mod tracks;
 
-#[derive(Parser)]
-#[command(name = "jamhub-server", about = "JamHub collaborative session server")]
-struct Args {
-    /// Address to listen on
-    #[arg(short, long, default_value = "0.0.0.0:9090")]
-    addr: String,
-}
+use axum::{middleware, Router};
+use sqlx::postgres::PgPoolOptions;
+use std::env;
+use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
-    println!("Starting JamHub server...");
+    let database_url = env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://localhost/jamhub".to_string());
 
-    let server = SessionServer::new();
-    server.run(&args.addr).await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(20)
+        .connect(&database_url)
+        .await?;
+
+    println!("Connected to database");
+
+    // Run schema migration on startup (idempotent thanks to IF NOT EXISTS)
+    let schema = include_str!("../schema.sql");
+    // Split on semicolons and run each statement (sqlx doesn't support multi-statement)
+    for statement in schema.split(';') {
+        let stmt = statement.trim();
+        if stmt.is_empty() {
+            continue;
+        }
+        // Ignore index creation errors (they fail if index already exists)
+        let _ = sqlx::query(stmt).execute(&pool).await;
+    }
+    println!("Schema applied");
+
+    // Ensure uploads directory exists
+    tokio::fs::create_dir_all("./uploads").await?;
+
+    let api = Router::new()
+        .merge(auth::router())
+        .merge(tracks::router())
+        .merge(projects::router())
+        .route_layer(middleware::from_fn(auth::jwt_auth));
+
+    let app = Router::new()
+        .nest("/api", api)
+        .nest_service("/uploads", ServeDir::new("./uploads"))
+        .fallback_service(ServeDir::new("./web"))
+        .layer(CorsLayer::permissive())
+        .with_state(pool);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    println!("JamHub web server listening on http://0.0.0.0:3000");
+    axum::serve(listener, app).await?;
 
     Ok(())
 }

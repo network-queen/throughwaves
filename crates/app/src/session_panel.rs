@@ -160,6 +160,11 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                         }
                     }
                 });
+
+                ui.separator();
+                if ui.button("Share on Platform").clicked() {
+                    app.platform.show_panel = true;
+                }
             } else {
                 // Not connected — show connection form
                 ui.horizontal(|ui| {

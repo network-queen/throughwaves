@@ -335,6 +335,41 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         // Click area for entire header — only handles selection & context menu
                         let bg_response = ui.interact(header_rect, ui.id().with("tbg").with(i), egui::Sense::click());
                         if bg_response.clicked() { track_actions.push(TrackAction::Select(i)); }
+
+                        // Track header tooltip — detailed info on hover
+                        bg_response.clone().on_hover_ui(|ui| {
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                            let kind_str = match track.kind {
+                                TrackKind::Audio => "Audio",
+                                TrackKind::Midi => "MIDI",
+                                TrackKind::Bus => "Bus",
+                            };
+                            ui.label(egui::RichText::new(&track.name).strong().size(13.0));
+                            ui.label(format!("Type: {}", kind_str));
+                            ui.label(format!("Clips: {}", track.clips.len()));
+                            ui.label(format!("Effects: {}", track.effects.len()));
+                            // Total track duration
+                            let total_dur_samples = track.clips.iter()
+                                .map(|c| c.start_sample + c.visual_duration_samples())
+                                .max()
+                                .unwrap_or(0);
+                            let dur_sec = total_dur_samples as f64 / sample_rate;
+                            let dur_min = (dur_sec / 60.0).floor() as u32;
+                            let dur_remainder = dur_sec - dur_min as f64 * 60.0;
+                            ui.label(format!("Duration: {}:{:05.2}", dur_min, dur_remainder));
+                            // Volume and pan
+                            let vol_db = if track.volume > 0.0 { 20.0 * track.volume.log10() } else { -100.0 };
+                            ui.label(format!("Volume: {:.1} dB", vol_db));
+                            let pan_str = if track.pan.abs() < 0.01 {
+                                "Center".to_string()
+                            } else if track.pan < 0.0 {
+                                format!("{:.0}% L", -track.pan * 100.0)
+                            } else {
+                                format!("{:.0}% R", track.pan * 100.0)
+                            };
+                            ui.label(format!("Pan: {}", pan_str));
+                        });
+
                         bg_response.context_menu(|ui| {
                             if ui.button("Rename").clicked() { track_actions.push(TrackAction::StartRename(i)); ui.close_menu(); }
                             if ui.button("Duplicate").clicked() { track_actions.push(TrackAction::Duplicate(i)); ui.close_menu(); }
@@ -2807,7 +2842,35 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         );
 
                         if notes.is_empty() {
-                            // Show "MIDI" label for empty clips
+                            // Draw a faint miniature piano roll grid pattern
+                            let grid_color = egui::Color32::from_rgba_premultiplied(
+                                color.r(), color.g(), color.b(), 20,
+                            );
+                            let grid_color_accent = egui::Color32::from_rgba_premultiplied(
+                                color.r(), color.g(), color.b(), 35,
+                            );
+                            // Horizontal lines (pitch rows) — ~12 rows for one octave feel
+                            let row_count = 12;
+                            let row_h = inner.height() / row_count as f32;
+                            for r in 1..row_count {
+                                let y = inner.min.y + r as f32 * row_h;
+                                let sc = if r % 12 == 0 { grid_color_accent } else { grid_color };
+                                painter.line_segment(
+                                    [egui::pos2(inner.min.x, y), egui::pos2(inner.max.x, y)],
+                                    egui::Stroke::new(0.5, sc),
+                                );
+                            }
+                            // Vertical lines (beat divisions) — 4 beats
+                            let beat_count = 4;
+                            let beat_w = inner.width() / beat_count as f32;
+                            for b in 1..beat_count {
+                                let x = inner.min.x + b as f32 * beat_w;
+                                painter.line_segment(
+                                    [egui::pos2(x, inner.min.y), egui::pos2(x, inner.max.y)],
+                                    egui::Stroke::new(0.5, grid_color_accent),
+                                );
+                            }
+                            // Show "MIDI" label centered
                             painter.text(
                                 inner.center(),
                                 egui::Align2::CENTER_CENTER,
@@ -3816,13 +3879,21 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             let playhead_px = pos_sec as f32 * pixels_per_second;
             let view_left = app.scroll_x;
 
+            // Smooth interpolation factor — frame-rate independent
+            // At 60fps: 0.12 per frame gives ~7 frame catch-up. At 30fps: faster per frame.
+            let dt = ui.input(|i| i.stable_dt).min(0.1);
+            let smooth = 1.0 - (-8.0 * dt).exp(); // exponential smoothing (~8 Hz bandwidth)
+
             // If playhead moves past 75% of visible area, scroll to keep it at 25% from left
             if playhead_px > view_left + available.x * 0.75 {
                 let target = playhead_px - available.x * 0.25;
-                app.scroll_x += (target - app.scroll_x) * 0.15;
+                app.scroll_x += (target - app.scroll_x) * smooth;
             } else if playhead_px < view_left {
-                // Playhead went behind viewport (e.g. loop restart)
-                app.scroll_x = (playhead_px - available.x * 0.1).max(0.0);
+                // Playhead went behind viewport (e.g. loop restart) — smooth transition
+                let target = (playhead_px - available.x * 0.1).max(0.0);
+                // Use faster smoothing for large jumps to avoid long catch-up
+                let jump_smooth = 1.0 - (-15.0 * dt).exp();
+                app.scroll_x += (target - app.scroll_x) * jump_smooth;
             }
         }
 

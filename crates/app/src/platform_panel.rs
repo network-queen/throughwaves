@@ -1,0 +1,704 @@
+use eframe::egui;
+
+use crate::DawApp;
+use jamhub_engine::{ExportFormat, ExportOptions};
+
+/// Track metadata returned by the platform API.
+#[derive(Default, Clone)]
+pub struct PlatformTrack {
+    pub id: String,
+    pub title: String,
+    pub play_count: u64,
+    pub like_count: u64,
+}
+
+/// State for the JamHub platform integration panel.
+pub struct PlatformPanel {
+    pub server_url: String,
+    pub jwt_token: Option<String>,
+    pub username: Option<String>,
+    pub logged_in: bool,
+    pub show_panel: bool,
+
+    // Login / register form
+    pub email: String,
+    pub password: String,
+    pub login_error: Option<String>,
+    pub is_registering: bool,
+
+    // Upload form
+    pub upload_title: String,
+    pub upload_description: String,
+    pub upload_genre: String,
+    pub upload_status: Option<String>,
+    pub uploading: bool,
+
+    // Upload-to-project form
+    pub upload_project_id: String,
+
+    // Checkout form
+    pub checkout_project_id: String,
+    pub checkout_status: Option<String>,
+
+    // My tracks list
+    pub my_tracks: Vec<PlatformTrack>,
+    pub tracks_loaded: bool,
+}
+
+impl Default for PlatformPanel {
+    fn default() -> Self {
+        Self {
+            server_url: "http://localhost:3000".into(),
+            jwt_token: None,
+            username: None,
+            logged_in: false,
+            show_panel: false,
+            email: String::new(),
+            password: String::new(),
+            login_error: None,
+            is_registering: false,
+            upload_title: String::new(),
+            upload_description: String::new(),
+            upload_genre: String::new(),
+            upload_status: None,
+            uploading: false,
+            upload_project_id: String::new(),
+            checkout_project_id: String::new(),
+            checkout_status: None,
+            my_tracks: Vec::new(),
+            tracks_loaded: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HTTP helpers
+// ---------------------------------------------------------------------------
+
+/// Perform an authenticated (or unauthenticated) JSON request to the platform API.
+fn platform_request(
+    method: &str,
+    base_url: &str,
+    path: &str,
+    jwt: Option<&str>,
+    body: Option<&str>,
+) -> Result<String, String> {
+    let url = format!("{}{}", base_url.trim_end_matches('/'), path);
+    let agent = ureq::Agent::new_with_defaults();
+
+    let auth_value;
+    let auth_header: Option<(&str, &str)> = if let Some(token) = jwt {
+        auth_value = format!("Bearer {token}");
+        Some(("Authorization", &auth_value))
+    } else {
+        None
+    };
+
+    // ureq v3 uses different types for WithBody vs WithoutBody requests,
+    // so we dispatch and read the response body in each branch.
+    let read_body = |resp: ureq::http::Response<ureq::Body>| -> Result<String, String> {
+        resp.into_body()
+            .read_to_string()
+            .map_err(|e| format!("Failed to read response body: {e}"))
+    };
+
+    match (method, body) {
+        ("GET", _) => {
+            let mut r = agent.get(&url);
+            if let Some((k, v)) = auth_header { r = r.header(k, v); }
+            r.call().map_err(|e| format!("HTTP request failed: {e}")).and_then(read_body)
+        }
+        ("DELETE", _) => {
+            let mut r = agent.delete(&url);
+            if let Some((k, v)) = auth_header { r = r.header(k, v); }
+            r.call().map_err(|e| format!("HTTP request failed: {e}")).and_then(read_body)
+        }
+        ("POST", Some(json_body)) => {
+            let mut r = agent.post(&url).header("Content-Type", "application/json");
+            if let Some((k, v)) = auth_header { r = r.header(k, v); }
+            r.send(json_body.as_bytes()).map_err(|e| format!("HTTP request failed: {e}")).and_then(read_body)
+        }
+        ("POST", None) => {
+            let mut r = agent.post(&url);
+            if let Some((k, v)) = auth_header { r = r.header(k, v); }
+            r.send_empty().map_err(|e| format!("HTTP request failed: {e}")).and_then(read_body)
+        }
+        ("PUT", Some(json_body)) => {
+            let mut r = agent.put(&url).header("Content-Type", "application/json");
+            if let Some((k, v)) = auth_header { r = r.header(k, v); }
+            r.send(json_body.as_bytes()).map_err(|e| format!("HTTP request failed: {e}")).and_then(read_body)
+        }
+        ("PUT", None) => {
+            let mut r = agent.put(&url);
+            if let Some((k, v)) = auth_header { r = r.header(k, v); }
+            r.send_empty().map_err(|e| format!("HTTP request failed: {e}")).and_then(read_body)
+        }
+        _ => Err(format!("Unsupported HTTP method: {method}")),
+    }
+}
+
+/// Upload a file via multipart POST.
+fn platform_upload_file(
+    base_url: &str,
+    path: &str,
+    jwt: &str,
+    file_path: &std::path::Path,
+    title: &str,
+    description: &str,
+    genre: &str,
+    project_id: Option<&str>,
+) -> Result<String, String> {
+    let url = format!("{}{}", base_url.trim_end_matches('/'), path);
+
+    let file_data = std::fs::read(file_path)
+        .map_err(|e| format!("Failed to read export file: {e}"))?;
+
+    let file_name = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("mixdown.wav");
+
+    // Build a simple multipart body manually
+    let boundary = "----JamHubUploadBoundary9876543210";
+    let mut body = Vec::new();
+
+    // Title field
+    append_multipart_field(&mut body, boundary, "title", title);
+    // Description field
+    append_multipart_field(&mut body, boundary, "description", description);
+    // Genre field
+    append_multipart_field(&mut body, boundary, "genre", genre);
+    // Optional project ID
+    if let Some(pid) = project_id {
+        append_multipart_field(&mut body, boundary, "projectId", pid);
+    }
+
+    // File field
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!(
+            "Content-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(b"Content-Type: audio/wav\r\n\r\n");
+    body.extend_from_slice(&file_data);
+    body.extend_from_slice(b"\r\n");
+
+    // Closing boundary
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let content_type = format!("multipart/form-data; boundary={boundary}");
+
+    let agent = ureq::Agent::new_with_defaults();
+    let response = agent
+        .post(&url)
+        .header("Authorization", &format!("Bearer {jwt}"))
+        .header("Content-Type", &content_type)
+        .send(&*body);
+
+    match response {
+        Ok(resp) => resp
+            .into_body()
+            .read_to_string()
+            .map_err(|e| format!("Failed to read upload response: {e}")),
+        Err(e) => Err(format!("Upload failed: {e}")),
+    }
+}
+
+fn append_multipart_field(body: &mut Vec<u8>, boundary: &str, name: &str, value: &str) {
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+    );
+    body.extend_from_slice(value.as_bytes());
+    body.extend_from_slice(b"\r\n");
+}
+
+// ---------------------------------------------------------------------------
+// Panel implementation
+// ---------------------------------------------------------------------------
+
+impl PlatformPanel {
+    pub fn login(&mut self) {
+        let body = format!(
+            r#"{{"email":"{}","password":"{}"}}"#,
+            self.email.replace('"', "\\\""),
+            self.password.replace('"', "\\\"")
+        );
+
+        match platform_request("POST", &self.server_url, "/api/auth/login", None, Some(&body)) {
+            Ok(resp) => {
+                // Expect JSON with { "token": "...", "user": { "name": "..." } }
+                if let Some(token) = extract_json_string(&resp, "token") {
+                    let username = extract_json_string(&resp, "name")
+                        .or_else(|| extract_json_string(&resp, "email"))
+                        .unwrap_or_else(|| self.email.clone());
+                    self.jwt_token = Some(token);
+                    self.username = Some(username);
+                    self.logged_in = true;
+                    self.login_error = None;
+                    self.password.clear();
+                } else {
+                    let msg = extract_json_string(&resp, "message")
+                        .or_else(|| extract_json_string(&resp, "error"))
+                        .unwrap_or_else(|| "Login failed — unexpected response".into());
+                    self.login_error = Some(msg);
+                }
+            }
+            Err(e) => {
+                self.login_error = Some(e);
+            }
+        }
+    }
+
+    pub fn register(&mut self) {
+        let body = format!(
+            r#"{{"email":"{}","password":"{}"}}"#,
+            self.email.replace('"', "\\\""),
+            self.password.replace('"', "\\\"")
+        );
+
+        match platform_request("POST", &self.server_url, "/api/auth/register", None, Some(&body))
+        {
+            Ok(resp) => {
+                if let Some(token) = extract_json_string(&resp, "token") {
+                    let username = extract_json_string(&resp, "name")
+                        .or_else(|| extract_json_string(&resp, "email"))
+                        .unwrap_or_else(|| self.email.clone());
+                    self.jwt_token = Some(token);
+                    self.username = Some(username);
+                    self.logged_in = true;
+                    self.login_error = None;
+                    self.password.clear();
+                } else {
+                    let msg = extract_json_string(&resp, "message")
+                        .or_else(|| extract_json_string(&resp, "error"))
+                        .unwrap_or_else(|| "Registration failed".into());
+                    self.login_error = Some(msg);
+                }
+            }
+            Err(e) => {
+                self.login_error = Some(e);
+            }
+        }
+    }
+
+    pub fn logout(&mut self) {
+        self.jwt_token = None;
+        self.username = None;
+        self.logged_in = false;
+        self.my_tracks.clear();
+        self.tracks_loaded = false;
+    }
+
+    pub fn fetch_my_tracks(&mut self) {
+        let Some(ref token) = self.jwt_token else {
+            return;
+        };
+        match platform_request("GET", &self.server_url, "/api/tracks/me", Some(token), None) {
+            Ok(resp) => {
+                self.my_tracks = parse_tracks_list(&resp);
+                self.tracks_loaded = true;
+            }
+            Err(_e) => {
+                self.tracks_loaded = true;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Minimal JSON helpers (avoid pulling in serde for platform-only use)
+// ---------------------------------------------------------------------------
+
+/// Extract a string value for a given key from a JSON string.
+/// This is intentionally simple — handles `"key": "value"` patterns.
+fn extract_json_string(json: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{}\"", key);
+    let idx = json.find(&pattern)?;
+    let after_key = &json[idx + pattern.len()..];
+    // Skip `: ` or `:`
+    let after_colon = after_key.trim_start().strip_prefix(':')?;
+    let after_colon = after_colon.trim_start();
+    if after_colon.starts_with('"') {
+        let inner = &after_colon[1..];
+        let end = inner.find('"')?;
+        Some(inner[..end].to_string())
+    } else {
+        None
+    }
+}
+
+/// Parse a JSON array of track objects into PlatformTrack list.
+fn parse_tracks_list(json: &str) -> Vec<PlatformTrack> {
+    // Very simple parser: split on `{` to find objects
+    let mut tracks = Vec::new();
+    for chunk in json.split('{').skip(1) {
+        let id = extract_json_string(chunk, "id").unwrap_or_default();
+        // Also try "_id" for MongoDB-style responses
+        let id = if id.is_empty() {
+            extract_json_string(chunk, "_id").unwrap_or_default()
+        } else {
+            id
+        };
+        let title = extract_json_string(chunk, "title").unwrap_or_else(|| "Untitled".into());
+        let play_count = extract_json_string(chunk, "playCount")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let like_count = extract_json_string(chunk, "likeCount")
+            .or_else(|| extract_json_string(chunk, "likes"))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        if !id.is_empty() || !title.is_empty() {
+            tracks.push(PlatformTrack {
+                id,
+                title,
+                play_count,
+                like_count,
+            });
+        }
+    }
+    tracks
+}
+
+// ---------------------------------------------------------------------------
+// UI rendering
+// ---------------------------------------------------------------------------
+
+pub fn show(app: &mut DawApp, ctx: &egui::Context) {
+    if !app.platform.show_panel {
+        return;
+    }
+
+    let mut open = true;
+    egui::Window::new("Platform")
+        .open(&mut open)
+        .default_width(340.0)
+        .resizable(true)
+        .show(ctx, |ui| {
+            // Server URL
+            ui.horizontal(|ui| {
+                ui.label("Server:");
+                ui.text_edit_singleline(&mut app.platform.server_url);
+            });
+            ui.separator();
+
+            if app.platform.logged_in {
+                show_logged_in(app, ui);
+            } else {
+                show_login_form(app, ui);
+            }
+        });
+
+    if !open {
+        app.platform.show_panel = false;
+    }
+}
+
+fn show_login_form(app: &mut DawApp, ui: &mut egui::Ui) {
+    ui.heading(if app.platform.is_registering {
+        "Register"
+    } else {
+        "Login"
+    });
+
+    ui.horizontal(|ui| {
+        ui.label("Email:");
+        ui.text_edit_singleline(&mut app.platform.email);
+    });
+    ui.horizontal(|ui| {
+        ui.label("Password:");
+        let response = ui.add(egui::TextEdit::singleline(&mut app.platform.password).password(true));
+        // Submit on Enter
+        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if app.platform.is_registering {
+                app.platform.register();
+            } else {
+                app.platform.login();
+            }
+        }
+    });
+
+    if let Some(ref err) = app.platform.login_error {
+        ui.colored_label(egui::Color32::from_rgb(255, 100, 100), err);
+    }
+
+    ui.horizontal(|ui| {
+        if app.platform.is_registering {
+            if ui.button("Register").clicked() {
+                app.platform.register();
+            }
+            if ui.button("Back to Login").clicked() {
+                app.platform.is_registering = false;
+                app.platform.login_error = None;
+            }
+        } else {
+            if ui.button("Login").clicked() {
+                app.platform.login();
+            }
+            if ui.button("Create Account").clicked() {
+                app.platform.is_registering = true;
+                app.platform.login_error = None;
+            }
+        }
+    });
+}
+
+fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
+    let username = app
+        .platform
+        .username
+        .clone()
+        .unwrap_or_else(|| "User".into());
+    ui.horizontal(|ui| {
+        ui.colored_label(
+            egui::Color32::from_rgb(80, 200, 80),
+            format!("Logged in as {username}"),
+        );
+        if ui.button("Logout").clicked() {
+            app.platform.logout();
+        }
+    });
+
+    ui.separator();
+
+    // ── Upload Current Mixdown ──
+    egui::CollapsingHeader::new("Upload Current Mixdown")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Title:");
+                ui.text_edit_singleline(&mut app.platform.upload_title);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Genre:");
+                ui.text_edit_singleline(&mut app.platform.upload_genre);
+            });
+            ui.label("Description:");
+            ui.text_edit_multiline(&mut app.platform.upload_description);
+
+            if let Some(ref status) = app.platform.upload_status {
+                ui.label(status.as_str());
+            }
+
+            let can_upload = !app.platform.uploading;
+            if ui
+                .add_enabled(can_upload, egui::Button::new("Upload Mixdown"))
+                .clicked()
+            {
+                do_upload_mixdown(app, None);
+            }
+        });
+
+    ui.separator();
+
+    // ── Upload to Project ──
+    egui::CollapsingHeader::new("Upload to Project")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Project ID:");
+                ui.text_edit_singleline(&mut app.platform.upload_project_id);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Title:");
+                // Reuse the same title/description fields
+                ui.text_edit_singleline(&mut app.platform.upload_title);
+            });
+
+            let can_upload = !app.platform.uploading && !app.platform.upload_project_id.is_empty();
+            if ui
+                .add_enabled(can_upload, egui::Button::new("Upload to Project"))
+                .clicked()
+            {
+                let pid = app.platform.upload_project_id.clone();
+                do_upload_mixdown(app, Some(&pid));
+            }
+        });
+
+    ui.separator();
+
+    // ── Checkout Project ──
+    egui::CollapsingHeader::new("Open Project from Platform")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Project ID:");
+                ui.text_edit_singleline(&mut app.platform.checkout_project_id);
+            });
+
+            if let Some(ref status) = app.platform.checkout_status {
+                ui.label(status.as_str());
+            }
+
+            if ui.button("Checkout Project").clicked() {
+                do_checkout_project(app);
+            }
+        });
+
+    ui.separator();
+
+    // ── My Tracks ──
+    egui::CollapsingHeader::new("My Tracks")
+        .default_open(false)
+        .show(ui, |ui| {
+            if ui.button("Refresh").clicked() || !app.platform.tracks_loaded {
+                app.platform.fetch_my_tracks();
+            }
+
+            if app.platform.my_tracks.is_empty() {
+                ui.label("No tracks uploaded yet.");
+            } else {
+                egui::ScrollArea::vertical()
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        for track in &app.platform.my_tracks {
+                            ui.group(|ui| {
+                                ui.strong(&track.title);
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("Plays: {}", track.play_count));
+                                    ui.label(format!("Likes: {}", track.like_count));
+                                });
+                            });
+                        }
+                    });
+            }
+        });
+}
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
+
+fn do_upload_mixdown(app: &mut DawApp, project_id: Option<&str>) {
+    app.platform.uploading = true;
+    app.platform.upload_status = Some("Exporting mixdown...".into());
+
+    // Export to a temp WAV file
+    let temp_dir = std::env::temp_dir();
+    let export_path = temp_dir.join("jamhub_platform_upload.wav");
+
+    let sample_rate = app.project.sample_rate;
+    let options = ExportOptions {
+        format: ExportFormat::Wav,
+        channels: 2,
+        bit_depth: 16,
+        normalize: true,
+        ..Default::default()
+    };
+
+    let result = jamhub_engine::export_with_options(
+        &export_path,
+        &app.project,
+        &app.audio_buffers,
+        sample_rate,
+        &options,
+    );
+
+    match result {
+        Ok(()) => {
+            app.platform.upload_status = Some("Uploading to platform...".into());
+
+            let jwt = match &app.platform.jwt_token {
+                Some(t) => t.clone(),
+                None => {
+                    app.platform.upload_status = Some("Error: not logged in".into());
+                    app.platform.uploading = false;
+                    return;
+                }
+            };
+
+            let title = if app.platform.upload_title.is_empty() {
+                app.project.name.clone()
+            } else {
+                app.platform.upload_title.clone()
+            };
+
+            match platform_upload_file(
+                &app.platform.server_url,
+                "/api/tracks",
+                &jwt,
+                &export_path,
+                &title,
+                &app.platform.upload_description,
+                &app.platform.upload_genre,
+                project_id,
+            ) {
+                Ok(_resp) => {
+                    app.platform.upload_status = Some("Upload complete!".into());
+                    app.set_status("Track uploaded to platform");
+                }
+                Err(e) => {
+                    app.platform.upload_status = Some(format!("Upload failed: {e}"));
+                }
+            }
+
+            // Clean up temp file
+            let _ = std::fs::remove_file(&export_path);
+        }
+        Err(e) => {
+            app.platform.upload_status = Some(format!("Export failed: {e}"));
+        }
+    }
+
+    app.platform.uploading = false;
+}
+
+fn do_checkout_project(app: &mut DawApp) {
+    let project_id = app.platform.checkout_project_id.trim().to_string();
+    if project_id.is_empty() {
+        app.platform.checkout_status = Some("Enter a project ID".into());
+        return;
+    }
+
+    app.platform.checkout_status = Some("Downloading project...".into());
+
+    let jwt = match &app.platform.jwt_token {
+        Some(t) => t.clone(),
+        None => {
+            app.platform.checkout_status = Some("Error: not logged in".into());
+            return;
+        }
+    };
+
+    let path = format!("/api/projects/{}/checkout", project_id);
+    match platform_request("GET", &app.platform.server_url, &path, Some(&jwt), None) {
+        Ok(resp) => {
+            // The response should contain project JSON data.
+            // For now, extract the project name and report success.
+            let name = extract_json_string(&resp, "name")
+                .unwrap_or_else(|| format!("Project {project_id}"));
+            app.platform.checkout_status = Some(format!("Loaded: {name}"));
+            app.set_status(&format!("Checked out project: {name}"));
+
+            // Try to import tracks from the response into the current session.
+            // The platform returns track metadata; actual audio files would be
+            // downloaded separately. For v1, we just acknowledge success.
+            import_project_tracks(app, &resp);
+        }
+        Err(e) => {
+            app.platform.checkout_status = Some(format!("Checkout failed: {e}"));
+        }
+    }
+}
+
+/// Attempt to import tracks described in the checkout response into the DAW project.
+/// This is a best-effort parser for v1 — it creates empty tracks with names from the
+/// platform data so the user can see the project structure.
+fn import_project_tracks(app: &mut DawApp, json: &str) {
+    // Look for track names in the response
+    // Expect something like "tracks": [ { "name": "...", "url": "..." }, ... ]
+    let mut idx = 0;
+    while let Some(pos) = json[idx..].find("\"name\"") {
+        let abs = idx + pos;
+        if let Some(name) = extract_json_string(&json[abs..], "name") {
+            if !name.is_empty() {
+                // Create a new audio track in the project with this name
+                app.project.add_track(&name, jamhub_model::TrackKind::Audio);
+            }
+        }
+        idx = abs + 6; // advance past "name"
+    }
+}
