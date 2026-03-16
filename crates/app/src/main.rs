@@ -258,6 +258,8 @@ pub struct DawApp {
     engine: Option<EngineHandle>,
     engine_error: Option<String>,
     pub view: View,
+    /// Show mixer docked at the bottom of the arrange view (Reaper-style)
+    pub show_mixer_panel: bool,
     pub zoom: f32,
     pub scroll_x: f32,
     recorder: Recorder,
@@ -1011,6 +1013,7 @@ impl DawApp {
             },
             engine,
             view: View::Arrange,
+            show_mixer_panel: false,
             zoom: 1.0,
             scroll_x: 0.0,
             recorder: Recorder::new(),
@@ -4060,6 +4063,7 @@ impl eframe::App for DawApp {
                 if i.key_pressed(egui::Key::P) && !i.modifiers.command { actions.push("toggle_punch".into()); }
                 if i.key_pressed(egui::Key::B) && !i.modifiers.command { actions.push("media_browser".into()); }
                 if i.key_pressed(egui::Key::Q) && !i.modifiers.command { actions.push("spectrum".into()); }
+                if i.key_pressed(egui::Key::X) && !i.modifiers.command { actions.push("toggle_mixer_panel".into()); }
                 if i.key_pressed(egui::Key::F) && i.modifiers.shift && !i.modifiers.command { actions.push("flatten_comp".into()); }
                 if i.key_pressed(egui::Key::Tab) && !i.modifiers.command { actions.push("cycle_view".into()); }
                 if i.key_pressed(egui::Key::Slash) && i.modifiers.shift { actions.push("show_shortcuts".into()); }
@@ -4392,6 +4396,14 @@ impl eframe::App for DawApp {
                         self.set_status("Spectrum analyzer ON");
                     } else {
                         self.set_status("Spectrum analyzer OFF");
+                    }
+                }
+                "toggle_mixer_panel" => {
+                    self.show_mixer_panel = !self.show_mixer_panel;
+                    if self.show_mixer_panel {
+                        self.set_status("Mixer panel docked at bottom");
+                    } else {
+                        self.set_status("Mixer panel hidden");
                     }
                 }
                 "cycle_view" => {
@@ -4979,10 +4991,18 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                     }
                     if ui
-                        .selectable_label(self.view == View::Mixer, "Mixer")
+                        .selectable_label(self.view == View::Mixer, "Mixer (full)")
                         .clicked()
                     {
                         self.view = View::Mixer;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_label(self.show_mixer_panel, "Mixer Panel     X")
+                        .on_hover_text("Dock mixer at bottom of arrange view")
+                        .clicked()
+                    {
+                        self.show_mixer_panel = !self.show_mixer_panel;
                         ui.close_menu();
                     }
                     if ui
@@ -5646,6 +5666,21 @@ impl eframe::App for DawApp {
         }
 
         // Main content
+        // Docked mixer panel at bottom (Reaper-style) — only in Arrange view
+        if self.show_mixer_panel && self.view == View::Arrange {
+            egui::TopBottomPanel::bottom("mixer_dock")
+                .resizable(true)
+                .default_height(200.0)
+                .min_height(120.0)
+                .max_height(400.0)
+                .frame(egui::Frame::default()
+                    .fill(egui::Color32::from_rgb(22, 22, 28))
+                    .inner_margin(egui::Margin::same(2)))
+                .show(ctx, |ui| {
+                    mixer_view::show(self, ui);
+                });
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| match self.view {
             View::Arrange => timeline::show(self, ui),
             View::Mixer => mixer_view::show(self, ui),
