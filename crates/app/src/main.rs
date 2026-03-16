@@ -3725,6 +3725,130 @@ impl DawApp {
 
     /// Magnetic snap: only snaps when within a pixel threshold.
     /// Returns (snapped_sample, did_snap).
+    /// Detect BPM from an audio clip using basic onset/peak detection.
+    /// Returns Some(bpm) on success, None if detection fails.
+    pub fn detect_clip_tempo(&self, track_idx: usize, clip_idx: usize) -> Option<f64> {
+        let clip = self.project.tracks.get(track_idx)?.clips.get(clip_idx)?;
+        let buffer_id = match &clip.source {
+            ClipSource::AudioBuffer { buffer_id } => *buffer_id,
+            _ => return None,
+        };
+        let samples = self.audio_buffers.get(&buffer_id)?;
+        if samples.len() < 1024 {
+            return None;
+        }
+
+        let sr = self.sample_rate() as f64;
+
+        // Compute energy envelope with a hop size of ~10ms
+        let hop = (sr * 0.01) as usize;
+        if hop == 0 {
+            return None;
+        }
+        let num_frames = samples.len() / hop;
+        if num_frames < 4 {
+            return None;
+        }
+
+        let mut energy: Vec<f64> = Vec::with_capacity(num_frames);
+        for i in 0..num_frames {
+            let start = i * hop;
+            let end = (start + hop).min(samples.len());
+            let e: f64 = samples[start..end].iter().map(|&s| (s as f64) * (s as f64)).sum();
+            energy.push(e);
+        }
+
+        // Compute onset detection function (spectral flux approximation: diff of energy)
+        let mut onset: Vec<f64> = vec![0.0];
+        for i in 1..energy.len() {
+            let diff = (energy[i] - energy[i - 1]).max(0.0);
+            onset.push(diff);
+        }
+
+        // Find peaks in onset function (local maxima above threshold)
+        let mean_onset: f64 = onset.iter().sum::<f64>() / onset.len() as f64;
+        let threshold = mean_onset * 1.5;
+        let mut peaks: Vec<usize> = Vec::new();
+        for i in 1..onset.len().saturating_sub(1) {
+            if onset[i] > threshold && onset[i] > onset[i - 1] && onset[i] >= onset[i + 1] {
+                peaks.push(i);
+            }
+        }
+
+        if peaks.len() < 3 {
+            return None;
+        }
+
+        // Calculate intervals between consecutive peaks
+        let mut intervals: Vec<f64> = Vec::new();
+        for w in peaks.windows(2) {
+            let interval_sec = (w[1] - w[0]) as f64 * hop as f64 / sr;
+            intervals.push(interval_sec);
+        }
+
+        // Filter out extreme intervals (keep only 60-200 BPM range)
+        let valid: Vec<f64> = intervals
+            .into_iter()
+            .filter(|&i| i > 0.3 && i < 1.0) // 60-200 BPM
+            .collect();
+
+        if valid.is_empty() {
+            return None;
+        }
+
+        let avg_interval = valid.iter().sum::<f64>() / valid.len() as f64;
+        let bpm = 60.0 / avg_interval;
+
+        // Sanity check
+        if bpm >= 40.0 && bpm <= 240.0 {
+            Some(bpm)
+        } else {
+            None
+        }
+    }
+
+    /// Snap a sample position to nearby clip edges on the same or adjacent tracks.
+    /// Returns (snapped_sample, did_snap) similar to magnetic_snap.
+    /// `drag_track_idx` is the track of the clip being dragged.
+    pub fn snap_to_clip_edges(&self, sample: u64, drag_track_idx: usize, pixels_per_second: f32, threshold_px: f32) -> (u64, bool) {
+        let sr = self.sample_rate() as f64;
+        let threshold_samples = (threshold_px as f64 / pixels_per_second as f64 * sr) as u64;
+
+        let mut best_dist: u64 = u64::MAX;
+        let mut best_pos: u64 = sample;
+
+        // Check clips on same track and adjacent tracks
+        let track_range_start = drag_track_idx.saturating_sub(1);
+        let track_range_end = (drag_track_idx + 2).min(self.project.tracks.len());
+
+        for ti in track_range_start..track_range_end {
+            for clip in &self.project.tracks[ti].clips {
+                let clip_start = clip.start_sample;
+                let clip_end = clip.start_sample + clip.visual_duration_samples();
+
+                // Check distance to clip start
+                let dist_start = (sample as i64 - clip_start as i64).unsigned_abs();
+                if dist_start < best_dist && dist_start <= threshold_samples {
+                    best_dist = dist_start;
+                    best_pos = clip_start;
+                }
+
+                // Check distance to clip end
+                let dist_end = (sample as i64 - clip_end as i64).unsigned_abs();
+                if dist_end < best_dist && dist_end <= threshold_samples {
+                    best_dist = dist_end;
+                    best_pos = clip_end;
+                }
+            }
+        }
+
+        if best_dist <= threshold_samples && best_dist < u64::MAX {
+            (best_pos, true)
+        } else {
+            (sample, false)
+        }
+    }
+
     pub fn magnetic_snap(&self, sample: u64, pixels_per_second: f32, threshold_px: f32) -> (u64, bool) {
         if self.snap_mode == SnapMode::Off {
             return (sample, false);
@@ -3986,8 +4110,8 @@ impl eframe::App for DawApp {
             else if i.modifiers.command && i.key_pressed(egui::Key::B) { actions.push("bounce".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::C) { actions.push("copy".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::V) { actions.push("paste".into()); }
-            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::M) { actions.push("toggle_mute_selected".into()); }
-            else if i.modifiers.command && i.key_pressed(egui::Key::M) { actions.push("add_marker".into()); }
+            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::M) { actions.push("add_marker".into()); }
+            else if i.modifiers.command && i.key_pressed(egui::Key::M) { actions.push("toggle_mute_selected".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::S) { actions.push("toggle_solo_selected".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::F) { actions.push("fx_browser".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::J) { actions.push("consolidate".into()); }

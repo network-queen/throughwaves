@@ -124,11 +124,12 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             let resp = ui.add_sized(ts, egui::Button::new(
                 egui::RichText::new("M").size(11.0).strong().color(tc)
             ).fill(bg).corner_radius(11.0));
+            let secondary = resp.secondary_clicked();
             if resp.on_hover_text("Metronome [M]\nRight-click for settings").clicked() {
                 app.metronome_enabled = !app.metronome_enabled;
                 app.send_command(EngineCommand::SetMetronome(app.metronome_enabled));
             }
-            if resp.secondary_clicked() {
+            if secondary {
                 app.show_metronome_settings = true;
             }
         }

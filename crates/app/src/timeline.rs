@@ -221,6 +221,13 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
             let mut track_actions: Vec<TrackAction> = Vec::new();
 
+            // Pre-collect track levels to avoid borrow conflict with app inside the loop
+            let track_levels: Vec<(f32, f32)> = app.project.tracks.iter().map(|t| {
+                app.levels()
+                    .map(|l| l.get_track_level(&t.id))
+                    .unwrap_or((0.0, 0.0))
+            }).collect();
+
             // Track which group headers we've already drawn
             let mut rendered_group_headers = std::collections::HashSet::new();
 
@@ -395,7 +402,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             if ui.button("Delete").clicked() { track_actions.push(TrackAction::Delete(i)); ui.close_menu(); }
                         });
 
-                        // Background — warm dark with hover brightening; blue tint for frozen
+                        // Background — warm dark with hover brightening; blue tint for frozen; red tint for armed
                         let bg_response_hovered = bg_response.hovered();
                         let bg = if track.frozen {
                             if is_selected {
@@ -404,6 +411,15 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 egui::Color32::from_rgb(30, 38, 55)
                             } else {
                                 egui::Color32::from_rgb(22, 30, 45)
+                            }
+                        } else if track.armed {
+                            // Red tint for armed tracks
+                            if is_selected {
+                                egui::Color32::from_rgb(46, 28, 32)
+                            } else if bg_response_hovered {
+                                egui::Color32::from_rgb(44, 30, 34)
+                            } else {
+                                egui::Color32::from_rgb(36, 22, 26)
                             }
                         } else if is_selected {
                             egui::Color32::from_rgb(36, 34, 46)
@@ -482,6 +498,22 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     egui::vec2(30.0, 14.0),
                                     egui::Button::new(badge_text).fill(type_bg).corner_radius(7.0).sense(egui::Sense::hover()),
                                 );
+
+                                // Pulsing red circle when track is armed for recording
+                                if track.armed {
+                                    let bpm = app.project.tempo.bpm as f64;
+                                    let beat_period = if bpm > 0.0 { 60.0 / bpm } else { 1.0 };
+                                    let time = ui.input(|i| i.time);
+                                    let phase = (time % beat_period) / beat_period;
+                                    // Smooth pulse: use sine wave, range 0.4 to 1.0
+                                    let pulse = 0.4 + 0.6 * (1.0 - (phase * std::f64::consts::TAU).cos()) as f32 / 2.0;
+                                    let alpha = (pulse * 255.0) as u8;
+                                    let circle_size = 6.0 + pulse * 2.0;
+                                    let (circle_rect, _) = ui.allocate_exact_size(egui::vec2(circle_size + 2.0, 14.0), egui::Sense::hover());
+                                    let center = circle_rect.center();
+                                    ui.painter().circle_filled(center, circle_size / 2.0, egui::Color32::from_rgba_premultiplied(232, 60, 60, alpha));
+                                    ui.ctx().request_repaint(); // keep animating
+                                }
 
                                 // Name area — double-clickable for rename
                                 if let Some((rename_idx, ref rename_buf)) = app.renaming_track {
@@ -667,12 +699,41 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 );
                             });
 
-                            // Row 4: Tiny horizontal level meter (2px tall)
+                            // Row 4: Pan slider (Reaper-style, in track header)
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                let mut pan = track.pan;
+                                let pan_slider = ui.add(
+                                    egui::Slider::new(&mut pan, -1.0..=1.0)
+                                        .show_value(false)
+                                        .trailing_fill(true)
+                                );
+                                let pan_changed = pan_slider.changed();
+                                let pan_dbl = pan_slider.double_clicked();
+                                pan_slider.on_hover_text("Pan (L/R) — double-click to center");
+                                if pan_changed {
+                                    track_actions.push(TrackAction::SetPan(i, pan));
+                                }
+                                if pan_dbl {
+                                    track_actions.push(TrackAction::SetPan(i, 0.0));
+                                }
+                                let pan_label = if pan < -0.01 {
+                                    format!("{:.0}L", pan.abs() * 100.0)
+                                } else if pan > 0.01 {
+                                    format!("{:.0}R", pan * 100.0)
+                                } else {
+                                    "C".to_string()
+                                };
+                                ui.label(
+                                    egui::RichText::new(pan_label)
+                                        .size(9.5)
+                                        .color(egui::Color32::from_rgb(110, 110, 120)),
+                                );
+                            });
+
+                            // Row 5: Tiny horizontal level meter (2px tall)
                             {
-                                let track_id = track.id;
-                                let (left, right) = app.levels()
-                                    .map(|l| l.get_track_level(&track_id))
-                                    .unwrap_or((0.0, 0.0));
+                                let (left, right) = track_levels[i];
                                 let peak = left.max(right).clamp(0.0, 1.5);
                                 let meter_width = HEADER_WIDTH - 16.0;
                                 let (_, meter_rect) = ui.allocate_space(egui::vec2(meter_width, 2.0));
@@ -737,6 +798,10 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                     TrackAction::SetVolume(i, v) => {
                         app.project.tracks[i].volume = v;
+                        app.sync_project();
+                    }
+                    TrackAction::SetPan(i, v) => {
+                        app.project.tracks[i].pan = v;
                         app.sync_project();
                     }
                     TrackAction::Select(i) => {
@@ -1249,6 +1314,26 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.project.tracks[ti].clips[ci].reversed = !is_reversed;
                         app.sync_project();
                         ui.close_menu();
+                    }
+                    // Detect Tempo — basic onset detection for audio clips
+                    let is_audio_clip = matches!(
+                        app.project.tracks[ti].clips[ci].source,
+                        ClipSource::AudioBuffer { .. } | ClipSource::AudioFile { .. }
+                    );
+                    if is_audio_clip {
+                        if ui.button("Detect Tempo").on_hover_text("Detect BPM from audio and offer to set project tempo").clicked() {
+                            let detected = app.detect_clip_tempo(ti, ci);
+                            if let Some(bpm) = detected {
+                                let rounded = (bpm * 10.0).round() / 10.0;
+                                app.set_status(&format!("Detected tempo: {:.1} BPM — applied to project", rounded));
+                                app.push_undo("Set tempo from audio");
+                                app.project.tempo.bpm = rounded;
+                                app.sync_project();
+                            } else {
+                                app.set_status("Could not detect tempo from this clip");
+                            }
+                            ui.close_menu();
+                        }
                     }
                     ui.separator();
                     if ui.button("Properties...").on_hover_text("Open clip properties panel").clicked() {
@@ -1974,6 +2059,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                     let originals = multi_drag.originals.clone();
                     app.magnetic_snap_active = false;
+                    app.clip_edge_snap_sample = None;
                     for &(ti, ci, orig_start) in &originals {
                         if ti < app.project.tracks.len()
                             && ci < app.project.tracks[ti].clips.len()
@@ -1982,12 +2068,19 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             let snapped = if app.ctrl_held {
                                 new_start // Ctrl disables snap while dragging
                             } else {
-                                let (s, did_snap) = app.magnetic_snap(new_start, pixels_per_second, 5.0);
-                                if did_snap {
-                                    app.magnetic_snap_active = true;
-                                    app.magnetic_snap_sample = s;
+                                // Try clip edge snap first, then grid snap
+                                let (edge_s, edge_snap) = app.snap_to_clip_edges(new_start, ti, pixels_per_second, 5.0);
+                                if edge_snap {
+                                    app.clip_edge_snap_sample = Some(edge_s);
+                                    edge_s
+                                } else {
+                                    let (s, did_snap) = app.magnetic_snap(new_start, pixels_per_second, 5.0);
+                                    if did_snap {
+                                        app.magnetic_snap_active = true;
+                                        app.magnetic_snap_sample = s;
+                                    }
+                                    s
                                 }
-                                s
                             };
                             app.project.tracks[ti].clips[ci].start_sample = snapped;
                         }
@@ -2002,14 +2095,25 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     let d_samples = (d_seconds * sample_rate) as i64;
                     let new_start =
                         (drag.original_start_sample as i64 + d_samples).max(0) as u64;
+                    let drag_ti = drag.track_idx;
                     let snapped = if app.ctrl_held {
                         app.magnetic_snap_active = false;
+                        app.clip_edge_snap_sample = None;
                         new_start // Ctrl disables snap while dragging
                     } else {
-                        let (s, did_snap) = app.magnetic_snap(new_start, pixels_per_second, 5.0);
-                        app.magnetic_snap_active = did_snap;
-                        if did_snap { app.magnetic_snap_sample = s; }
-                        s
+                        // Try clip edge snap first (higher priority), then grid snap
+                        let (edge_s, edge_snap) = app.snap_to_clip_edges(new_start, drag_ti, pixels_per_second, 5.0);
+                        if edge_snap {
+                            app.magnetic_snap_active = false;
+                            app.clip_edge_snap_sample = Some(edge_s);
+                            edge_s
+                        } else {
+                            app.clip_edge_snap_sample = None;
+                            let (s, did_snap) = app.magnetic_snap(new_start, pixels_per_second, 5.0);
+                            app.magnetic_snap_active = did_snap;
+                            if did_snap { app.magnetic_snap_sample = s; }
+                            s
+                        }
                     };
 
                     if drag.track_idx < app.project.tracks.len()
@@ -2087,6 +2191,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         if response.drag_stopped() {
             app.magnetic_snap_active = false;
+            app.clip_edge_snap_sample = None;
             if app.dragging_fade.is_some() {
                 app.dragging_fade = None;
                 app.sync_project();
@@ -3648,6 +3753,53 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
+        // Clip edge snap indicator — bright green line when snapping to another clip's edge
+        if let Some(edge_sample) = app.clip_edge_snap_sample {
+            if app.dragging_clip.is_some() || app.dragging_clips.is_some() {
+                let snap_sec = edge_sample as f64 / sample_rate;
+                let snap_x = rect.min.x + snap_sec as f32 * pixels_per_second - app.scroll_x;
+                if snap_x >= rect.min.x && snap_x <= rect.max.x {
+                    painter.line_segment(
+                        [egui::pos2(snap_x, rect.min.y), egui::pos2(snap_x, rect.max.y)],
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(80, 255, 120)),
+                    );
+                }
+            }
+        }
+
+        // Ruler hover preview line — shows where the playhead would go on click
+        {
+            app.ruler_hover_sample = None;
+            if let Some(hover_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                if hover_pos.y >= ruler_rect.min.y && hover_pos.y <= ruler_rect.max.y
+                    && hover_pos.x >= rect.min.x && hover_pos.x <= rect.max.x
+                {
+                    let x_offset = hover_pos.x - rect.min.x + app.scroll_x;
+                    let seconds = x_offset as f64 / pixels_per_second as f64;
+                    let sample = (seconds * sample_rate).max(0.0) as u64;
+                    app.ruler_hover_sample = Some(sample);
+
+                    // Draw the preview line (dimmed)
+                    let preview_x = hover_pos.x;
+                    painter.line_segment(
+                        [egui::pos2(preview_x, ruler_rect.max.y), egui::pos2(preview_x, rect.max.y)],
+                        egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(255, 80, 80, 80)),
+                    );
+                    // Small triangle at ruler bottom
+                    let tri = 4.0;
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(preview_x, ruler_rect.max.y),
+                            egui::pos2(preview_x - tri, ruler_rect.max.y - tri),
+                            egui::pos2(preview_x + tri, ruler_rect.max.y - tri),
+                        ],
+                        egui::Color32::from_rgba_premultiplied(255, 80, 80, 80),
+                        egui::Stroke::NONE,
+                    ));
+                }
+            }
+        }
+
         // Playhead
         let pos = app.position_samples();
         let pos_sec = pos as f64 / sample_rate;
@@ -4141,6 +4293,7 @@ enum TrackAction {
     ToggleSoloExclusive(usize),
     ToggleArm(usize),
     SetVolume(usize, f32),
+    SetPan(usize, f32),
     Select(usize),
     Delete(usize),
     Duplicate(usize),
