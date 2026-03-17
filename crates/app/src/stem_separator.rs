@@ -7,6 +7,50 @@ use crate::DawApp;
 
 const SERVICE_URL: &str = "http://localhost:8000";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const DOCKER_IMAGE: &str = "jamhub/stem-separator:latest";
+const CONTAINER_NAME: &str = "jamhub-stem-separator";
+
+/// Docker environment state.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DockerState {
+    Unknown,
+    NotInstalled,
+    ImageMissing,
+    Pulling { progress: String },
+    ContainerStopped,
+    Running,
+}
+
+fn check_docker_installed() -> bool {
+    std::process::Command::new("docker").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+fn check_docker_image_exists() -> bool {
+    std::process::Command::new("docker").args(["image", "inspect", DOCKER_IMAGE])
+        .output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+fn check_container_running() -> bool {
+    std::process::Command::new("docker").args(["inspect", "-f", "{{.State.Running}}", CONTAINER_NAME])
+        .output().map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true").unwrap_or(false)
+}
+
+fn start_docker_container() -> Result<(), String> {
+    // Remove old container if exists
+    let _ = std::process::Command::new("docker").args(["rm", "-f", CONTAINER_NAME]).output();
+    let output = std::process::Command::new("docker")
+        .args(["run", "-d", "--name", CONTAINER_NAME, "-p", "8000:8000", DOCKER_IMAGE])
+        .output().map_err(|e| format!("Failed to start container: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+fn stop_docker_container() {
+    let _ = std::process::Command::new("docker").args(["stop", CONTAINER_NAME]).output();
+}
 
 /// Which input mode the user has selected.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -64,6 +108,8 @@ pub struct StemSeparatorPanel {
     pub selected_file: Option<PathBuf>,
     pub job_state: JobState,
     pub service_available: Option<bool>,
+    pub docker_state: DockerState,
+    pub docker_pulling: bool,
     last_health_check: Instant,
     last_poll: Instant,
     /// Background thread result channel.
@@ -79,6 +125,8 @@ impl Default for StemSeparatorPanel {
             selected_file: None,
             job_state: JobState::Idle,
             service_available: None,
+            docker_state: DockerState::Unknown,
+            docker_pulling: false,
             last_health_check: Instant::now() - Duration::from_secs(60),
             last_poll: Instant::now(),
             bg_result: Arc::new(Mutex::new(None)),
@@ -379,37 +427,111 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
         .resizable(true)
         .collapsible(true)
         .show(ctx, |ui| {
-            // Service availability banner
+            // Service availability — Docker management
             match app.stem_sep.service_available {
                 Some(false) | None => {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("!")
-                                .size(14.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(235, 180, 60)),
-                        );
-                        ui.vertical(|ui| {
-                            ui.label(
-                                egui::RichText::new("Stem separation service not available")
-                                    .size(11.0)
-                                    .color(egui::Color32::from_rgb(200, 160, 60)),
-                            );
-                            ui.label(
-                                egui::RichText::new(
-                                    "Start it with: cd tools/stem_separator && python server.py",
-                                )
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(140, 138, 132))
-                                .family(egui::FontFamily::Monospace),
-                            );
-                        });
-                    });
+                    // Check Docker state if unknown
+                    if app.stem_sep.docker_state == DockerState::Unknown {
+                        if !check_docker_installed() {
+                            app.stem_sep.docker_state = DockerState::NotInstalled;
+                        } else if check_container_running() {
+                            app.stem_sep.docker_state = DockerState::Running;
+                        } else if check_docker_image_exists() {
+                            app.stem_sep.docker_state = DockerState::ContainerStopped;
+                        } else {
+                            app.stem_sep.docker_state = DockerState::ImageMissing;
+                        }
+                    }
+
+                    match &app.stem_sep.docker_state {
+                        DockerState::NotInstalled => {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("!").size(14.0).strong().color(egui::Color32::from_rgb(232, 80, 80)));
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new("Docker is required for AI stem separation").size(12.0).color(egui::Color32::from_rgb(232, 80, 80)));
+                                    ui.label(egui::RichText::new("Install Docker Desktop from https://docker.com/download").size(10.0).color(egui::Color32::from_rgb(140, 138, 132)));
+                                });
+                            });
+                        }
+                        DockerState::ImageMissing => {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("!").size(14.0).strong().color(egui::Color32::from_rgb(235, 180, 60)));
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new("Stem separator image not found").size(12.0).color(egui::Color32::from_rgb(200, 160, 60)));
+                                    if app.stem_sep.docker_pulling {
+                                        ui.horizontal(|ui| {
+                                            ui.spinner();
+                                            ui.label(egui::RichText::new("Building image... this may take a few minutes").size(10.0).color(egui::Color32::from_rgb(140, 140, 150)));
+                                        });
+                                    } else {
+                                        if ui.button(egui::RichText::new("Build Docker Image").color(egui::Color32::from_rgb(235, 180, 60))).clicked() {
+                                            app.stem_sep.docker_pulling = true;
+                                            std::thread::spawn(|| {
+                                                let dockerfile_dir = std::path::Path::new("tools/stem_separator");
+                                                let _ = std::process::Command::new("docker")
+                                                    .args(["build", "-t", DOCKER_IMAGE, "."])
+                                                    .current_dir(dockerfile_dir)
+                                                    .output();
+                                            });
+                                        }
+                                        ui.label(egui::RichText::new("First time setup — downloads ~2GB of AI models").size(9.0).color(egui::Color32::from_rgb(110, 110, 120)));
+                                    }
+                                });
+                            });
+                            // Re-check periodically while pulling
+                            if app.stem_sep.docker_pulling && app.stem_sep.last_health_check.elapsed() > Duration::from_secs(5) {
+                                app.stem_sep.last_health_check = Instant::now();
+                                if check_docker_image_exists() {
+                                    app.stem_sep.docker_pulling = false;
+                                    app.stem_sep.docker_state = DockerState::ContainerStopped;
+                                }
+                                ctx.request_repaint();
+                            }
+                        }
+                        DockerState::Pulling { progress } => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(egui::RichText::new(format!("Pulling image... {progress}")).size(11.0).color(egui::Color32::from_rgb(140, 140, 150)));
+                            });
+                        }
+                        DockerState::ContainerStopped => {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("!").size(14.0).strong().color(egui::Color32::from_rgb(235, 180, 60)));
+                                ui.label(egui::RichText::new("Stem separator ready").size(12.0).color(egui::Color32::from_rgb(200, 160, 60)));
+                                if ui.button(egui::RichText::new("Start").color(egui::Color32::from_rgb(80, 200, 80))).clicked() {
+                                    match start_docker_container() {
+                                        Ok(()) => {
+                                            app.stem_sep.docker_state = DockerState::Running;
+                                            app.stem_sep.service_available = None; // Re-check health
+                                            app.stem_sep.last_health_check = Instant::now() - Duration::from_secs(60);
+                                        }
+                                        Err(e) => app.set_status(&format!("Docker start failed: {e}")),
+                                    }
+                                }
+                            });
+                        }
+                        DockerState::Running => {
+                            // Container running but service not responding yet — might be starting up
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(egui::RichText::new("Service starting up...").size(11.0).color(egui::Color32::from_rgb(140, 140, 150)));
+                            });
+                        }
+                        DockerState::Unknown => {}
+                    }
+
                     ui.add_space(6.0);
                     ui.separator();
                     ui.add_space(4.0);
                 }
-                Some(true) => {}
+                Some(true) => {
+                    // Service is running — show green indicator
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("*").size(10.0).color(egui::Color32::from_rgb(80, 200, 80)));
+                        ui.label(egui::RichText::new("AI service connected").size(9.0).color(egui::Color32::from_rgb(80, 200, 80)));
+                    });
+                    ui.add_space(4.0);
+                }
             }
 
             match app.stem_sep.job_state.clone() {

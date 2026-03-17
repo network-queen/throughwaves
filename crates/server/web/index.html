@@ -2095,6 +2095,120 @@ function init() {
   renderPage();
 }
 
+// ── AI Stem Separation ──────────────────────────────────────
+const STEM_SERVICE = 'http://localhost:8000';
+const STEM_COLORS = { vocals: '#EB82B4', drums: '#EBB43C', bass: '#64B4FF', other: '#8CDC8C' };
+
+async function checkStemService() {
+  try {
+    const r = await fetch(STEM_SERVICE + '/health', { signal: AbortSignal.timeout(3000) });
+    return r.ok;
+  } catch { return false; }
+}
+
+async function openStemSeparation(trackId, audioUrl) {
+  const available = await checkStemService();
+  if (!available) {
+    alert('Stem separation service not available.\n\nStart it with:\n  cd tools/stem_separator && python server.py');
+    return;
+  }
+
+  // Create modal overlay
+  const overlay = document.createElement('div');
+  overlay.id = 'stemModal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2rem;max-width:480px;width:90%;box-shadow:var(--shadow-lg);">
+      <h3 style="margin-bottom:1rem;font-size:1.2rem;">AI Stem Separation</h3>
+      <div id="stemContent">
+        <p style="color:var(--text-secondary);margin-bottom:1rem;">Separate this track into individual stems using AI (vocals, drums, bass, other).</p>
+        <button class="btn btn-primary" onclick="startStemSeparation('${audioUrl}')">Start Separation</button>
+        <button class="btn btn-secondary" onclick="closeStemModal()" style="margin-left:0.5rem;">Cancel</button>
+      </div>
+    </div>
+  `;
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeStemModal(); });
+  document.body.appendChild(overlay);
+}
+
+function closeStemModal() {
+  const m = document.getElementById('stemModal');
+  if (m) m.remove();
+}
+
+async function startStemSeparation(audioUrl) {
+  const content = document.getElementById('stemContent');
+  content.innerHTML = '<p style="color:var(--text-secondary);">Submitting to AI service...</p>';
+
+  try {
+    const resp = await fetch(STEM_SERVICE + '/separate/url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: audioUrl }),
+    });
+    const data = await resp.json();
+    if (!data.job_id) { content.innerHTML = '<p style="color:var(--red);">Failed to start separation.</p>'; return; }
+    pollStemJob(data.job_id);
+  } catch (e) {
+    content.innerHTML = `<p style="color:var(--red);">Error: ${e.message}</p>`;
+  }
+}
+
+async function pollStemJob(jobId) {
+  const content = document.getElementById('stemContent');
+
+  const poll = async () => {
+    try {
+      const resp = await fetch(STEM_SERVICE + '/status/' + jobId);
+      const data = await resp.json();
+
+      if (data.status === 'complete') {
+        showStemResults(jobId, data.stems || []);
+        return;
+      } else if (data.status === 'failed') {
+        content.innerHTML = `<p style="color:var(--red);">Separation failed: ${data.error || 'Unknown error'}</p>
+          <button class="btn btn-secondary" onclick="closeStemModal()">Close</button>`;
+        return;
+      }
+
+      const pct = Math.round((data.progress || 0) * 100);
+      content.innerHTML = `
+        <p style="color:var(--text-secondary);margin-bottom:0.5rem;">${data.message || 'Processing...'}</p>
+        <div style="background:var(--bg-base);border-radius:6px;height:8px;overflow:hidden;margin-bottom:0.5rem;">
+          <div style="background:var(--accent);height:100%;width:${pct}%;transition:width 0.3s;border-radius:6px;"></div>
+        </div>
+        <p style="color:var(--text-muted);font-size:0.85rem;">${pct}% complete</p>
+      `;
+      setTimeout(poll, 2000);
+    } catch {
+      content.innerHTML = '<p style="color:var(--red);">Lost connection to stem service.</p>';
+    }
+  };
+
+  poll();
+}
+
+function showStemResults(jobId, stems) {
+  const content = document.getElementById('stemContent');
+  const stemCards = stems.map(s => {
+    const color = STEM_COLORS[s] || '#aaa';
+    return `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:0.6rem 0.8rem;background:var(--bg-base);border-radius:var(--radius);border:1px solid ${color}33;margin-bottom:0.4rem;">
+        <span style="color:${color};font-weight:600;">${s.charAt(0).toUpperCase() + s.slice(1)}</span>
+        <a href="${STEM_SERVICE}/stems/${jobId}/${s}" download="${s}.wav" class="btn btn-secondary btn-sm" style="font-size:0.8rem;">Download WAV</a>
+      </div>
+    `;
+  }).join('');
+
+  content.innerHTML = `
+    <p style="color:var(--green);font-weight:600;margin-bottom:0.75rem;">Separation Complete</p>
+    ${stemCards}
+    <div style="margin-top:1rem;">
+      <button class="btn btn-secondary" onclick="closeStemModal()">Close</button>
+    </div>
+  `;
+}
+
 init();
 </script>
 </body>
