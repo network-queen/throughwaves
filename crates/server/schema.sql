@@ -102,3 +102,26 @@ CREATE TABLE IF NOT EXISTS project_versions (
 );
 
 CREATE INDEX idx_project_versions_project ON project_versions(project_id);
+
+-- Follows (user follow system)
+CREATE TABLE IF NOT EXISTS follows (
+    follower_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    following_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (follower_id, following_id),
+    CHECK (follower_id != following_id)
+);
+
+CREATE INDEX idx_follows_follower ON follows(follower_id);
+CREATE INDEX idx_follows_following ON follows(following_id);
+
+-- Reposts (track repost system)
+CREATE TABLE IF NOT EXISTS reposts (
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    track_id   UUID NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, track_id)
+);
+
+CREATE INDEX idx_reposts_user ON reposts(user_id);
+CREATE INDEX idx_reposts_track ON reposts(track_id);

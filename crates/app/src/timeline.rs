@@ -32,6 +32,46 @@ fn track_height(track: &jamhub_model::Track, vz: f32) -> f32 {
     }
 }
 
+/// Calculate the optimal track height based on clip content.
+/// For audio tracks: comfortable waveform display (80px).
+/// For MIDI tracks: fit all note content with padding.
+/// If multiple take lanes are visible, account for those.
+fn auto_fit_track_height(track: &jamhub_model::Track) -> f32 {
+    let lanes = compute_take_lanes(track);
+    let max_lane = lanes.iter().map(|&(_, l)| l).max().unwrap_or(0);
+
+    let base = match track.kind {
+        jamhub_model::TrackKind::Audio | jamhub_model::TrackKind::Bus => 80.0,
+        jamhub_model::TrackKind::Midi => {
+            // Fit MIDI notes: find pitch range, map to height with padding
+            let mut min_note = 127u8;
+            let mut max_note = 0u8;
+            for clip in &track.clips {
+                if let jamhub_model::ClipSource::Midi { ref notes, .. } = clip.source {
+                    for note in notes {
+                        min_note = min_note.min(note.pitch);
+                        max_note = max_note.max(note.pitch);
+                    }
+                }
+            }
+            if max_note >= min_note {
+                let note_range = (max_note - min_note) as f32 + 1.0;
+                // 2px per note + 20px padding, minimum 60px
+                (note_range * 2.0 + 20.0).max(60.0).min(200.0)
+            } else {
+                80.0 // default if no MIDI content
+            }
+        }
+    };
+
+    if track.lanes_expanded && max_lane > 0 {
+        // Multiple take lanes: scale by lane count
+        ((max_lane + 1) as f32 * TAKE_LANE_HEIGHT).max(base)
+    } else {
+        base
+    }
+}
+
 /// Determine the ordered list of group IDs that appear before each track.
 /// Returns a list of (group_id, first_track_index) for each unique group.
 fn group_order(app: &DawApp) -> Vec<(Uuid, usize)> {
@@ -829,13 +869,17 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.sync_project();
                     }
                     TrackAction::ToggleArm(i) => {
+                        app.push_undo("Toggle arm");
                         app.project.tracks[i].armed = !app.project.tracks[i].armed;
+                        app.sync_project();
                     }
                     TrackAction::SetVolume(i, v) => {
+                        app.push_undo("Change volume");
                         app.project.tracks[i].volume = v;
                         app.sync_project();
                     }
                     TrackAction::SetPan(i, v) => {
+                        app.push_undo("Change pan");
                         app.project.tracks[i].pan = v;
                         app.sync_project();
                     }
@@ -1386,8 +1430,31 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         // Double-click anywhere: navigate playhead to that exact time point
         // Double-click on a clip: open/close clip properties panel
+        // Double-click on a track separator: auto-fit track height
         if response.double_clicked() {
             if let Some(pos) = response.interact_pointer_pos {
+                // Check if double-click is on a track separator — auto-fit height
+                let mut separator_hit = false;
+                {
+                    let sep_zone = 6.0;
+                    for (i, track) in app.project.tracks.iter().enumerate() {
+                        if is_track_collapsed(app, i) {
+                            continue;
+                        }
+                        let sep_y = tracks_y_start + track_offsets[i] + track_height(track, app.track_height_zoom);
+                        if (pos.y - sep_y).abs() < sep_zone && pos.x >= rect.min.x && pos.x <= rect.max.x {
+                            // Auto-fit: calculate optimal height based on content
+                            let optimal = auto_fit_track_height(&app.project.tracks[i]);
+                            app.project.tracks[i].custom_height = optimal;
+                            separator_hit = true;
+                            break;
+                        }
+                    }
+                }
+                if separator_hit {
+                    // Skip normal double-click behavior
+                } else {
+
                 let mut clicked_on_clip = false;
                 for &(ti, ci, _, cr) in &clip_rects {
                     if cr.contains(pos) {
@@ -1415,6 +1482,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.selected_track = Some(ti);
                     }
                 }
+
+                } // end else (not separator_hit)
             }
         }
 
@@ -3846,11 +3915,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
-        // Playhead
+        // Playhead — crisp 1px line with half-pixel offset for anti-aliased rendering
         let pos = app.position_samples();
         let pos_sec = pos as f64 / sample_rate;
-        let playhead_x =
+        let playhead_x_raw =
             rect.min.x + pos_sec as f32 * pixels_per_second - app.scroll_x;
+        // Snap to half-pixel for crisp 1px rendering on retina/non-retina displays
+        let playhead_x = (playhead_x_raw * 2.0).round() / 2.0;
+        let playhead_color = egui::Color32::from_rgb(245, 190, 50); // bright amber/gold
 
         if playhead_x >= rect.min.x && playhead_x <= rect.max.x {
             painter.line_segment(
@@ -3858,7 +3930,15 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     egui::pos2(playhead_x, rect.min.y),
                     egui::pos2(playhead_x, rect.max.y),
                 ],
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 80, 80)),
+                egui::Stroke::new(1.0, playhead_color),
+            );
+            // Subtle glow for visibility against both light and dark clip backgrounds
+            painter.line_segment(
+                [
+                    egui::pos2(playhead_x, rect.min.y),
+                    egui::pos2(playhead_x, rect.max.y),
+                ],
+                egui::Stroke::new(3.0, egui::Color32::from_rgba_premultiplied(245, 190, 50, 40)),
             );
             let tri = 6.0;
             painter.add(egui::Shape::convex_polygon(
@@ -3867,7 +3947,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     egui::pos2(playhead_x - tri, ruler_rect.max.y - tri),
                     egui::pos2(playhead_x + tri, ruler_rect.max.y - tri),
                 ],
-                egui::Color32::from_rgb(255, 80, 80),
+                playhead_color,
                 egui::Stroke::NONE,
             ));
         }

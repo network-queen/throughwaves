@@ -49,6 +49,21 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for AuthUser {
     }
 }
 
+/// Optional auth extractor: returns Some(user_id) if authenticated, None otherwise.
+#[derive(Debug, Clone, Copy)]
+pub struct OptionalAuthUser(pub Option<Uuid>);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for OptionalAuthUser {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(OptionalAuthUser(parts.extensions.get::<Uuid>().copied()))
+    }
+}
+
 /// Middleware: validates JWT and inserts user_id into request extensions.
 pub async fn jwt_auth(mut req: Request, next: Next) -> Response {
     let auth_header = req

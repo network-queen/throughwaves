@@ -1,6 +1,7 @@
 mod auth;
 mod models;
 mod projects;
+mod social;
 mod tracks;
 
 use axum::{extract::Request, middleware, response::Response, Router};
@@ -51,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(auth::router())
         .merge(tracks::router())
         .merge(projects::router())
+        .merge(social::router())
         .route_layer(middleware::from_fn(auth::jwt_auth));
 
     let app = Router::new()

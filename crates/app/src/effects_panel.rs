@@ -10,7 +10,23 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
 
     let track_idx = match app.selected_track {
         Some(i) if i < app.project.tracks.len() => i,
-        _ => return,
+        _ => {
+            let mut open = true;
+            egui::Window::new("FX Chain").constrain(false)
+                .open(&mut open)
+                .default_width(260.0)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new("Cannot add effect: select a track first")
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(200, 160, 60)),
+                    );
+                });
+            if !open {
+                app.show_effects = false;
+            }
+            return;
+        }
     };
 
     let mut open = true;

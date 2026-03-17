@@ -478,6 +478,99 @@ select { cursor: pointer; }
   .bp-track-info { flex: 0 0 100px; }
 }
 
+/* ===== Track Detail / Waveform Comments ===== */
+.track-detail-waveform {
+  position: relative; height: 120px; margin-bottom: 0.5rem;
+  border-radius: var(--radius); overflow: visible; cursor: crosshair;
+}
+.track-detail-waveform .waveform-canvas { width: 100%; height: 100%; display: block; }
+.waveform-comment-markers {
+  position: absolute; top: -8px; left: 0; right: 0; height: 24px; pointer-events: none;
+}
+.waveform-comment-dot {
+  position: absolute; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--bg-panel);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.55rem; font-weight: 700; color: #000;
+  transform: translateX(-50%); cursor: pointer; pointer-events: auto;
+  transition: transform 0.15s; z-index: 2;
+}
+.waveform-comment-dot:hover { transform: translateX(-50%) scale(1.3); z-index: 3; }
+.waveform-time-indicator {
+  position: absolute; bottom: -22px; left: 0;
+  font-size: 0.7rem; color: var(--accent); font-weight: 600;
+  pointer-events: none; display: none;
+  background: var(--bg-panel); padding: 1px 6px; border-radius: 4px;
+}
+
+.comment-input-bar {
+  display: flex; gap: 0.75rem; align-items: center;
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 0.6rem 0.9rem; margin-bottom: 1rem;
+}
+.comment-input-bar .comment-timestamp {
+  font-size: 0.8rem; color: var(--accent); font-weight: 600;
+  min-width: 42px; font-variant-numeric: tabular-nums;
+}
+.comment-input-bar input {
+  flex: 1; border: none; background: transparent; padding: 0.3rem 0;
+}
+.comment-input-bar button {
+  padding: 0.35rem 0.85rem; background: var(--accent); color: #000;
+  border-radius: var(--radius); font-weight: 600; font-size: 0.8rem;
+}
+
+.comment-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.comment-item {
+  display: flex; gap: 0.75rem; padding: 0.65rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.comment-item:last-child { border-bottom: none; }
+.comment-avatar {
+  width: 28px; height: 28px; border-radius: 50%; background: var(--bg-elevated);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 0.65rem; color: var(--accent);
+  flex-shrink: 0; border: 1px solid var(--border);
+}
+.comment-body { flex: 1; min-width: 0; }
+.comment-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.15rem; }
+.comment-username { font-weight: 600; font-size: 0.825rem; cursor: pointer; }
+.comment-username:hover { color: var(--accent); }
+.comment-time-link {
+  font-size: 0.75rem; color: var(--accent); cursor: pointer;
+  font-variant-numeric: tabular-nums; font-weight: 500;
+}
+.comment-time-link:hover { text-decoration: underline; }
+.comment-date { font-size: 0.7rem; color: var(--text-muted); margin-left: auto; }
+.comment-text { font-size: 0.875rem; color: var(--text-secondary); }
+
+/* ===== Profile Stats ===== */
+.profile-stats {
+  display: flex; gap: 1.5rem; margin-top: 0.5rem;
+}
+.profile-stat {
+  font-size: 0.85rem; color: var(--text-secondary); cursor: pointer;
+}
+.profile-stat:hover { color: var(--text-primary); }
+.profile-stat strong { color: var(--text-primary); font-weight: 700; }
+
+.follow-btn {
+  padding: 0.45rem 1.2rem; border-radius: 20px; font-weight: 600; font-size: 0.85rem;
+  transition: all var(--transition); border: 1px solid var(--accent);
+}
+.follow-btn.following { background: var(--accent-dim); color: var(--accent); }
+.follow-btn.not-following { background: var(--accent); color: #000; }
+.follow-btn:hover { opacity: 0.85; }
+
+/* ===== Repost Button ===== */
+.repost-btn {
+  display: flex; align-items: center; gap: 0.3rem;
+  color: var(--text-muted); font-size: 0.825rem; padding: 0.3rem 0.5rem;
+  border-radius: var(--radius); transition: all var(--transition);
+}
+.repost-btn:hover { color: var(--green); background: rgba(87,171,90,0.1); }
+.repost-btn.reposted { color: var(--green); }
+
 /* ===== Utilities ===== */
 .hidden { display: none !important; }
 .mt-1 { margin-top: 0.5rem; }
@@ -502,6 +595,7 @@ select { cursor: pointer; }
       <div class="nav-links" id="navLinks">
         <a href="#/home" data-route="home">Home</a>
         <a href="#/explore" data-route="explore">Explore</a>
+        <a href="#/feed" data-route="feed">Feed</a>
         <a href="#/projects" data-route="projects">Projects</a>
         <a href="#/upload" data-route="upload">Upload</a>
         <a href="#/profile" data-route="profile">Profile</a>
@@ -729,6 +823,53 @@ async function apiProposeTrack(projectId, formData) {
   return fetchAPI(`/api/projects/${projectId}/tracks`, { method: 'POST', body: formData });
 }
 
+async function apiLikeTrack(id) {
+  return fetchAPI(`/api/tracks/${id}/like`, { method: 'POST' });
+}
+
+async function apiRepostTrack(id) {
+  return fetchAPI(`/api/tracks/${id}/repost`, { method: 'POST' });
+}
+
+async function apiPostComment(trackId, text, timestampSeconds) {
+  return fetchAPI(`/api/tracks/${trackId}/comments`, {
+    method: 'POST',
+    body: { text, timestamp_seconds: timestampSeconds }
+  });
+}
+
+async function apiPlayTrack(id) {
+  return fetchAPI(`/api/tracks/${id}/play`, { method: 'POST' });
+}
+
+async function apiGetUserProfile(id) {
+  return fetchAPI(`/api/users/${id}`);
+}
+
+async function apiGetUserTracks(id) {
+  return fetchAPI(`/api/users/${id}/tracks`);
+}
+
+async function apiGetUserReposts(id) {
+  return fetchAPI(`/api/users/${id}/reposts`);
+}
+
+async function apiFollowUser(id) {
+  return fetchAPI(`/api/users/${id}/follow`, { method: 'POST' });
+}
+
+async function apiGetFollowers(id) {
+  return fetchAPI(`/api/users/${id}/followers`);
+}
+
+async function apiGetFollowing(id) {
+  return fetchAPI(`/api/users/${id}/following`);
+}
+
+async function apiGetFeed(page = 1) {
+  return fetchAPI(`/api/feed?page=${page}`);
+}
+
 // ===== Router =====
 function navigate(route) {
   window.location.hash = `#/${route}`;
@@ -888,7 +1029,10 @@ function drawWaveform(canvas, data, progress = 0) {
 
 // Store waveform data per track so it persists
 const waveformCache = {};
-function getWaveformData(trackId) {
+function getWaveformData(trackId, serverData) {
+  if (serverData && Array.isArray(serverData) && serverData.length > 0) {
+    waveformCache[trackId] = serverData;
+  }
   if (!waveformCache[trackId]) waveformCache[trackId] = generateWaveformData();
   return waveformCache[trackId];
 }
@@ -1006,8 +1150,8 @@ audioEl.addEventListener('timeupdate', () => {
 
 function updatePlayButtons() {
   document.querySelectorAll('.play-btn').forEach(btn => {
-    const tid = parseInt(btn.dataset.trackId);
-    if (state.currentTrack && tid === state.currentTrack.id && state.isPlaying) {
+    const tid = btn.dataset.trackId;
+    if (state.currentTrack && (tid == state.currentTrack.id) && state.isPlaying) {
       btn.innerHTML = '&#9646;&#9646;';
       btn.classList.add('playing');
     } else {
@@ -1018,7 +1162,26 @@ function updatePlayButtons() {
 }
 
 // ===== Like Toggle =====
-function toggleLike(trackId) {
+async function toggleLike(trackId) {
+  if (!state.user) { openAuthModal(); return; }
+  // Try API first
+  const result = await apiLikeTrack(trackId);
+  if (result) {
+    const btn = document.querySelector(`.like-btn[data-track-id="${trackId}"]`);
+    if (btn) {
+      btn.classList.toggle('liked', result.liked);
+      // Update the track in our cache
+      const track = findTrackById(trackId);
+      if (track) {
+        track.liked = result.liked;
+        track.likes = (track.likes || 0) + (result.liked ? 1 : -1);
+        btn.querySelector('.like-count').textContent = track.likes;
+      }
+      btn.querySelector('.like-heart').textContent = result.liked ? '\u2665' : '\u2661';
+    }
+    return;
+  }
+  // Demo fallback
   const track = demoTracks.find(t => t.id === trackId);
   if (!track) return;
   track.liked = !track.liked;
@@ -1030,6 +1193,29 @@ function toggleLike(trackId) {
     btn.querySelector('.like-heart').textContent = track.liked ? '\u2665' : '\u2661';
   }
 }
+
+// ===== Repost Toggle =====
+async function toggleRepost(trackId) {
+  if (!state.user) { openAuthModal(); return; }
+  const result = await apiRepostTrack(trackId);
+  if (result) {
+    const btn = document.querySelector(`.repost-btn[data-track-id="${trackId}"]`);
+    if (btn) {
+      btn.classList.toggle('reposted', result.reposted);
+      btn.querySelector('.repost-count').textContent = result.repost_count || 0;
+    }
+  }
+}
+
+// ===== Track lookup helper =====
+function findTrackById(trackId) {
+  // Search demo tracks and API-loaded tracks
+  let t = demoTracks.find(t => t.id === trackId || t.id == trackId);
+  if (!t && state._loadedTracks) t = state._loadedTracks.find(t => t.id === trackId || t.id == trackId);
+  return t;
+}
+// Cache for API-loaded tracks
+if (!state._loadedTracks) state._loadedTracks = [];
 
 // ===== Voting =====
 function voteTrack(projectId, trackId, direction) {
@@ -1047,14 +1233,24 @@ function voteTrack(projectId, trackId, direction) {
 
 // ===== Render Helpers =====
 function trackCardHTML(track) {
-  const icon = COVER_ICONS[track.id % COVER_ICONS.length];
+  const icon = COVER_ICONS[(typeof track.id === 'string' ? track.id.charCodeAt(0) : track.id) % COVER_ICONS.length];
+  const artistName = track.artist || track._username || 'Unknown';
+  const duration = track.duration || track.duration_seconds || 0;
+  const likes = track.likes || 0;
+  const trackIdStr = typeof track.id === 'string' ? `'${track.id}'` : track.id;
+  const titleClick = typeof track.id === 'string' ? `onclick="navigate('track/${track.id}')"` : '';
+  const artistClick = track.user_id ? `onclick="navigate('user/${track.user_id}')"` : '';
+  // Cache server waveform data if available
+  if (track.waveform_data && Array.isArray(track.waveform_data)) {
+    getWaveformData(track.id, track.waveform_data);
+  }
   return `
     <div class="track-card">
       <div class="track-card-top">
         <div class="track-cover"><span class="track-cover-art">${icon}</span></div>
         <div class="track-info">
-          <div class="track-title">${esc(track.title)}</div>
-          <div class="track-artist">${esc(track.artist)}</div>
+          <div class="track-title" style="cursor:pointer;" ${titleClick}>${esc(track.title)}</div>
+          <div class="track-artist" style="cursor:pointer;" ${artistClick}>${esc(artistName)}</div>
           <div class="track-meta">
             <span>${track.genre || ''}</span>
             ${track.bpm ? `<span>${track.bpm} BPM</span>` : ''}
@@ -1062,43 +1258,64 @@ function trackCardHTML(track) {
           </div>
         </div>
       </div>
-      <div class="waveform-container" onclick="handleWaveformClick(event, ${track.id})">
+      <div class="waveform-container" onclick="handleWaveformClick(event, ${trackIdStr})">
         <canvas class="waveform-canvas" data-track-id="${track.id}"></canvas>
       </div>
       <div class="track-card-bottom">
-        <button class="play-btn" data-track-id="${track.id}" onclick="onPlayClick(${track.id})">&#9654;</button>
-        <span class="track-duration">${formatTime(track.duration)}</span>
-        <button class="like-btn ${track.liked ? 'liked' : ''}" data-track-id="${track.id}" onclick="toggleLike(${track.id})">
+        <button class="play-btn" data-track-id="${track.id}" onclick="onPlayClick(${trackIdStr})">&#9654;</button>
+        <span class="track-duration">${formatTime(duration)}</span>
+        <button class="repost-btn" data-track-id="${track.id}" onclick="toggleRepost(${trackIdStr})">
+          <span>&#8635;</span>
+          <span class="repost-count">${track.repost_count || 0}</span>
+        </button>
+        <button class="like-btn ${track.liked ? 'liked' : ''}" data-track-id="${track.id}" onclick="toggleLike(${trackIdStr})">
           <span class="like-heart">${track.liked ? '\u2665' : '\u2661'}</span>
-          <span class="like-count">${track.likes}</span>
+          <span class="like-count">${likes}</span>
         </button>
       </div>
     </div>`;
 }
 
 function onPlayClick(trackId) {
-  const track = demoTracks.find(t => t.id === trackId);
+  const track = findTrackById(trackId) || demoTracks.find(t => t.id === trackId);
   if (!track) return;
-  if (state.currentTrack && state.currentTrack.id === trackId) {
+  if (state.currentTrack && (state.currentTrack.id === trackId || state.currentTrack.id == trackId)) {
     playerToggle();
   } else {
-    playTrack(track);
+    // Normalize track for player
+    const playable = {
+      ...track,
+      audioUrl: track.audioUrl || track.audio_url || null,
+      duration: track.duration || track.duration_seconds || 200,
+      artist: track.artist || track._username || 'Unknown',
+    };
+    playTrack(playable);
+    // Fire play count
+    if (typeof trackId === 'string') apiPlayTrack(trackId);
   }
 }
 
 function handleWaveformClick(e, trackId) {
-  const track = demoTracks.find(t => t.id === trackId);
+  const track = findTrackById(trackId) || demoTracks.find(t => t.id === trackId);
   if (!track) return;
-  if (!state.currentTrack || state.currentTrack.id !== trackId) {
-    playTrack(track);
+  if (!state.currentTrack || (state.currentTrack.id !== trackId && state.currentTrack.id != trackId)) {
+    const playable = {
+      ...track,
+      audioUrl: track.audioUrl || track.audio_url || null,
+      duration: track.duration || track.duration_seconds || 200,
+      artist: track.artist || track._username || 'Unknown',
+    };
+    playTrack(playable);
+    if (typeof trackId === 'string') apiPlayTrack(trackId);
   }
   // Seek within waveform
   const rect = e.currentTarget.getBoundingClientRect();
   const pct = (e.clientX - rect.left) / rect.width;
-  const dur = track.duration || 200;
+  const dur = (track.duration || track.duration_seconds || 200);
   simTime = pct * dur;
   document.getElementById('bpProgressBar').style.width = (pct * 100) + '%';
   document.getElementById('bpTimeCur').textContent = formatTime(simTime);
+  if (track.audioUrl || track.audio_url) audioEl.currentTime = pct * audioEl.duration;
 }
 
 function esc(str) {
@@ -1118,8 +1335,11 @@ function renderPage() {
   else if (route === 'explore') renderExplore(main);
   else if (route === 'projects') renderProjects(main);
   else if (route.startsWith('project/')) renderProject(main, parseInt(route.split('/')[1]));
+  else if (route.startsWith('track/')) renderTrackDetail(main, route.split('/')[1]);
+  else if (route.startsWith('user/')) renderUserProfile(main, route.split('/')[1]);
   else if (route === 'upload') renderUpload(main);
   else if (route === 'profile') renderProfile(main);
+  else if (route === 'feed') renderFeed(main);
   else renderHome(main);
 
   // Draw waveforms after DOM update
@@ -1128,10 +1348,10 @@ function renderPage() {
 
 function initWaveforms() {
   document.querySelectorAll('.waveform-canvas').forEach(canvas => {
-    const tid = parseInt(canvas.dataset.trackId);
+    const tid = canvas.dataset.trackId;
     const data = getWaveformData(tid);
     let progress = 0;
-    if (state.currentTrack && state.currentTrack.id === tid && state.isPlaying) {
+    if (state.currentTrack && (state.currentTrack.id == tid) && state.isPlaying) {
       progress = simTime / (state.currentTrack.duration || 200);
     }
     drawWaveform(canvas, data, progress);
@@ -1141,33 +1361,92 @@ function initWaveforms() {
 // Handle resize
 window.addEventListener('resize', () => requestAnimationFrame(initWaveforms));
 
+// Waveform hover time indicator for track detail
+document.addEventListener('mousemove', (e) => {
+  const wf = document.getElementById('trackDetailWaveform');
+  const indicator = document.getElementById('waveformTimeIndicator');
+  if (!wf || !indicator) return;
+  const rect = wf.getBoundingClientRect();
+  if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+    const pct = (e.clientX - rect.left) / rect.width;
+    // Get duration from the canvas
+    const canvas = wf.querySelector('.waveform-canvas');
+    const trackId = canvas ? canvas.dataset.trackId : null;
+    const track = trackId ? findTrackById(trackId) : null;
+    const dur = track ? (track.duration || track.duration_seconds || 0) : 0;
+    const time = pct * dur;
+    indicator.style.display = 'block';
+    indicator.style.left = (e.clientX - rect.left) + 'px';
+    indicator.textContent = formatTime(time);
+    // Update comment timestamp
+    detailCommentTime = time;
+    const ts = document.getElementById('commentTimestamp');
+    if (ts) ts.textContent = formatTime(time);
+  } else {
+    indicator.style.display = 'none';
+  }
+});
+
 // --- Home ---
-function renderHome(el) {
-  const featured = demoTracks.slice(0, 3);
-  const recent = demoTracks.slice(3);
+async function renderHome(el) {
+  // Try API first
+  const apiResult = await apiGetTracks(1);
+  let tracks = demoTracks;
+  if (apiResult && apiResult.data && apiResult.data.length > 0) {
+    tracks = apiResult.data.map(normalizeApiTrack);
+    state._loadedTracks = [...state._loadedTracks.filter(t => !tracks.find(nt => nt.id === t.id)), ...tracks];
+  }
+
+  const featured = tracks.slice(0, 3);
+  const recent = tracks.slice(3);
 
   el.innerHTML = `
     <h1 class="page-title">Home</h1>
+    ${state.user && state.token !== 'demo_token' ? `<a href="#/feed" class="btn btn-secondary btn-sm mb-2" style="display:inline-flex;">Your Feed</a>` : ''}
     <div class="section-header">
       <h2 class="section-title">Featured Tracks</h2>
     </div>
     <div class="track-grid mb-3">${featured.map(trackCardHTML).join('')}</div>
+    ${recent.length ? `
     <div class="section-header">
       <h2 class="section-title">Recent Uploads</h2>
     </div>
     <div class="track-grid">${recent.map(trackCardHTML).join('')}</div>
+    ` : ''}
   `;
   updatePlayButtons();
+  requestAnimationFrame(initWaveforms);
+}
+
+function normalizeApiTrack(t) {
+  return {
+    ...t,
+    artist: t._username || t.artist || 'Unknown',
+    duration: t.duration_seconds || t.duration || 0,
+    likes: t.likes || 0,
+    liked: false,
+  };
 }
 
 // --- Explore ---
-function renderExplore(el) {
+async function renderExplore(el) {
   const genre = state.exploreGenre;
   const search = state.exploreSearch.toLowerCase();
-  let filtered = demoTracks;
-  if (genre && genre !== 'All') filtered = filtered.filter(t => t.genre === genre);
+
+  // Try API
+  const apiResult = await apiGetTracks(1, genre !== 'All' ? genre : '');
+  let tracks;
+  if (apiResult && apiResult.data && apiResult.data.length > 0) {
+    tracks = apiResult.data.map(normalizeApiTrack);
+    state._loadedTracks = [...state._loadedTracks.filter(t => !tracks.find(nt => nt.id === t.id)), ...tracks];
+  } else {
+    tracks = demoTracks;
+  }
+
+  let filtered = tracks;
+  if (genre && genre !== 'All' && !apiResult) filtered = filtered.filter(t => t.genre === genre);
   if (search) filtered = filtered.filter(t =>
-    t.title.toLowerCase().includes(search) || t.artist.toLowerCase().includes(search)
+    t.title.toLowerCase().includes(search) || (t.artist || '').toLowerCase().includes(search)
   );
 
   el.innerHTML = `
@@ -1184,6 +1463,7 @@ function renderExplore(el) {
     }
   `;
   updatePlayButtons();
+  requestAnimationFrame(initWaveforms);
 }
 
 function onExploreSearch(val) {
@@ -1473,6 +1753,264 @@ async function handleUpload() {
   }, 1200);
 }
 
+// --- Track Detail (SoundCloud-style comments) ---
+async function renderTrackDetail(el, trackId) {
+  el.innerHTML = '<div class="empty-state"><div class="empty-state-text">Loading track...</div></div>';
+
+  const detail = await apiGetTrack(trackId);
+  if (!detail || !detail.track) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#127925;</div><div class="empty-state-text">Track not found</div></div>';
+    return;
+  }
+
+  const track = detail.track;
+  const user = detail.user;
+  const comments = detail.comments || [];
+  const duration = track.duration_seconds || 0;
+  const icon = COVER_ICONS[(track.id.charCodeAt(0)) % COVER_ICONS.length];
+
+  // Cache waveform data and track
+  if (track.waveform_data) getWaveformData(track.id, track.waveform_data);
+  const normTrack = normalizeApiTrack({ ...track, _username: user.username });
+  state._loadedTracks = [...state._loadedTracks.filter(t => t.id !== track.id), normTrack];
+
+  // Comment markers on waveform
+  const markers = comments
+    .filter(c => c.timestamp_seconds != null && duration > 0)
+    .map(c => {
+      const pct = (c.timestamp_seconds / duration) * 100;
+      const initial = (c.user.username || '?').charAt(0).toUpperCase();
+      return `<div class="waveform-comment-dot" style="left:${pct}%;" title="${esc(c.user.username)}: ${esc(c.text)}" onclick="seekTrackTo('${track.id}', ${c.timestamp_seconds})">${initial}</div>`;
+    }).join('');
+
+  el.innerHTML = `
+    <a href="#/home" style="font-size:0.85rem;color:var(--text-secondary);display:inline-flex;align-items:center;gap:0.3rem;margin-bottom:1rem;">&larr; Back</a>
+
+    <div style="display:flex;gap:1.25rem;margin-bottom:1.5rem;align-items:start;">
+      <div class="track-cover" style="width:120px;height:120px;border-radius:var(--radius-lg);font-size:3rem;">
+        <span class="track-cover-art">${icon}</span>
+      </div>
+      <div style="flex:1;">
+        <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:0.25rem;">${esc(track.title)}</h1>
+        <div style="color:var(--text-secondary);font-size:0.95rem;cursor:pointer;" onclick="navigate('user/${user.id}')">${esc(user.username)}</div>
+        <div class="track-meta" style="margin-top:0.5rem;">
+          <span>${track.genre || ''}</span>
+          ${track.bpm ? `<span>${track.bpm} BPM</span>` : ''}
+          ${track.key ? `<span>${esc(track.key)}</span>` : ''}
+          <span>${formatTime(duration)}</span>
+          <span>&#9654; ${track.plays || 0}</span>
+          <span>&#9829; ${track.likes || 0}</span>
+        </div>
+        ${track.description ? `<p style="color:var(--text-secondary);font-size:0.9rem;margin-top:0.75rem;">${esc(track.description)}</p>` : ''}
+        <div style="display:flex;gap:0.5rem;margin-top:0.75rem;">
+          <button class="btn btn-primary btn-sm" onclick="onPlayClick('${track.id}')">&#9654; Play</button>
+          <button class="btn btn-secondary btn-sm like-btn" data-track-id="${track.id}" onclick="toggleLike('${track.id}')">
+            <span class="like-heart">&#9825;</span> <span class="like-count">${track.likes || 0}</span>
+          </button>
+          <button class="btn btn-secondary btn-sm repost-btn" data-track-id="${track.id}" onclick="toggleRepost('${track.id}')">
+            &#8635; <span class="repost-count">0</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="track-detail-waveform" id="trackDetailWaveform" onclick="handleDetailWaveformClick(event, '${track.id}', ${duration})">
+      <canvas class="waveform-canvas" data-track-id="${track.id}" style="width:100%;height:100%;"></canvas>
+      <div class="waveform-comment-markers">${markers}</div>
+      <div class="waveform-time-indicator" id="waveformTimeIndicator"></div>
+    </div>
+
+    <div class="comment-input-bar" id="commentInputBar">
+      <span class="comment-timestamp" id="commentTimestamp">0:00</span>
+      <input type="text" id="commentText" placeholder="Write a comment at this timestamp..." onkeydown="if(event.key==='Enter')postTrackComment('${track.id}')">
+      <button onclick="postTrackComment('${track.id}')">Post</button>
+    </div>
+
+    <h3 style="font-size:1rem;font-weight:600;margin-bottom:0.75rem;">Comments (${comments.length})</h3>
+    <div class="comment-list">
+      ${comments.length ? comments.map(c => `
+        <div class="comment-item">
+          <div class="comment-avatar" onclick="navigate('user/${c.user.id}')">${(c.user.username || '?').charAt(0).toUpperCase()}</div>
+          <div class="comment-body">
+            <div class="comment-header">
+              <span class="comment-username" onclick="navigate('user/${c.user.id}')">${esc(c.user.username)}</span>
+              ${c.timestamp_seconds != null ? `<span class="comment-time-link" onclick="seekTrackTo('${track.id}', ${c.timestamp_seconds})">${formatTime(c.timestamp_seconds)}</span>` : ''}
+              <span class="comment-date">${new Date(c.created_at).toLocaleDateString()}</span>
+            </div>
+            <div class="comment-text">${esc(c.text)}</div>
+          </div>
+        </div>
+      `).join('') : '<div class="empty-state"><div class="empty-state-text">No comments yet. Be the first!</div></div>'}
+    </div>
+  `;
+
+  requestAnimationFrame(initWaveforms);
+}
+
+// Comment timestamp state for track detail
+let detailCommentTime = 0;
+
+function handleDetailWaveformClick(e, trackId, duration) {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const pct = (e.clientX - rect.left) / rect.width;
+  detailCommentTime = pct * duration;
+  const ts = document.getElementById('commentTimestamp');
+  if (ts) ts.textContent = formatTime(detailCommentTime);
+
+  // Also seek if playing
+  handleWaveformClick(e, trackId);
+}
+
+function seekTrackTo(trackId, seconds) {
+  const track = findTrackById(trackId);
+  if (!track) return;
+  if (!state.currentTrack || state.currentTrack.id !== trackId) {
+    const playable = {
+      ...track,
+      audioUrl: track.audioUrl || track.audio_url || null,
+      duration: track.duration || track.duration_seconds || 200,
+      artist: track.artist || track._username || 'Unknown',
+    };
+    playTrack(playable);
+  }
+  const dur = track.duration || track.duration_seconds || 200;
+  simTime = seconds;
+  const pct = seconds / dur;
+  document.getElementById('bpProgressBar').style.width = (pct * 100) + '%';
+  document.getElementById('bpTimeCur').textContent = formatTime(seconds);
+  if (track.audioUrl || track.audio_url) {
+    audioEl.currentTime = seconds;
+  }
+}
+
+async function postTrackComment(trackId) {
+  if (!state.user) { openAuthModal(); return; }
+  const input = document.getElementById('commentText');
+  const text = input.value.trim();
+  if (!text) return;
+
+  await apiPostComment(trackId, text, detailCommentTime > 0 ? detailCommentTime : null);
+  input.value = '';
+  detailCommentTime = 0;
+  // Re-render the track detail page
+  renderTrackDetail(document.getElementById('mainContent'), trackId);
+}
+
+// --- User Profile Page ---
+async function renderUserProfile(el, userId) {
+  el.innerHTML = '<div class="empty-state"><div class="empty-state-text">Loading profile...</div></div>';
+
+  const profile = await apiGetUserProfile(userId);
+  if (!profile) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128100;</div><div class="empty-state-text">User not found</div></div>';
+    return;
+  }
+
+  // Load tracks and reposts
+  const [tracks, reposts] = await Promise.all([
+    apiGetUserTracks(userId),
+    apiGetUserReposts(userId),
+  ]);
+
+  const userTracks = (tracks || []).map(t => normalizeApiTrack({ ...t, _username: profile.username }));
+  const userReposts = (reposts || []).map(t => normalizeApiTrack(t));
+  state._loadedTracks = [
+    ...state._loadedTracks.filter(t => !userTracks.find(nt => nt.id === t.id) && !userReposts.find(nt => nt.id === t.id)),
+    ...userTracks,
+    ...userReposts,
+  ];
+
+  const tab = state._userProfileTab || 'tracks';
+  const isOwnProfile = state.user && state.user.id === userId;
+  const followBtnClass = profile.is_following ? 'following' : 'not-following';
+  const followBtnText = profile.is_following ? 'Following' : 'Follow';
+
+  el.innerHTML = `
+    <a href="#/home" style="font-size:0.85rem;color:var(--text-secondary);display:inline-flex;align-items:center;gap:0.3rem;margin-bottom:1rem;">&larr; Back</a>
+
+    <div class="profile-header">
+      <div class="profile-avatar">${(profile.username || '?').charAt(0).toUpperCase()}</div>
+      <div class="profile-info">
+        <h2>${esc(profile.username)}</h2>
+        <div class="profile-bio">${esc(profile.bio || 'JamHub member')}</div>
+        <div class="profile-stats">
+          <span class="profile-stat"><strong>${profile.follower_count}</strong> followers</span>
+          <span class="profile-stat"><strong>${profile.following_count}</strong> following</span>
+          <span class="profile-stat"><strong>${profile.track_count}</strong> tracks</span>
+        </div>
+      </div>
+      ${!isOwnProfile && state.user ? `
+        <button class="follow-btn ${followBtnClass}" onclick="handleFollow('${userId}')" style="margin-left:auto;align-self:start;">
+          ${followBtnText}
+        </button>
+      ` : ''}
+      ${isOwnProfile ? `<button class="btn btn-secondary btn-sm" onclick="logout()" style="margin-left:auto;align-self:start;">Log out</button>` : ''}
+    </div>
+
+    <div class="tab-bar">
+      <button class="tab-btn ${tab === 'tracks' ? 'active' : ''}" onclick="setUserProfileTab('tracks', '${userId}')">Tracks (${userTracks.length})</button>
+      <button class="tab-btn ${tab === 'reposts' ? 'active' : ''}" onclick="setUserProfileTab('reposts', '${userId}')">Reposts (${userReposts.length})</button>
+    </div>
+
+    <div id="userProfileContent">
+      ${tab === 'tracks' ?
+        (userTracks.length ? `<div class="track-grid">${userTracks.map(trackCardHTML).join('')}</div>` :
+          `<div class="empty-state"><div class="empty-state-text">No tracks yet</div></div>`) :
+        (userReposts.length ? `<div class="track-grid">${userReposts.map(trackCardHTML).join('')}</div>` :
+          `<div class="empty-state"><div class="empty-state-text">No reposts yet</div></div>`)
+      }
+    </div>
+  `;
+  updatePlayButtons();
+  requestAnimationFrame(initWaveforms);
+}
+
+async function handleFollow(userId) {
+  if (!state.user) { openAuthModal(); return; }
+  const result = await apiFollowUser(userId);
+  if (result) {
+    renderUserProfile(document.getElementById('mainContent'), userId);
+  }
+}
+
+function setUserProfileTab(tab, userId) {
+  state._userProfileTab = tab;
+  renderUserProfile(document.getElementById('mainContent'), userId);
+}
+
+// --- Feed (tracks from followed users) ---
+async function renderFeed(el) {
+  el.innerHTML = '<div class="empty-state"><div class="empty-state-text">Loading your feed...</div></div>';
+
+  const result = await apiGetFeed(1);
+  if (!result || !result.data) {
+    el.innerHTML = `
+      <h1 class="page-title">Your Feed</h1>
+      <div class="empty-state">
+        <div class="empty-state-icon">&#128240;</div>
+        <div class="empty-state-text">Follow some artists to see their tracks here!</div>
+        <a href="#/explore" class="btn btn-primary mt-2">Explore Tracks</a>
+      </div>`;
+    return;
+  }
+
+  const tracks = result.data.map(normalizeApiTrack);
+  state._loadedTracks = [...state._loadedTracks.filter(t => !tracks.find(nt => nt.id === t.id)), ...tracks];
+
+  el.innerHTML = `
+    <h1 class="page-title">Your Feed</h1>
+    ${tracks.length ? `<div class="track-grid">${tracks.map(trackCardHTML).join('')}</div>` :
+      `<div class="empty-state">
+        <div class="empty-state-icon">&#128240;</div>
+        <div class="empty-state-text">No tracks in your feed yet. Follow some artists!</div>
+        <a href="#/explore" class="btn btn-primary mt-2">Explore Tracks</a>
+      </div>`
+    }
+  `;
+  updatePlayButtons();
+  requestAnimationFrame(initWaveforms);
+}
+
 // --- Profile ---
 function renderProfile(el) {
   if (!state.user) {
@@ -1482,6 +2020,12 @@ function renderProfile(el) {
         <div class="empty-state-text">Sign in to view your profile</div>
         <button class="btn btn-primary mt-2" onclick="openAuthModal()">Sign In</button>
       </div>`;
+    return;
+  }
+
+  // If the user has an ID (from API), redirect to the full user profile page
+  if (state.user.id && state.token !== 'demo_token') {
+    navigate('user/' + state.user.id);
     return;
   }
 

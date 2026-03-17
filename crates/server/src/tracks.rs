@@ -11,6 +11,116 @@ use uuid::Uuid;
 use crate::auth::AuthUser;
 use crate::models::*;
 
+// ── WAV Waveform Generation ──
+
+/// Parse a WAV file and generate normalized waveform peaks (0.0 to 1.0).
+/// Returns (peaks, duration_seconds). For non-WAV files, returns None.
+fn generate_waveform_from_wav(data: &[u8], num_bins: usize) -> Option<(Vec<f64>, f64)> {
+    // Minimal WAV parser: check RIFF header
+    if data.len() < 44 {
+        return None;
+    }
+    if &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
+        return None;
+    }
+
+    // Find fmt chunk
+    let mut pos = 12;
+    let mut sample_rate: u32 = 44100;
+    let mut bits_per_sample: u16 = 16;
+    let mut num_channels: u16 = 2;
+    let mut data_start = 0usize;
+    let mut data_size = 0usize;
+
+    while pos + 8 <= data.len() {
+        let chunk_id = &data[pos..pos + 4];
+        let chunk_size = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]) as usize;
+
+        if chunk_id == b"fmt " && pos + 8 + chunk_size <= data.len() {
+            // audio_format = u16 at pos+8 (1 = PCM)
+            num_channels = u16::from_le_bytes([data[pos + 10], data[pos + 11]]);
+            sample_rate = u32::from_le_bytes([data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15]]);
+            bits_per_sample = u16::from_le_bytes([data[pos + 22], data[pos + 23]]);
+        } else if chunk_id == b"data" {
+            data_start = pos + 8;
+            data_size = chunk_size.min(data.len() - data_start);
+            break;
+        }
+
+        pos += 8 + chunk_size;
+        // Align to even byte
+        if pos % 2 != 0 {
+            pos += 1;
+        }
+    }
+
+    if data_start == 0 || data_size == 0 || bits_per_sample == 0 || num_channels == 0 {
+        return None;
+    }
+
+    let bytes_per_sample = (bits_per_sample / 8) as usize;
+    let frame_size = bytes_per_sample * num_channels as usize;
+    if frame_size == 0 {
+        return None;
+    }
+    let total_frames = data_size / frame_size;
+    let duration = total_frames as f64 / sample_rate as f64;
+
+    if total_frames == 0 {
+        return None;
+    }
+
+    let frames_per_bin = (total_frames + num_bins - 1) / num_bins;
+    let mut peaks = Vec::with_capacity(num_bins);
+
+    for bin in 0..num_bins {
+        let start_frame = bin * frames_per_bin;
+        let end_frame = ((bin + 1) * frames_per_bin).min(total_frames);
+        let mut max_val: f64 = 0.0;
+
+        for frame in start_frame..end_frame {
+            let frame_offset = data_start + frame * frame_size;
+            // Read first channel only
+            if frame_offset + bytes_per_sample <= data.len() {
+                let sample_abs = match bits_per_sample {
+                    8 => {
+                        // 8-bit WAV is unsigned
+                        let s = data[frame_offset] as f64 - 128.0;
+                        s.abs() / 128.0
+                    }
+                    16 => {
+                        let s = i16::from_le_bytes([data[frame_offset], data[frame_offset + 1]]);
+                        (s as f64).abs() / 32768.0
+                    }
+                    24 => {
+                        let s = i32::from_le_bytes([0, data[frame_offset], data[frame_offset + 1], data[frame_offset + 2]]);
+                        (s as f64).abs() / 8388608.0
+                    }
+                    32 => {
+                        let s = i32::from_le_bytes([data[frame_offset], data[frame_offset + 1], data[frame_offset + 2], data[frame_offset + 3]]);
+                        (s as f64).abs() / 2147483648.0
+                    }
+                    _ => 0.0,
+                };
+                if sample_abs > max_val {
+                    max_val = sample_abs;
+                }
+            }
+        }
+        peaks.push(max_val);
+    }
+
+    // Normalize peaks so max = 1.0
+    let global_max = peaks.iter().copied().fold(0.0f64, f64::max);
+    if global_max > 0.0 {
+        for p in &mut peaks {
+            *p /= global_max;
+        }
+    }
+
+    Some((peaks, duration))
+}
+
 /// Helper type for JSON error responses.
 type TrackError = (StatusCode, Json<ErrorResponse>);
 
@@ -126,11 +236,25 @@ async fn create_track(
         return Err(track_err(StatusCode::BAD_REQUEST, "Title is required"));
     }
 
+    // Generate waveform data from the uploaded file
+    let path = format!("./uploads/{audio_filename}");
+    let file_bytes = tokio::fs::read(&path).await.unwrap_or_default();
+    let (waveform_json, duration_seconds) = match generate_waveform_from_wav(&file_bytes, 200) {
+        Some((peaks, dur)) => {
+            println!("[TRACKS] Generated waveform: {} peaks, {:.1}s duration", peaks.len(), dur);
+            (Some(serde_json::json!(peaks)), Some(dur))
+        }
+        None => {
+            println!("[TRACKS] Non-WAV file or parse failed, skipping waveform generation");
+            (None, None)
+        }
+    };
+
     println!("[TRACKS] Inserting track: title={title:?}, genre={genre:?}, bpm={bpm:?}");
 
     let track = sqlx::query_as::<_, Track>(
-        r#"INSERT INTO tracks (user_id, title, description, audio_url, genre, bpm, key)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+        r#"INSERT INTO tracks (user_id, title, description, audio_url, genre, bpm, key, waveform_data, duration_seconds)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING *"#,
     )
     .bind(auth.0)
@@ -140,6 +264,8 @@ async fn create_track(
     .bind(&genre)
     .bind(bpm)
     .bind(&key)
+    .bind(&waveform_json)
+    .bind(duration_seconds)
     .fetch_one(&pool)
     .await
     .map_err(|e| {
@@ -362,6 +488,58 @@ async fn post_comment(
     Ok((StatusCode::CREATED, Json(comment)))
 }
 
+// ── Toggle repost ──
+
+async fn repost_track(
+    State(pool): State<PgPool>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, TrackError> {
+    // Check if already reposted
+    let existing: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT user_id FROM reposts WHERE user_id = $1 AND track_id = $2",
+    )
+    .bind(auth.0)
+    .bind(id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
+
+    if existing.is_some() {
+        // Un-repost
+        sqlx::query("DELETE FROM reposts WHERE user_id = $1 AND track_id = $2")
+            .bind(auth.0)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*)::bigint FROM reposts WHERE track_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
+
+        Ok(Json(serde_json::json!({"reposted": false, "repost_count": count})))
+    } else {
+        // Repost
+        sqlx::query("INSERT INTO reposts (user_id, track_id) VALUES ($1, $2)")
+            .bind(auth.0)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*)::bigint FROM reposts WHERE track_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
+
+        Ok(Json(serde_json::json!({"reposted": true, "repost_count": count})))
+    }
+}
+
 pub fn router() -> Router<PgPool> {
     Router::new()
         .route("/tracks", post(create_track).get(list_tracks))
@@ -369,4 +547,5 @@ pub fn router() -> Router<PgPool> {
         .route("/tracks/{id}/like", post(like_track))
         .route("/tracks/{id}/play", post(play_track))
         .route("/tracks/{id}/comments", post(post_comment))
+        .route("/tracks/{id}/repost", post(repost_track))
 }

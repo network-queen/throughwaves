@@ -45,6 +45,48 @@ impl From<User> for UserPublic {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct UserProfile {
+    pub id: Uuid,
+    pub username: String,
+    pub avatar_url: Option<String>,
+    pub bio: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub follower_count: i64,
+    pub following_count: i64,
+    pub track_count: i64,
+    pub is_following: bool,
+}
+
+// ── Follow ──
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Follow {
+    pub follower_id: Uuid,
+    pub following_id: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+// ── Repost ──
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Repost {
+    pub user_id: Uuid,
+    pub track_id: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+pub struct TrackWithRepost {
+    #[serde(flatten)]
+    pub track: Track,
+    pub reposted_by: Option<String>,
+    pub repost_count: i64,
+}
+
 // ── Track ──
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

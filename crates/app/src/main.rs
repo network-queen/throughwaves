@@ -1262,6 +1262,14 @@ impl DawApp {
         self.dirty = true;
     }
 
+    /// Push an undo entry using a pre-captured project snapshot.
+    /// Used when the caller has already mutated self.project and needs to
+    /// record the state from *before* the mutation.
+    pub fn undo_manager_push_with_snapshot(&mut self, label: &str, snapshot: Project) {
+        self.undo_manager.push(label, &snapshot);
+        self.dirty = true;
+    }
+
     pub fn undo(&mut self) {
         if let Some(project) = self.undo_manager.undo(&self.project) {
             self.project = project;
@@ -1595,6 +1603,11 @@ impl DawApp {
             ));
         } else {
             // === START RECORDING ===
+            if self.project.tracks.is_empty() {
+                self.set_status("Cannot record: no tracks in project");
+                return;
+            }
+
             // Arm the selected track if no tracks are armed yet
             let track_idx = self.selected_track.unwrap_or(0);
             let any_armed = self.project.tracks.iter().any(|t| t.armed);
@@ -1716,7 +1729,13 @@ impl DawApp {
                     self.project.tracks[track_idx].armed = false;
                     self.sync_project();
                 }
-                self.set_status(&format!("Record failed: {e}"));
+                let err_str = format!("{e}");
+                let msg = if err_str.contains("input") || err_str.contains("device") || err_str.contains("stream") {
+                    format!("Cannot record: no input device available ({e})")
+                } else {
+                    format!("Cannot record: {e}")
+                };
+                self.set_status(&msg);
             }
         }
     }
@@ -2430,8 +2449,15 @@ impl DawApp {
 
     /// Bounce/freeze selected track: render all effects to a new audio buffer.
     pub fn bounce_selected_track(&mut self) {
-        let track_idx = self.selected_track.unwrap_or(0);
-        if track_idx >= self.project.tracks.len() {
+        let track_idx = match self.selected_track {
+            Some(i) if i < self.project.tracks.len() => i,
+            _ => {
+                self.set_status("Cannot bounce: select a track first");
+                return;
+            }
+        };
+        if self.project.tracks[track_idx].clips.is_empty() {
+            self.set_status("Cannot bounce: track has no clips");
             return;
         }
 
@@ -3042,6 +3068,13 @@ impl DawApp {
     }
 
     pub fn export_mixdown(&mut self) {
+        // Check if there's any audio content to export
+        let has_content = self.project.tracks.iter().any(|t| !t.clips.is_empty());
+        if !has_content {
+            self.set_status("Export failed: no audio to export — add clips first");
+            return;
+        }
+
         let fmt = self.export_format;
         let ext = fmt.extension();
         let filter_label = match fmt {
@@ -3173,6 +3206,12 @@ impl DawApp {
     }
 
     pub fn export_stems(&mut self) {
+        let has_content = self.project.tracks.iter().any(|t| !t.clips.is_empty());
+        if !has_content {
+            self.set_status("Export failed: no audio to export — add clips first");
+            return;
+        }
+
         if let Some(dir) = rfd::FileDialog::new()
             .set_title("Export Stems — Choose Directory")
             .pick_folder()
@@ -4132,6 +4171,7 @@ impl eframe::App for DawApp {
             if i.modifiers.command && i.key_pressed(egui::Key::Num3) { actions.push("zoom_one_bar".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::Num4) { actions.push("zoom_max".into()); }
             if i.modifiers.command && i.key_pressed(egui::Key::N) { actions.push("new_session".into()); }
+            if i.modifiers.command && i.key_pressed(egui::Key::O) { actions.push("open_project".into()); }
         });
 
         for action in &actions {
@@ -4686,6 +4726,9 @@ impl eframe::App for DawApp {
                 "new_session" => {
                     self.show_template_picker = true;
                 }
+                "open_project" => {
+                    self.load_project_dialog();
+                }
                 "toggle_ripple" => {
                     self.ripple_mode = !self.ripple_mode;
                     let state = if self.ripple_mode { "ON" } else { "OFF" };
@@ -4711,7 +4754,7 @@ impl eframe::App for DawApp {
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("New Session...").clicked() {
+                    if ui.button("New Session...         Cmd+N").clicked() {
                         self.show_template_picker = true;
                         ui.close_menu();
                     }
@@ -4744,7 +4787,7 @@ impl eframe::App for DawApp {
                         });
                     });
                     ui.separator();
-                    if ui.button("Import Audio...").clicked() {
+                    if ui.button("Import Audio...        Cmd+I").clicked() {
                         ui.close_menu();
                         self.open_import_dialog();
                     }

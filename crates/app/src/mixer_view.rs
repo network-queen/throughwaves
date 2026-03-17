@@ -23,6 +23,10 @@ thread_local! {
 
 pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
     let mut needs_sync = false;
+    let mut undo_label: Option<&str> = None;
+    // Lazily capture project state before first mutation so undo saves the "before" snapshot.
+    // We clone eagerly since the mixer always iterates tracks mutably (cheap if no undo needed).
+    let pre_snapshot = app.project.clone();
 
     // Decay meters each frame
     if let Some(levels) = app.levels() {
@@ -408,6 +412,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         .on_hover_text("Track volume fader — right-click to MIDI learn");
                                     if vol_resp.changed() {
                                         needs_sync = true;
+                                        if undo_label.is_none() { undo_label = Some("Change volume"); }
                                     }
                                     vol_resp.context_menu(|ui| {
                                         if ui.button("MIDI Learn").clicked() {
@@ -490,6 +495,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         .on_hover_text("Pan position — right-click to MIDI learn");
                                     if pan_resp.changed() {
                                         needs_sync = true;
+                                        if undo_label.is_none() { undo_label = Some("Change pan"); }
                                     }
                                     pan_resp.context_menu(|ui| {
                                         if ui.button("MIDI Learn").clicked() {
@@ -530,6 +536,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     {
                                         track.muted = !track.muted;
                                         needs_sync = true;
+                                        if undo_label.is_none() { undo_label = Some("Toggle mute"); }
                                     }
 
                                     let solo_bg = if track.solo {
@@ -556,6 +563,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     {
                                         track.solo = !track.solo;
                                         needs_sync = true;
+                                        if undo_label.is_none() { undo_label = Some("Toggle solo"); }
                                     }
                                 });
 
@@ -1194,6 +1202,12 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
     }
 
     if needs_sync {
+        // Push undo using the pre-snapshot captured before mutations.
+        // The undo manager's rapid-edit grouping (GROUP_INTERVAL_MS) will
+        // collapse slider drags into a single undo entry automatically.
+        if let Some(label) = undo_label {
+            app.undo_manager_push_with_snapshot(label, pre_snapshot);
+        }
         app.sync_project();
     }
 }
