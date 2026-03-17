@@ -196,6 +196,8 @@ pub struct PianoRollState {
     /// Preview note currently being played by clicking on a piano key.
     /// (MIDI pitch) — None when no key is held.
     pub preview_note: Option<u8>,
+    /// Vertical scroll offset in semitones (0 = default view starting at C2).
+    pub scroll_y: f32,
 }
 
 impl PianoRollState {
@@ -228,6 +230,7 @@ impl Default for PianoRollState {
             cc_number: 1, // Mod Wheel
             rng_state: 12345,
             preview_note: None,
+            scroll_y: 0.0,
         }
     }
 }
@@ -505,9 +508,11 @@ fn show_note_grid(app: &mut DawApp, ui: &mut egui::Ui, track_idx: usize) {
     };
     let grid_height = (available.y - velocity_h - cc_h).max(60.0);
 
-    // ── Grid constants ──────────────────────────────────────
-    let visible_notes_start: u8 = 36; // C2
-    let visible_notes_end: u8 = 96; // C7
+    // ── Grid constants (scrollable) ─────────────────────────
+    let base_range: u8 = 60; // show 60 notes (5 octaves)
+    let scroll_offset = app.piano_roll_state.scroll_y.round() as i16;
+    let visible_notes_start: u8 = (36i16 - scroll_offset).clamp(0, 127 - base_range as i16) as u8;
+    let visible_notes_end: u8 = (visible_notes_start + base_range).min(128);
     let note_range = (visible_notes_end - visible_notes_start) as f32;
 
     let grid_width = available.x;
@@ -523,6 +528,19 @@ fn show_note_grid(app: &mut DawApp, ui: &mut egui::Ui, track_idx: usize) {
         egui::Sense::click_and_drag(),
     );
     let rect = response.rect;
+
+    // Vertical scroll with mouse wheel
+    if response.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll != 0.0 {
+            app.piano_roll_state.scroll_y += scroll * 0.15;
+            // Clamp: can scroll down to note 0, up to note 127-range
+            app.piano_roll_state.scroll_y = app.piano_roll_state.scroll_y.clamp(
+                -(127.0 - base_range as f32 - 36.0),
+                36.0,
+            );
+        }
+    }
 
     // Background
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(30, 30, 35));
