@@ -6220,13 +6220,23 @@ impl eframe::App for DawApp {
                                 ui.end_row();
 
                                 ui.label("Speed:");
-                                ui.add(egui::Slider::new(&mut clip.playback_rate, 0.1..=4.0)
-                                    .step_by(0.01).suffix("x"));
+                                ui.horizontal(|ui| {
+                                    ui.add(egui::Slider::new(&mut clip.playback_rate, 0.1..=4.0)
+                                        .step_by(0.01).suffix("x"));
+                                    if ui.small_button("1x").on_hover_text("Reset to normal speed").clicked() {
+                                        clip.playback_rate = 1.0;
+                                    }
+                                });
                                 ui.end_row();
 
                                 ui.label("Transpose:");
-                                ui.add(egui::Slider::new(&mut clip.transpose_semitones, -24..=24)
-                                    .suffix(" st"));
+                                ui.horizontal(|ui| {
+                                    ui.add(egui::Slider::new(&mut clip.transpose_semitones, -24..=24)
+                                        .suffix(" st"));
+                                    if ui.small_button("0").on_hover_text("Reset transpose").clicked() {
+                                        clip.transpose_semitones = 0;
+                                    }
+                                });
                                 ui.end_row();
 
                                 ui.label("Fade In:");
@@ -6256,7 +6266,14 @@ impl eframe::App for DawApp {
                                 ui.end_row();
 
                                 ui.label("Preserve Pitch:");
-                                ui.checkbox(&mut clip.preserve_pitch, "Pitch-lock on speed change");
+                                ui.checkbox(&mut clip.preserve_pitch, "Keep pitch when speed changes");
+                                ui.end_row();
+
+                                // Info label about independent controls
+                                ui.label("");
+                                ui.label(egui::RichText::new(
+                                    "Speed changes duration. Transpose changes pitch.\nBoth are independent — like Ableton Warp."
+                                ).size(10.0).color(egui::Color32::from_rgb(100, 100, 120)));
                                 ui.end_row();
                             });
 
