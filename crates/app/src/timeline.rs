@@ -790,38 +790,49 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     }
                                 }
 
-                                // Volume & Pan knobs — right-aligned, Reaper-style
+                                // Volume & Pan rotary knobs — right-aligned, Reaper-style
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    ui.spacing_mut().item_spacing.x = 2.0;
+                                    ui.spacing_mut().item_spacing.x = 3.0;
+                                    let knob_r = 9.0;
+                                    let knob_size = egui::vec2(knob_r * 2.0 + 2.0, knob_r * 2.0 + 2.0);
+
                                     // Pan knob
                                     let mut pan = track.pan;
-                                    let pan_label = if pan < -0.01 { format!("{:.0}L", pan.abs() * 100.0) }
-                                        else if pan > 0.01 { format!("{:.0}R", pan * 100.0) }
-                                        else { "C".into() };
-                                    let pan_r = ui.add_sized(egui::vec2(28.0, 18.0),
-                                        egui::DragValue::new(&mut pan).range(-1.0..=1.0).speed(0.01)
-                                            .custom_formatter(|v, _| {
-                                                if v < -0.01 { format!("{:.0}L", v.abs() * 100.0) }
-                                                else if v > 0.01 { format!("{:.0}R", v * 100.0) }
-                                                else { "C".into() }
-                                            })
-                                    );
-                                    let pan_dbl = pan_r.double_clicked();
-                                    pan_r.on_hover_text("Pan — drag to adjust, double-click to center");
+                                    let pan_id = ui.id().with("pan_knob").with(i);
+                                    let (pan_rect, pan_resp) = ui.allocate_exact_size(knob_size, egui::Sense::click_and_drag());
+                                    if pan_resp.dragged() {
+                                        pan = (pan - pan_resp.drag_delta().y * 0.008).clamp(-1.0, 1.0);
+                                    }
+                                    if pan_resp.double_clicked() { pan = 0.0; }
                                     if pan != track.pan { track_actions.push(TrackAction::SetPan(i, pan)); }
-                                    if pan_dbl { track_actions.push(TrackAction::SetPan(i, 0.0)); }
+                                    // Draw pan knob
+                                    draw_rotary_knob(ui.painter(), pan_rect.center(), knob_r,
+                                        (pan + 1.0) / 2.0, // normalize -1..1 to 0..1
+                                        egui::Color32::from_rgb(80, 180, 220),
+                                        pan_resp.hovered(),
+                                    );
+                                    let pan_tip = if pan < -0.01 { format!("Pan: {:.0}% L", pan.abs() * 100.0) }
+                                        else if pan > 0.01 { format!("Pan: {:.0}% R", pan * 100.0) }
+                                        else { "Pan: Center".into() };
+                                    pan_resp.on_hover_text(format!("{pan_tip}\nDrag up/down, double-click to center"));
 
                                     // Volume knob
                                     let mut vol = track.volume;
-                                    ui.add_sized(egui::vec2(32.0, 18.0),
-                                        egui::DragValue::new(&mut vol).range(0.0..=1.5).speed(0.005)
-                                            .custom_formatter(|v, _| {
-                                                if v < 0.001 { "-∞".into() }
-                                                else { format!("{:.1}", 20.0 * (v as f64).log10()) }
-                                            })
-                                    ).on_hover_text(format!("Volume: {:.0}%  ({:.1} dB)", vol * 100.0,
-                                        if vol > 0.001 { 20.0 * vol.log10() } else { -100.0 }));
+                                    let vol_id = ui.id().with("vol_knob").with(i);
+                                    let (vol_rect, vol_resp) = ui.allocate_exact_size(knob_size, egui::Sense::click_and_drag());
+                                    if vol_resp.dragged() {
+                                        vol = (vol - vol_resp.drag_delta().y * 0.006).clamp(0.0, 1.5);
+                                    }
+                                    if vol_resp.double_clicked() { vol = 1.0; }
                                     if vol != track.volume { track_actions.push(TrackAction::SetVolume(i, vol)); }
+                                    // Draw volume knob
+                                    draw_rotary_knob(ui.painter(), vol_rect.center(), knob_r,
+                                        vol / 1.5, // normalize 0..1.5 to 0..1
+                                        egui::Color32::from_rgb(80, 210, 140),
+                                        vol_resp.hovered(),
+                                    );
+                                    let vol_db = if vol > 0.001 { format!("{:.1} dB", 20.0 * vol.log10()) } else { "-∞ dB".into() };
+                                    vol_resp.on_hover_text(format!("Volume: {:.0}% ({vol_db})\nDrag up/down, double-click for unity", vol * 100.0));
                                 });
                             });
 
@@ -2972,7 +2983,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             } else {
                                 egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2])
                             };
-                            draw_waveform(painter, &peaks, cr, clip.duration_samples, wc, clip.content_offset, app.zoom, Some((rect.min.x, rect.max.x)), clip.gain_db, app.waveform_zoom);
+                            draw_waveform(painter, &peaks, cr, clip.duration_samples, wc, clip.content_offset, app.zoom, Some((rect.min.x, rect.max.x)), clip.gain_db, app.waveform_zoom, track.volume);
                         }
                     }
                     ClipSource::Midi { notes, .. } => {
@@ -4335,6 +4346,7 @@ fn draw_waveform(
     visible_x_range: Option<(f32, f32)>,
     gain_db: f32,
     waveform_zoom: f32,
+    track_volume: f32,
 ) {
     let width = clip_rect.width();
     if width < 2.0 {
@@ -4405,6 +4417,12 @@ fn draw_waveform(
             min *= gain_linear;
             max *= gain_linear;
             rms_max *= gain_linear;
+        }
+        // Apply track volume to waveform display
+        if (track_volume - 1.0).abs() > 0.001 {
+            min *= track_volume;
+            max *= track_volume;
+            rms_max *= track_volume;
         }
         // Apply waveform vertical zoom (visual only)
         if waveform_zoom != 1.0 {
@@ -4496,6 +4514,63 @@ fn draw_waveform(
             }
         }
     }
+}
+
+/// Draw a rotary knob (twister) — circular with an arc indicator.
+fn draw_rotary_knob(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    value: f32, // 0.0 to 1.0
+    color: egui::Color32,
+    hovered: bool,
+) {
+    use std::f32::consts::PI;
+    let v = value.clamp(0.0, 1.0);
+
+    // Background circle
+    let bg = if hovered {
+        egui::Color32::from_rgb(48, 50, 58)
+    } else {
+        egui::Color32::from_rgb(34, 35, 42)
+    };
+    painter.circle_filled(center, radius, bg);
+    painter.circle_stroke(center, radius, egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 56, 65)));
+
+    // Arc: from 135° (bottom-left) to 405° (bottom-right), 270° sweep
+    let start_angle = 135.0_f32.to_radians(); // 7:30 position
+    let sweep = 270.0_f32.to_radians();
+    let end_angle = start_angle + sweep * v;
+
+    // Draw inactive arc (dark)
+    let arc_r = radius - 2.0;
+    let segments = 32;
+    for seg in 0..segments {
+        let t0 = seg as f32 / segments as f32;
+        let t1 = (seg + 1) as f32 / segments as f32;
+        let a0 = start_angle + sweep * t0;
+        let a1 = start_angle + sweep * t1;
+        let p0 = egui::pos2(center.x + arc_r * a0.cos(), center.y + arc_r * a0.sin());
+        let p1 = egui::pos2(center.x + arc_r * a1.cos(), center.y + arc_r * a1.sin());
+        let c = if a0 < end_angle {
+            color
+        } else {
+            egui::Color32::from_rgb(28, 29, 34)
+        };
+        painter.line_segment([p0, p1], egui::Stroke::new(2.0, c));
+    }
+
+    // Indicator dot at current position
+    let dot_angle = end_angle;
+    let dot_r = radius - 2.0;
+    let dot_pos = egui::pos2(
+        center.x + dot_r * dot_angle.cos(),
+        center.y + dot_r * dot_angle.sin(),
+    );
+    painter.circle_filled(dot_pos, 2.5, egui::Color32::WHITE);
+
+    // Center dot
+    painter.circle_filled(center, 2.0, egui::Color32::from_rgb(80, 80, 90));
 }
 
 /// Draw a minimap overview bar at the bottom of the timeline area.
