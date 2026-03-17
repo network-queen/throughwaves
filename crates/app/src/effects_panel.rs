@@ -566,10 +566,18 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
             egui::Window::new(format!("{name}"))
                 .id(egui::Id::new("fx_popup").with(slot_id))
                 .title_bar(true)
-                .open(&mut is_open)
+                .collapsible(false)
                 .default_width(300.0)
                 .resizable(true)
                 .show(ctx, |ui| {
+                    // Close button at top-right
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("\u{2715}").on_hover_text("Close").clicked() {
+                                is_open = false;
+                            }
+                        });
+                    });
                     // --- Preset Save/Load bar ---
                     ui.horizontal(|ui| {
                         // Save Preset button
@@ -713,10 +721,18 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
             egui::Window::new(format!("{name}"))
                 .id(egui::Id::new("fx_builtin").with(slot_id))
                 .title_bar(true)
-                .open(&mut is_open)
+                .collapsible(false)
                 .default_width(default_w)
                 .resizable(is_peq)
                 .show(ctx, |ui| {
+                    // Close button
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("\u{2715}").on_hover_text("Close").clicked() {
+                                is_open = false;
+                            }
+                        });
+                    });
                     let effect = &mut app.project.tracks[track_idx].effects[slot_idx].effect;
                     show_effect_controls(ui, effect, &mut needs_sync, Some((track_idx, slot_idx)));
                 });
