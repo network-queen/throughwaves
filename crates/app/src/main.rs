@@ -3849,11 +3849,17 @@ impl DawApp {
         let dir = if let Some(ref path) = self.project_path {
             path.clone()
         } else {
+            // Use save_file dialog so macOS shows "Save" instead of "Open"
+            let safe_name = self.project.name.replace(['/', '\\', ':'], "_");
+            let filename = format!("{}.twproj", safe_name);
             if let Some(path) = rfd::FileDialog::new()
                 .set_title("Save Project")
-                .pick_folder()
+                .set_file_name(&filename)
+                .add_filter("ThroughWaves Project", &["twproj"])
+                .save_file()
             {
-                let project_dir = path.join(&self.project.name);
+                // Use the chosen path (without extension) as project directory
+                let project_dir = path.with_extension("");
                 self.project_path = Some(project_dir.clone());
                 project_dir
             } else {

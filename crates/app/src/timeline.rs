@@ -1088,6 +1088,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     let n = app.project.tracks.len() + 1;
                     app.project
                         .add_track(&format!("Track {n}"), TrackKind::Audio);
+                    app.selected_track = Some(app.project.tracks.len() - 1);
                     app.sync_project();
                 }
                 if ui.add_sized(add_btn_size, egui::Button::new(
@@ -1098,6 +1099,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     let n = app.project.tracks.len() + 1;
                     app.project
                         .add_track(&format!("MIDI {n}"), TrackKind::Midi);
+                    app.selected_track = Some(app.project.tracks.len() - 1);
                     app.sync_project();
                 }
             });
@@ -1471,6 +1473,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         let n = app.project.tracks.len() + 1;
                         app.project
                             .add_track(&format!("Track {n}"), TrackKind::Audio);
+                        app.selected_track = Some(app.project.tracks.len() - 1);
                         app.sync_project();
                         ui.close_menu();
                     }
