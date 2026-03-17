@@ -18,6 +18,7 @@ mod undo;
 mod plugin_window;
 mod undo_panel;
 mod project_info;
+mod stem_separator;
 pub mod templates;
 
 use std::collections::{HashMap, HashSet};
@@ -480,6 +481,8 @@ pub struct DawApp {
     pub pre_bypass_states: HashMap<(Uuid, Uuid), bool>,
     /// Snap-to-clip-edge: the sample position of the nearest clip edge snap (for visual indicator)
     pub clip_edge_snap_sample: Option<u64>,
+    /// AI Stem Separation panel state
+    pub stem_sep: stem_separator::StemSeparatorPanel,
 }
 
 /// State for slip-editing: shifting audio content within clip boundaries.
@@ -1161,6 +1164,7 @@ impl DawApp {
             global_fx_bypass: false,
             pre_bypass_states: HashMap::new(),
             clip_edge_snap_sample: None,
+            stem_sep: stem_separator::StemSeparatorPanel::default(),
         };
 
         // Apply persisted layout
@@ -5106,6 +5110,12 @@ impl eframe::App for DawApp {
                         }
                     }
                 });
+                ui.menu_button("AI", |ui| {
+                    if ui.button("Stem Separation...").clicked() {
+                        self.stem_sep.show = true;
+                        ui.close_menu();
+                    }
+                });
                 ui.menu_button("Help", |ui| {
                     if ui.button("About JamHub").clicked() {
                         self.show_about = true;
@@ -5331,6 +5341,7 @@ impl eframe::App for DawApp {
         spectrum::show(self, ctx);
         self.show_audio_pool_window(ctx);
         midi_mapping::show_mapping_manager(self, ctx);
+        stem_separator::show(self, ctx);
 
         // Template & preset dialogs
         templates::show_template_name_dialog(self, ctx);

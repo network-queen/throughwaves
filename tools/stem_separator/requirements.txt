@@ -1,0 +1,7 @@
+demucs
+yt-dlp
+fastapi
+uvicorn[standard]
+torch
+torchaudio
+python-multipart
