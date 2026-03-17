@@ -871,7 +871,7 @@ fn import_stem_to_track(app: &mut DawApp, job_id: &str, stem: &str) {
     let url = format!("{SERVICE_URL}/stems/{job_id}/{stem}");
     let agent = ureq::Agent::new_with_defaults();
     let bytes = match agent.get(&url).call() {
-        Ok(resp) => match resp.into_body().read_to_vec() {
+        Ok(resp) => match resp.into_body().with_config().limit(500 * 1024 * 1024).read_to_vec() {
             Ok(b) => b,
             Err(e) => {
                 app.set_status(&format!("Failed to read {stem_label}: {e}"));
