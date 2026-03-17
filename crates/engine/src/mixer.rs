@@ -792,15 +792,21 @@ fn render_track_clips_impl(
             let needs_pitch_shift = clip.transpose_semitones != 0;
             let needs_speed_preserve = clip.preserve_pitch && (speed_rate - 1.0).abs() > 0.001;
 
-            // For standard resampling (no OLA): just use speed_rate
-            // For OLA: source_rate = how fast to read source, ola_ratio = pitch correction
-            let rate = if needs_pitch_shift || needs_speed_preserve {
-                // OLA will handle pitch/speed separation
-                speed_rate * transpose_factor
+            // OLA rate: controls how source samples map to output samples within OLA windows.
+            // This determines the PITCH change. Duration is handled by visual_duration.
+            //
+            // - transpose only: ola_rate = transpose_factor (pitch shift, duration unchanged)
+            // - speed + preserve_pitch: ola_rate = 1.0 (no pitch change, duration from visual_duration)
+            // - both: ola_rate = transpose_factor (pitch shift + duration from visual_duration)
+            // - speed without preserve: no OLA, simple resample at speed_rate (pitch changes with speed)
+            let ola_rate = if needs_pitch_shift || needs_speed_preserve {
+                transpose_factor // OLA handles pitch; visual_duration handles speed
             } else {
-                // Simple resampling: speed changes pitch (no preserve_pitch)
-                speed_rate
+                1.0 // unused since we won't use OLA
             };
+
+            // For non-OLA path: simple resampling rate
+            let simple_rate = speed_rate;
 
             let visual_duration = clip.visual_duration_samples();
             let clip_visual_end = clip.start_sample + visual_duration;
@@ -837,10 +843,8 @@ fn render_track_clips_impl(
                     // Use OLA when pitch and speed need to be independent
                     let use_ola = needs_pitch_shift || needs_speed_preserve;
                     if use_ola {
-                        // OLA source rate: read source at this rate
-                        // OLA will overlap-add to produce output at the correct duration
                         render_clip_ola_impl(
-                            clip, buf, rate, visual_duration, clip_visual_end,
+                            clip, buf, ola_rate, speed_rate, visual_duration, clip_visual_end,
                             position_samples, block_size,
                             crossfade_out_start, crossfade_out_len,
                             crossfade_in_start, crossfade_in_len,
@@ -858,7 +862,7 @@ fn render_track_clips_impl(
                             let visual_offset = (global_sample - clip.start_sample) as f64;
                             // Map to source buffer position using playback rate
                             // For looped clips, wrap the source position using modulo
-                            let mut source_pos = visual_offset * rate as f64 + clip.content_offset as f64;
+                            let mut source_pos = visual_offset * simple_rate as f64 + clip.content_offset as f64;
                             if clip.loop_count > 1 && buf_len > 0 {
                                 source_pos = source_pos % buf_len as f64;
                             }
@@ -941,15 +945,21 @@ fn render_track_clips_impl(
 
 /// Render a clip using Overlap-Add (OLA) for independent pitch/speed control.
 ///
-/// `rate` = source read rate = speed_rate * transpose_factor
-/// The function maps output position to source position considering the clip's
-/// playback_rate (speed) and uses OLA windowing to allow pitch shifting via
-/// the transpose_factor without changing the output duration.
+/// `pitch_rate`: controls pitch shift (transpose_factor). 1.0 = no pitch change.
+///   > 1.0 reads source faster → higher pitch. < 1.0 → lower pitch.
+/// `speed_rate`: controls playback speed. Duration = source_len / speed_rate.
+///   Speed is already accounted for by visual_duration/clip_visual_end.
+///
+/// The OLA algorithm:
+/// 1. Maps each output sample to a source position based on speed_rate
+/// 2. Within each OLA window, reads source at pitch_rate to change pitch
+/// 3. Overlapping windows with Hann weighting create smooth output
 #[allow(clippy::too_many_arguments)]
 fn render_clip_ola_impl(
     clip: &jamhub_model::Clip,
         buf: &[f32],
-        rate: f32,
+        pitch_rate: f32,
+        speed_rate: f32,
         _visual_duration: u64,
         clip_visual_end: u64,
         position_samples: u64,
@@ -960,19 +970,17 @@ fn render_clip_ola_impl(
         crossfade_in_len: u64,
         output: &mut [f32],
     ) {
-        // OLA parameters
-        // rate = speed_rate * transpose_factor
-        // We want the output to have duration = source_len / speed_rate
-        // and pitch shifted by transpose_factor
-        //
-        // hop_output = spacing between OLA windows in the output (determines output speed)
-        // hop_input = spacing between OLA windows in the source (determines which source samples we read)
-        // The ratio hop_input/hop_output = rate, which means:
-        //   - source advances at `rate` samples per output sample
-        //   - OLA overlap maintains smooth output at the visual duration
         let window_size: usize = 1024;
-        let hop_output = (window_size as f32 * 0.5) as usize; // fixed output hop = 50% overlap
-        let hop_input = (hop_output as f32 * rate).max(1.0) as usize; // source hop = output hop * rate
+        let hop_output = (window_size as f32 * 0.5) as usize; // 50% overlap in output
+
+        // hop_input controls how much source we advance per output window.
+        // pitch_rate > 1.0: read more source per window → higher pitch
+        // speed_rate is handled by visual_duration (output is shorter/longer)
+        //
+        // For the source mapping within visual_duration:
+        // Each output sample at visual_offset maps to source at visual_offset * speed_rate
+        // Then within OLA windows, pitch_rate shifts which source samples we actually read.
+        let hop_input = (hop_output as f32 * pitch_rate).max(1.0) as usize;
 
         if hop_output == 0 || hop_input == 0 {
             return;
@@ -986,13 +994,15 @@ fn render_clip_ola_impl(
 
             let visual_offset = (global_sample - clip.start_sample) as usize;
 
-            // Determine which OLA window(s) this output sample falls in
+            // Map visual offset to source offset (accounting for speed)
+            let source_offset_base = (visual_offset as f64 * speed_rate as f64) as usize;
+
+            // Determine which OLA window this output sample falls in
             let window_idx = visual_offset / hop_output;
 
             let mut sample_val = 0.0f32;
             let mut weight_sum = 0.0f32;
 
-            // Check current and adjacent windows for overlap
             let start_win = if window_idx > 0 { window_idx - 1 } else { 0 };
             let end_win = window_idx + 1;
 
@@ -1003,10 +1013,12 @@ fn render_clip_ola_impl(
                 }
 
                 let pos_in_win = visual_offset - win_output_start;
-                // Source position: window w starts at w * hop_input in source
-                // Within the window, we read at the same offset (pos_in_win)
-                let source_start = w * hop_input;
-                let mut source_idx = source_start + pos_in_win + clip.content_offset as usize;
+
+                // Source position for this window:
+                // Base position = source_offset of window start + offset within window scaled by pitch
+                let win_source_base = (win_output_start as f64 * speed_rate as f64) as usize;
+                let source_in_win = (pos_in_win as f32 * pitch_rate) as usize;
+                let mut source_idx = win_source_base + source_in_win + clip.content_offset as usize;
 
                 // For looped clips, wrap source index using modulo
                 if clip.loop_count > 1 && !buf.is_empty() {
