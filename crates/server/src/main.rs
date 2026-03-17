@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .nest("/api", api)
         .nest_service("/uploads", ServeDir::new("./uploads"))
-        .fallback_service(ServeDir::new("./web"))
+        .fallback_service(ServeDir::new("./crates/server/web"))
         .layer(CorsLayer::permissive())
         .with_state(pool);
 

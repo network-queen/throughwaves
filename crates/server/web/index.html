@@ -1390,7 +1390,7 @@ async function handleUpload() {
   // Try actual upload
   if (selectedFile) {
     const fd = new FormData();
-    fd.append('file', selectedFile);
+    fd.append('audio', selectedFile);
     fd.append('title', title);
     fd.append('description', document.getElementById('uploadDesc').value);
     fd.append('genre', document.getElementById('uploadGenre').value);
