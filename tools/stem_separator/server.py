@@ -134,7 +134,6 @@ def _run_demucs(job_id: str, input_path: Path) -> bool:
         result = subprocess.run(
             [
                 sys.executable, "-m", "demucs",
-                "--two-stems=None",  # all 4 stems
                 "-n", "htdemucs",
                 "--out", str(output_dir),
                 str(input_path),

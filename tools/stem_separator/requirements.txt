@@ -1,4 +1,5 @@
 demucs
+numpy<2
 yt-dlp
 fastapi
 uvicorn[standard]
