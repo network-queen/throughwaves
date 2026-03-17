@@ -1849,13 +1849,13 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             lane.points.retain(|p| {
                                 (p.sample as i64 - sample as i64).unsigned_abs() > min_dist
                             });
-                            lane.points.push(jamhub_model::AutomationPoint { sample, value });
+                            lane.points.push(jamhub_model::AutomationPoint { sample, value, curve: 0.0 });
                             lane.points.sort_by_key(|p| p.sample);
                         } else {
                             app.project.tracks[ti].automation.push(
                                 jamhub_model::AutomationLane {
                                     parameter: param,
-                                    points: vec![jamhub_model::AutomationPoint { sample, value }],
+                                    points: vec![jamhub_model::AutomationPoint { sample, value, curve: 0.0 }],
                                     visible: true,
                                 },
                             );
@@ -2887,9 +2887,23 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 let clip = &track.clips[ci];
 
                 // Use custom clip color if set, otherwise fall back to track color
-                let color = match clip.color {
+                // Apply type-based tinting: MIDI clips get purple tint, frozen clips get blue-gray
+                let base_color = match clip.color {
                     Some(c) => egui::Color32::from_rgb(c[0], c[1], c[2]),
                     None => track_color,
+                };
+                let color = if track.frozen {
+                    // Frozen: desaturated blue-gray tint
+                    egui::Color32::from_rgb(120, 140, 170)
+                } else if matches!(clip.source, ClipSource::Midi { .. }) {
+                    // MIDI: blend 70% track color + 30% purple (140, 100, 220)
+                    egui::Color32::from_rgb(
+                        ((base_color.r() as u16 * 7 + 140 * 3) / 10) as u8,
+                        ((base_color.g() as u16 * 7 + 100 * 3) / 10) as u8,
+                        ((base_color.b() as u16 * 7 + 220 * 3) / 10) as u8,
+                    )
+                } else {
+                    base_color
                 };
 
                 // When collapsed, only show active (non-muted) clips, all in lane 0
@@ -3077,6 +3091,23 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 }
 
                 // Border — premium: track color 30% normally, gold 100% selected
+                // Frozen track overlay — subtle blue tint over the clip
+                if track.frozen && !is_clip_muted {
+                    painter.rect_filled(
+                        cr,
+                        clip_radius,
+                        egui::Color32::from_rgba_premultiplied(80, 130, 220, 25),
+                    );
+                    // Snowflake overlay centered on clip
+                    painter.with_clip_rect(cr).text(
+                        cr.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "\u{2744}",
+                        egui::FontId::proportional(16.0),
+                        egui::Color32::from_rgba_premultiplied(140, 190, 255, 60),
+                    );
+                }
+
                 let multi_selected = is_clip_selected && app.selected_clips.len() > 1;
                 let border_w = if is_clip_selected { 2.0 } else { 1.0 };
                 let border_c = if multi_selected {
@@ -4425,27 +4456,33 @@ fn draw_waveform(
                 clipped.line_segment([w[0], w[1]], thick_stroke);
             }
         } else {
-            // Peak envelope — brighter filled area
+            // Peak envelope — gradient-like fill (slightly transparent)
             let mut peak_polygon = peak_top.clone();
             let mut bottom_rev = peak_bottom.clone();
             bottom_rev.reverse();
             peak_polygon.extend(bottom_rev);
             clipped.add(egui::Shape::convex_polygon(
                 peak_polygon,
-                color.gamma_multiply(0.50),
+                color.gamma_multiply(0.40),
                 egui::Stroke::NONE,
             ));
 
-            // RMS envelope — solid filled area inside the peak envelope
+            // RMS envelope — brighter gradient core
             let mut rms_polygon = rms_top.clone();
             let mut rms_bot_rev = rms_bottom.clone();
             rms_bot_rev.reverse();
             rms_polygon.extend(rms_bot_rev);
             clipped.add(egui::Shape::convex_polygon(
                 rms_polygon,
-                color.gamma_multiply(0.75),
+                color.gamma_multiply(0.65),
                 egui::Stroke::NONE,
             ));
+
+            // Bright highlight line along the top peak envelope
+            let highlight_stroke = egui::Stroke::new(0.5, color.gamma_multiply(1.0));
+            for w in peak_top.windows(2) {
+                clipped.line_segment([w[0], w[1]], highlight_stroke);
+            }
 
             // Anti-aliased waveform edge lines (top and bottom outlines)
             let top_stroke = egui::Stroke::new(1.0, color.gamma_multiply(0.85));

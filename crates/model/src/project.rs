@@ -396,6 +396,10 @@ fn effect_param_range(param_name: &str) -> (f32, f32) {
 pub struct AutomationPoint {
     pub sample: u64,
     pub value: f32,
+    /// Curve tension for the segment following this point.
+    /// 0.0 = linear (default), positive = ease-in, negative = ease-out
+    #[serde(default)]
+    pub curve: f32,
 }
 
 /// A slot in a track's effect chain — wraps an effect with identity and enable state.

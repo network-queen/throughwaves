@@ -34,6 +34,14 @@
   --transition: 0.2s ease;
 }
 
+body.light-theme {
+  --bg-deep: #F5F5F7; --bg-base: #FFFFFF; --bg-panel: #F0F0F2;
+  --bg-card: #FFFFFF; --bg-elevated: #F8F8FA; --border: #E0E0E4;
+  --border-light: #D0D0D5; --text-primary: #1A1A1A; --text-secondary: #555;
+  --text-muted: #999; --glass-bg: rgba(255,255,255,0.85);
+  --glass-border: rgba(0,0,0,0.06);
+}
+
 html { font-size: 15px; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -609,6 +617,7 @@ select { cursor: pointer; }
         <a href="#/profile" data-route="profile">Profile</a>
       </div>
       <div class="nav-right">
+        <button class="btn btn-sm" onclick="toggleTheme()" id="themeBtn" style="font-size:1.1rem;" title="Toggle theme">&#127769;</button>
         <button class="btn btn-primary btn-sm" id="authBtn" onclick="openAuthModal()">Sign In</button>
         <div class="avatar hidden" id="userAvatar" onclick="navigate('profile')">?</div>
       </div>
@@ -2590,6 +2599,21 @@ function showStemResults(jobId, stems) {
       <button class="btn btn-secondary" onclick="closeStemModal()">Close</button>
     </div>
   `;
+}
+
+function toggleTheme() {
+  document.body.classList.toggle('light-theme');
+  const isLight = document.body.classList.contains('light-theme');
+  document.getElementById('themeBtn').textContent = isLight ? '\u2600\uFE0F' : '\uD83C\uDF19';
+  localStorage.setItem('tw-theme', isLight ? 'light' : 'dark');
+}
+// On load, restore theme
+if (localStorage.getItem('tw-theme') === 'light') {
+  document.body.classList.add('light-theme');
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('themeBtn');
+    if (btn) btn.textContent = '\u2600\uFE0F';
+  });
 }
 
 init();
