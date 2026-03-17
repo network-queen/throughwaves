@@ -147,6 +147,20 @@ pub struct EffectProcessor {
     chorus_phase: f32,
     // Parametric EQ state: up to MAX_EQ_BANDS cascaded biquad filters
     peq_states: Vec<BiquadState>,
+    // Limiter state
+    limiter_envelope: f32,
+    // Gate state
+    gate_envelope: f32,
+    gate_gain: f32,
+    // Phaser state: all-pass filter stages
+    phaser_buffers: Vec<[f32; 2]>, // each stage has 2 state vars
+    phaser_phase: f32,
+    // Flanger state
+    flanger_buffer: Vec<f32>,
+    flanger_write_pos: usize,
+    flanger_phase: f32,
+    // Tremolo state
+    tremolo_phase: f32,
 }
 
 impl EffectProcessor {
@@ -159,6 +173,7 @@ impl EffectProcessor {
             .collect();
         let reverb_pos = vec![0usize; reverb_times.len()];
         let chorus_max = (sample_rate as f32 * 0.05) as usize; // 50ms max
+        let flanger_max = (sample_rate as f32 * 0.02) as usize; // 20ms max
 
         Self {
             lp_state: [0.0; 2],
@@ -174,6 +189,15 @@ impl EffectProcessor {
             chorus_write_pos: 0,
             chorus_phase: 0.0,
             peq_states: (0..MAX_EQ_BANDS).map(|_| BiquadState::default()).collect(),
+            limiter_envelope: 0.0,
+            gate_envelope: 0.0,
+            gate_gain: 1.0,
+            phaser_buffers: vec![[0.0; 2]; 12], // up to 12 stages
+            phaser_phase: 0.0,
+            flanger_buffer: vec![0.0; flanger_max],
+            flanger_write_pos: 0,
+            flanger_phase: 0.0,
+            tremolo_phase: 0.0,
         }
     }
 
@@ -197,6 +221,17 @@ impl EffectProcessor {
         for state in &mut self.peq_states {
             *state = BiquadState::default();
         }
+        self.limiter_envelope = 0.0;
+        self.gate_envelope = 0.0;
+        self.gate_gain = 1.0;
+        for buf in &mut self.phaser_buffers {
+            *buf = [0.0; 2];
+        }
+        self.phaser_phase = 0.0;
+        self.flanger_buffer.fill(0.0);
+        self.flanger_write_pos = 0;
+        self.flanger_phase = 0.0;
+        self.tremolo_phase = 0.0;
     }
 
     pub fn process(&mut self, samples: &mut [f32], effect: &TrackEffect, sample_rate: u32) {
@@ -309,6 +344,99 @@ impl EffectProcessor {
                     let dry = *s;
                     let driven = (*s * gain).tanh();
                     *s = dry * (1.0 - mix) + driven * mix;
+                }
+            }
+            TrackEffect::Limiter { threshold_db, ceiling_db, release_ms } => {
+                let threshold = 10.0_f32.powf(*threshold_db / 20.0);
+                let ceiling = 10.0_f32.powf(*ceiling_db / 20.0);
+                let release_coeff = (-1.0 / (release_ms * 0.001 * sample_rate as f32)).exp();
+                for s in samples.iter_mut() {
+                    let level = s.abs();
+                    // Instant attack (brick-wall)
+                    if level > self.limiter_envelope {
+                        self.limiter_envelope = level;
+                    } else {
+                        self.limiter_envelope = release_coeff * self.limiter_envelope
+                            + (1.0 - release_coeff) * level;
+                    }
+                    if self.limiter_envelope > threshold {
+                        let gain = threshold / self.limiter_envelope;
+                        *s *= gain;
+                    }
+                    // Hard clip at ceiling
+                    *s = s.clamp(-ceiling, ceiling);
+                }
+            }
+            TrackEffect::Gate { threshold_db, attack_ms, release_ms, range_db } => {
+                let threshold = 10.0_f32.powf(*threshold_db / 20.0);
+                let attack_coeff = (-1.0 / (attack_ms * 0.001 * sample_rate as f32)).exp();
+                let release_coeff = (-1.0 / (release_ms * 0.001 * sample_rate as f32)).exp();
+                let range_gain = 10.0_f32.powf(*range_db / 20.0);
+                for s in samples.iter_mut() {
+                    let level = s.abs();
+                    let coeff = if level > self.gate_envelope { attack_coeff } else { release_coeff };
+                    self.gate_envelope = coeff * self.gate_envelope + (1.0 - coeff) * level;
+
+                    let target = if self.gate_envelope > threshold { 1.0 } else { range_gain };
+                    // Smooth gain transition
+                    self.gate_gain += (target - self.gate_gain) * 0.01;
+                    *s *= self.gate_gain;
+                }
+            }
+            TrackEffect::Phaser { rate_hz, depth, stages, mix } => {
+                let num_stages = (*stages as usize).clamp(2, 12);
+                let phase_inc = rate_hz / sample_rate as f32;
+                for s in samples.iter_mut() {
+                    let dry = *s;
+                    // LFO modulates all-pass center frequency
+                    let lfo = (self.phaser_phase * 2.0 * std::f32::consts::PI).sin();
+                    let min_freq = 200.0;
+                    let max_freq = 4000.0;
+                    let freq = min_freq + (max_freq - min_freq) * 0.5 * (1.0 + lfo * depth);
+                    let w = 2.0 * std::f32::consts::PI * freq / sample_rate as f32;
+                    let a1 = (1.0 - w.tan()) / (1.0 + w.tan());
+
+                    let mut x = *s;
+                    for i in 0..num_stages {
+                        let old = self.phaser_buffers[i][0];
+                        let y = a1 * x + old - a1 * self.phaser_buffers[i][1];
+                        self.phaser_buffers[i][0] = x;
+                        self.phaser_buffers[i][1] = y;
+                        x = y;
+                    }
+                    self.phaser_phase = (self.phaser_phase + phase_inc) % 1.0;
+                    *s = dry * (1.0 - mix) + x * mix;
+                }
+            }
+            TrackEffect::Flanger { rate_hz, depth, feedback, mix } => {
+                let buf_len = self.flanger_buffer.len();
+                if buf_len == 0 { return; }
+                let max_delay = buf_len as f32 * 0.8;
+                let phase_inc = rate_hz / sample_rate as f32;
+                let fb = feedback.clamp(-0.95, 0.95);
+                for s in samples.iter_mut() {
+                    let lfo = 0.5 * (1.0 + (self.flanger_phase * 2.0 * std::f32::consts::PI).sin());
+                    let delay_f = 1.0 + max_delay * depth * lfo;
+                    let delay_int = delay_f as usize;
+                    let frac = delay_f - delay_int as f32;
+                    let read1 = (self.flanger_write_pos + buf_len - delay_int) % buf_len;
+                    let read2 = (self.flanger_write_pos + buf_len - delay_int - 1) % buf_len;
+                    // Linear interpolation
+                    let wet = self.flanger_buffer[read1] * (1.0 - frac) + self.flanger_buffer[read2] * frac;
+
+                    self.flanger_buffer[self.flanger_write_pos] = *s + wet * fb;
+                    self.flanger_write_pos = (self.flanger_write_pos + 1) % buf_len;
+                    self.flanger_phase = (self.flanger_phase + phase_inc) % 1.0;
+                    *s = *s * (1.0 - mix) + wet * mix;
+                }
+            }
+            TrackEffect::Tremolo { rate_hz, depth } => {
+                let phase_inc = rate_hz / sample_rate as f32;
+                for s in samples.iter_mut() {
+                    let lfo = (self.tremolo_phase * 2.0 * std::f32::consts::PI).sin();
+                    let gain = 1.0 - depth * 0.5 * (1.0 - lfo);
+                    *s *= gain;
+                    self.tremolo_phase = (self.tremolo_phase + phase_inc) % 1.0;
                 }
             }
             TrackEffect::Vst3Plugin { .. } => {

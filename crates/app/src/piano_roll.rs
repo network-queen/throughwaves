@@ -1527,7 +1527,7 @@ fn find_or_create_midi_clip(app: &mut DawApp, track_idx: usize) -> Option<usize>
         },
         muted: false,
         fade_in_samples: 0,
-        fade_out_samples: 0,
+        fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
         color: None,
         playback_rate: 1.0,
         preserve_pitch: false,

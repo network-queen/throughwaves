@@ -464,6 +464,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     app.snap_mode = app.snap_mode.next();
                 }
 
+                // Waveform zoom
+                let mut wz = app.waveform_zoom;
+                if ui.add(egui::DragValue::new(&mut wz).range(0.5..=8.0).speed(0.05)
+                    .custom_formatter(|v, _| format!("W:{:.1}x", v)))
+                    .on_hover_text("Waveform vertical zoom — amplify waveform display\nDoes not change audio volume").changed() {
+                    app.waveform_zoom = wz;
+                }
+
                 // Master vol
                 let mut mv = app.master_volume;
                 if ui.add(egui::DragValue::new(&mut mv).range(0.0..=1.5).speed(0.01)
@@ -474,6 +482,24 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 }
             });
         });
+
+        // === BEAT FLASH INDICATOR ===
+        if app.beat_flash > 0.0 {
+            let alpha = (app.beat_flash * 200.0) as u8;
+            let pos = app.position_samples();
+            let sr = app.sample_rate() as f64;
+            let beat = app.project.tempo.beat_at_sample(pos, sr);
+            let beat_in_bar = (beat % app.project.time_signature.numerator as f64).floor() as u32;
+            let color = if beat_in_bar == 0 {
+                // First beat of bar — bright accent
+                egui::Color32::from_rgba_unmultiplied(240, 192, 64, alpha)
+            } else {
+                // Other beats — subtle
+                egui::Color32::from_rgba_unmultiplied(80, 200, 140, alpha.min(120))
+            };
+            let (_, flash_rect) = ui.allocate_space(egui::vec2(8.0, 24.0));
+            ui.painter().circle_filled(flash_rect.center(), 4.0, color);
+        }
 
         // === RIGHT SIDE — logo + session ===
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

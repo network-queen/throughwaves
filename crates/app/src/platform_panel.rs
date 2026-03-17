@@ -40,6 +40,10 @@ pub struct PlatformPanel {
     pub checkout_project_id: String,
     pub checkout_status: Option<String>,
 
+    // Import track form
+    pub import_track_id: String,
+    pub import_track_status: Option<String>,
+
     // My tracks list
     pub my_tracks: Vec<PlatformTrack>,
     pub tracks_loaded: bool,
@@ -65,6 +69,8 @@ impl Default for PlatformPanel {
             upload_project_id: String::new(),
             checkout_project_id: String::new(),
             checkout_status: None,
+            import_track_id: String::new(),
+            import_track_status: None,
             my_tracks: Vec::new(),
             tracks_loaded: false,
         }
@@ -545,6 +551,26 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
 
     ui.separator();
 
+    // ── Import Track into DAW ──
+    egui::CollapsingHeader::new("Import Track into DAW")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Track ID or URL:");
+                ui.text_edit_singleline(&mut app.platform.import_track_id);
+            });
+
+            if let Some(ref status) = app.platform.import_track_status {
+                ui.label(status.as_str());
+            }
+
+            if ui.button("Import Track").clicked() {
+                do_import_track(app);
+            }
+        });
+
+    ui.separator();
+
     // ── My Tracks ──
     egui::CollapsingHeader::new("My Tracks")
         .default_open(false)
@@ -685,6 +711,111 @@ fn do_checkout_project(app: &mut DawApp) {
         }
         Err(e) => {
             app.platform.checkout_status = Some(format!("Checkout failed: {e}"));
+        }
+    }
+}
+
+/// Import a single track from the platform into the DAW as a new audio track.
+fn do_import_track(app: &mut DawApp) {
+    // Extract track ID from input — could be a UUID or a URL like http://localhost:3000/#/track/<uuid>
+    let input = app.platform.import_track_id.trim().to_string();
+    if input.is_empty() {
+        app.platform.import_track_status = Some("Enter a track ID or URL".into());
+        return;
+    }
+
+    // Parse track ID from URL or direct UUID
+    let track_id = if input.contains("/track/") {
+        input.rsplit("/track/").next().unwrap_or(&input).to_string()
+    } else {
+        input.clone()
+    };
+
+    app.platform.import_track_status = Some("Fetching track info...".into());
+
+    // Fetch track metadata
+    let path = format!("/api/tracks/{}", track_id);
+    let resp = match platform_request("GET", &app.platform.server_url, &path, None, None) {
+        Ok(r) => r,
+        Err(e) => {
+            app.platform.import_track_status = Some(format!("Failed: {e}"));
+            return;
+        }
+    };
+
+    // Extract track title and audio URL from response
+    let title = extract_json_string(&resp, "title").unwrap_or_else(|| "Imported Track".into());
+    let audio_url = match extract_json_string(&resp, "audio_url") {
+        Some(url) => url,
+        None => {
+            app.platform.import_track_status = Some("No audio URL in track data".into());
+            return;
+        }
+    };
+
+    // Download the audio file
+    app.platform.import_track_status = Some(format!("Downloading {}...", title));
+    let full_url = format!("{}{}", app.platform.server_url.trim_end_matches('/'), audio_url);
+
+    let agent = ureq::Agent::new_with_defaults();
+    let audio_bytes = match agent.get(&full_url).call() {
+        Ok(resp) => {
+            match resp.into_body().with_config().limit(500 * 1024 * 1024).read_to_vec() {
+                Ok(buf) => buf,
+                Err(e) => {
+                    app.platform.import_track_status = Some(format!("Download error: {e}"));
+                    return;
+                }
+            }
+        }
+        Err(e) => {
+            app.platform.import_track_status = Some(format!("Download failed: {e}"));
+            return;
+        }
+    };
+
+    if audio_bytes.is_empty() {
+        app.platform.import_track_status = Some("Downloaded file is empty".into());
+        return;
+    }
+
+    // Decode audio and load into engine
+    let buffer_id = uuid::Uuid::new_v4();
+    match jamhub_engine::load_audio_buffer(&audio_bytes) {
+        Ok(samples) => {
+            let duration = samples.len() as u64;
+            // Store buffer in engine
+            app.audio_buffers.insert(buffer_id, samples);
+
+            // Create a new track with the audio
+            let track_id_uuid = app.project.add_track(&title, jamhub_model::TrackKind::Audio);
+            if let Some(track) = app.project.tracks.iter_mut().find(|t| t.id == track_id_uuid) {
+                track.clips.push(jamhub_model::Clip {
+                    id: uuid::Uuid::new_v4(),
+                    name: title.clone(),
+                    start_sample: 0,
+                    duration_samples: duration,
+                    source: jamhub_model::ClipSource::AudioBuffer { buffer_id },
+                    muted: false,
+                    fade_in_samples: 0,
+                    fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
+                    color: None,
+                    playback_rate: 1.0,
+                    preserve_pitch: false,
+                    loop_count: 1,
+                    gain_db: 0.0,
+                    take_index: 0,
+                    content_offset: 0,
+                    transpose_semitones: 0,
+                    reversed: false,
+                });
+            }
+
+            app.platform.import_track_status = Some(format!("Imported: {} ({:.1}s)", title, duration as f32 / app.project.sample_rate as f32));
+            app.set_status(&format!("Imported track: {title}"));
+        }
+        Err(e) => {
+            app.platform.import_track_status = Some(format!("Failed to decode audio: {e}"));
         }
     }
 }

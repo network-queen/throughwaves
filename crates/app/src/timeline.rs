@@ -957,6 +957,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             id: group_id,
                             name: format!("Group {}", app.project.groups.len() + 1),
                             color: track_color,
+                            collapsed: false,
                         });
                         app.project.tracks[i].group_id = Some(group_id);
                         // Also add the next track to the group if it exists
@@ -1257,6 +1258,28 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             app.fade_out_clip();
                             ui.close_menu();
                         }
+                        ui.menu_button("Fade Curve", |ui| {
+                            let clip = &app.project.tracks[ti].clips[ci];
+                            let cur_in = clip.fade_in_curve;
+                            let cur_out = clip.fade_out_curve;
+                            ui.label("Fade In Curve:");
+                            for curve in jamhub_model::FadeCurve::ALL {
+                                let label = if curve == cur_in { format!("* {}", curve.name()) } else { curve.name().to_string() };
+                                if ui.button(label).clicked() {
+                                    app.project.tracks[ti].clips[ci].fade_in_curve = curve;
+                                    ui.close_menu();
+                                }
+                            }
+                            ui.separator();
+                            ui.label("Fade Out Curve:");
+                            for curve in jamhub_model::FadeCurve::ALL {
+                                let label = if curve == cur_out { format!("* {}", curve.name()) } else { curve.name().to_string() };
+                                if ui.button(label).clicked() {
+                                    app.project.tracks[ti].clips[ci].fade_out_curve = curve;
+                                    ui.close_menu();
+                                }
+                            }
+                        });
                         if ui.button("Invert Phase").on_hover_text("Flip polarity (phase invert)").clicked() {
                             app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
                             app.invert_clip();
@@ -2933,7 +2956,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             } else {
                                 egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2])
                             };
-                            draw_waveform(painter, &peaks, cr, clip.duration_samples, wc, clip.content_offset, app.zoom, Some((rect.min.x, rect.max.x)), clip.gain_db);
+                            draw_waveform(painter, &peaks, cr, clip.duration_samples, wc, clip.content_offset, app.zoom, Some((rect.min.x, rect.max.x)), clip.gain_db, app.waveform_zoom);
                         }
                     }
                     ClipSource::Midi { notes, .. } => {
@@ -4278,6 +4301,7 @@ fn draw_waveform(
     zoom: f32,
     visible_x_range: Option<(f32, f32)>,
     gain_db: f32,
+    waveform_zoom: f32,
 ) {
     let width = clip_rect.width();
     if width < 2.0 {
@@ -4348,11 +4372,17 @@ fn draw_waveform(
             min *= gain_linear;
             max *= gain_linear;
             rms_max *= gain_linear;
-            // Clamp to prevent overdraw
-            min = min.max(-1.0);
-            max = max.min(1.0);
-            rms_max = rms_max.min(1.0);
         }
+        // Apply waveform vertical zoom (visual only)
+        if waveform_zoom != 1.0 {
+            min *= waveform_zoom;
+            max *= waveform_zoom;
+            rms_max *= waveform_zoom;
+        }
+        // Clamp to prevent overdraw
+        min = min.max(-1.0);
+        max = max.min(1.0);
+        rms_max = rms_max.min(1.0);
 
         let x = clip_rect.min.x + px as f32;
         peak_top.push(egui::pos2(x, center_y - max * half_height));

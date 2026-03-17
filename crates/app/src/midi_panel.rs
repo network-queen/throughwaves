@@ -122,7 +122,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                         source: jamhub_model::ClipSource::Midi { notes, cc_events: Vec::new() },
                                         muted: false,
                                         fade_in_samples: 0,
-                                        fade_out_samples: 0,
+                                        fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
                                         color: None,
                                         playback_rate: 1.0,
                                         preserve_pitch: false,

@@ -108,6 +108,9 @@ pub struct TrackGroup {
     pub id: Uuid,
     pub name: String,
     pub color: [u8; 3],
+    /// Whether this folder is collapsed (hiding child tracks)
+    #[serde(default)]
+    pub collapsed: bool,
 }
 
 impl Default for Project {
@@ -358,6 +361,8 @@ fn effect_param_default(param_name: &str) -> f32 {
         "Rate Hz" => 1.0,
         "Depth" => 0.5,
         "Drive" => 6.0,
+        "Ceiling dB" => -0.3,
+        "Range dB" => -80.0,
         _ => 0.5,
     }
 }
@@ -381,6 +386,8 @@ fn effect_param_range(param_name: &str) -> (f32, f32) {
         "Rate Hz" => (0.1, 10.0),
         "Depth" => (0.0, 1.0),
         "Drive" => (0.0, 36.0),
+        "Ceiling dB" => (-12.0, 0.0),
+        "Range dB" => (-120.0, 0.0),
         _ => (0.0, 1.0),
     }
 }
@@ -491,6 +498,16 @@ pub enum TrackEffect {
     ParametricEq { bands: Vec<EqBandParams> },
     Chorus { rate_hz: f32, depth: f32, mix: f32 },
     Distortion { drive: f32, mix: f32 },
+    /// Brick-wall limiter — prevents signal from exceeding ceiling
+    Limiter { threshold_db: f32, ceiling_db: f32, release_ms: f32 },
+    /// Noise gate — silences signal below threshold
+    Gate { threshold_db: f32, attack_ms: f32, release_ms: f32, range_db: f32 },
+    /// Phaser — all-pass filter modulation
+    Phaser { rate_hz: f32, depth: f32, stages: u32, mix: f32 },
+    /// Flanger — very short modulated delay with feedback
+    Flanger { rate_hz: f32, depth: f32, feedback: f32, mix: f32 },
+    /// Tremolo — amplitude modulation
+    Tremolo { rate_hz: f32, depth: f32 },
     /// External VST3 plugin — path to the .vst3 bundle
     Vst3Plugin { path: String, name: String },
 }
@@ -508,6 +525,11 @@ impl TrackEffect {
             TrackEffect::ParametricEq { .. } => "Parametric EQ",
             TrackEffect::Chorus { .. } => "Chorus",
             TrackEffect::Distortion { .. } => "Distortion",
+            TrackEffect::Limiter { .. } => "Limiter",
+            TrackEffect::Gate { .. } => "Gate",
+            TrackEffect::Phaser { .. } => "Phaser",
+            TrackEffect::Flanger { .. } => "Flanger",
+            TrackEffect::Tremolo { .. } => "Tremolo",
             TrackEffect::Vst3Plugin { ref name, .. } => name.as_str(),
         }
     }
@@ -529,6 +551,11 @@ impl TrackEffect {
             TrackEffect::ParametricEq { .. } => vec![], // Bands are edited via the EQ visualization
             TrackEffect::Chorus { .. } => vec!["Rate Hz", "Depth", "Mix"],
             TrackEffect::Distortion { .. } => vec!["Drive", "Mix"],
+            TrackEffect::Limiter { .. } => vec!["Threshold dB", "Ceiling dB", "Release ms"],
+            TrackEffect::Gate { .. } => vec!["Threshold dB", "Attack ms", "Release ms", "Range dB"],
+            TrackEffect::Phaser { .. } => vec!["Rate Hz", "Depth", "Mix"],
+            TrackEffect::Flanger { .. } => vec!["Rate Hz", "Depth", "Feedback", "Mix"],
+            TrackEffect::Tremolo { .. } => vec!["Rate Hz", "Depth"],
             TrackEffect::Vst3Plugin { .. } => vec![], // VST3 automation deferred
         }
     }
@@ -556,6 +583,22 @@ impl TrackEffect {
             (TrackEffect::Chorus { mix, .. }, "Mix") => Some(*mix),
             (TrackEffect::Distortion { drive, .. }, "Drive") => Some(*drive),
             (TrackEffect::Distortion { mix, .. }, "Mix") => Some(*mix),
+            (TrackEffect::Limiter { threshold_db, .. }, "Threshold dB") => Some(*threshold_db),
+            (TrackEffect::Limiter { ceiling_db, .. }, "Ceiling dB") => Some(*ceiling_db),
+            (TrackEffect::Limiter { release_ms, .. }, "Release ms") => Some(*release_ms),
+            (TrackEffect::Gate { threshold_db, .. }, "Threshold dB") => Some(*threshold_db),
+            (TrackEffect::Gate { attack_ms, .. }, "Attack ms") => Some(*attack_ms),
+            (TrackEffect::Gate { release_ms, .. }, "Release ms") => Some(*release_ms),
+            (TrackEffect::Gate { range_db, .. }, "Range dB") => Some(*range_db),
+            (TrackEffect::Phaser { rate_hz, .. }, "Rate Hz") => Some(*rate_hz),
+            (TrackEffect::Phaser { depth, .. }, "Depth") => Some(*depth),
+            (TrackEffect::Phaser { mix, .. }, "Mix") => Some(*mix),
+            (TrackEffect::Flanger { rate_hz, .. }, "Rate Hz") => Some(*rate_hz),
+            (TrackEffect::Flanger { depth, .. }, "Depth") => Some(*depth),
+            (TrackEffect::Flanger { feedback, .. }, "Feedback") => Some(*feedback),
+            (TrackEffect::Flanger { mix, .. }, "Mix") => Some(*mix),
+            (TrackEffect::Tremolo { rate_hz, .. }, "Rate Hz") => Some(*rate_hz),
+            (TrackEffect::Tremolo { depth, .. }, "Depth") => Some(*depth),
             _ => None,
         }
     }
@@ -584,6 +627,22 @@ impl TrackEffect {
             (TrackEffect::Chorus { mix, .. }, "Mix") => *mix = value,
             (TrackEffect::Distortion { drive, .. }, "Drive") => *drive = value,
             (TrackEffect::Distortion { mix, .. }, "Mix") => *mix = value,
+            (TrackEffect::Limiter { threshold_db, .. }, "Threshold dB") => *threshold_db = value,
+            (TrackEffect::Limiter { ceiling_db, .. }, "Ceiling dB") => *ceiling_db = value,
+            (TrackEffect::Limiter { release_ms, .. }, "Release ms") => *release_ms = value,
+            (TrackEffect::Gate { threshold_db, .. }, "Threshold dB") => *threshold_db = value,
+            (TrackEffect::Gate { attack_ms, .. }, "Attack ms") => *attack_ms = value,
+            (TrackEffect::Gate { release_ms, .. }, "Release ms") => *release_ms = value,
+            (TrackEffect::Gate { range_db, .. }, "Range dB") => *range_db = value,
+            (TrackEffect::Phaser { rate_hz, .. }, "Rate Hz") => *rate_hz = value,
+            (TrackEffect::Phaser { depth, .. }, "Depth") => *depth = value,
+            (TrackEffect::Phaser { mix, .. }, "Mix") => *mix = value,
+            (TrackEffect::Flanger { rate_hz, .. }, "Rate Hz") => *rate_hz = value,
+            (TrackEffect::Flanger { depth, .. }, "Depth") => *depth = value,
+            (TrackEffect::Flanger { feedback, .. }, "Feedback") => *feedback = value,
+            (TrackEffect::Flanger { mix, .. }, "Mix") => *mix = value,
+            (TrackEffect::Tremolo { rate_hz, .. }, "Rate Hz") => *rate_hz = value,
+            (TrackEffect::Tremolo { depth, .. }, "Depth") => *depth = value,
             _ => {}
         }
         effect
@@ -599,6 +658,56 @@ pub enum TrackKind {
     Bus,
 }
 
+/// Fade curve shape for crossfades.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FadeCurve {
+    #[default]
+    Linear,
+    Exponential,
+    Logarithmic,
+    SCurve,
+    EqualPower,
+}
+
+impl FadeCurve {
+    pub const ALL: [FadeCurve; 5] = [
+        FadeCurve::Linear,
+        FadeCurve::Exponential,
+        FadeCurve::Logarithmic,
+        FadeCurve::SCurve,
+        FadeCurve::EqualPower,
+    ];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            FadeCurve::Linear => "Linear",
+            FadeCurve::Exponential => "Exponential",
+            FadeCurve::Logarithmic => "Logarithmic",
+            FadeCurve::SCurve => "S-Curve",
+            FadeCurve::EqualPower => "Equal Power",
+        }
+    }
+
+    /// Apply the fade curve to a normalized position (0.0 to 1.0).
+    /// For fade-in: t=0 means silent, t=1 means full volume.
+    pub fn apply(&self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            FadeCurve::Linear => t,
+            FadeCurve::Exponential => t * t,
+            FadeCurve::Logarithmic => t.sqrt(),
+            FadeCurve::SCurve => {
+                // Hermite/smoothstep: 3t^2 - 2t^3
+                t * t * (3.0 - 2.0 * t)
+            }
+            FadeCurve::EqualPower => {
+                // sin(t * pi/2) — constant power crossfade
+                (t * std::f32::consts::FRAC_PI_2).sin()
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Clip {
     pub id: Uuid,
@@ -609,12 +718,18 @@ pub struct Clip {
     /// Muted clips are visible but don't play (used for takes management)
     #[serde(default)]
     pub muted: bool,
-    /// Fade in length in samples (linear gain ramp from 0 to 1 at clip start)
+    /// Fade in length in samples
     #[serde(default)]
     pub fade_in_samples: u64,
-    /// Fade out length in samples (linear gain ramp from 1 to 0 at clip end)
+    /// Fade out length in samples
     #[serde(default)]
     pub fade_out_samples: u64,
+    /// Fade in curve type (default Linear)
+    #[serde(default)]
+    pub fade_in_curve: FadeCurve,
+    /// Fade out curve type (default Linear)
+    #[serde(default)]
+    pub fade_out_curve: FadeCurve,
     /// Custom clip color (None = inherit from track)
     #[serde(default)]
     pub color: Option<[u8; 3]>,

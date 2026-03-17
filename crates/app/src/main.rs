@@ -515,6 +515,12 @@ pub struct DawApp {
     pub detected_chords: HashMap<Uuid, Vec<analysis_tools::DetectedChord>>,
     /// Version control (branching) panel state
     pub version_panel: version_control::VersionControlPanel,
+    /// Waveform vertical zoom — amplify waveform display without changing audio (1.0 = normal)
+    pub waveform_zoom: f32,
+    /// Beat flash timer — counts down from 1.0 to 0.0 on each beat for visual indicator
+    pub beat_flash: f32,
+    /// Last beat number (to detect beat changes)
+    pub last_beat_num: u64,
 }
 
 /// State for slip-editing: shifting audio content within clip boundaries.
@@ -1207,6 +1213,9 @@ impl DawApp {
             chord_detection_running: false,
             detected_chords: HashMap::new(),
             version_panel: version_control::VersionControlPanel::default(),
+            waveform_zoom: 1.0,
+            beat_flash: 0.0,
+            last_beat_num: 0,
         };
 
         // Apply persisted layout
@@ -1358,7 +1367,7 @@ impl DawApp {
                     source: ClipSource::AudioBuffer { buffer_id },
                     muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
                     fade_in_samples: 0,
-                    fade_out_samples: 0,
+                    fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
                     color: None,
                     playback_rate: 1.0,
                     preserve_pitch: false,
@@ -1416,7 +1425,7 @@ impl DawApp {
                     source: ClipSource::AudioBuffer { buffer_id },
                     muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
                     fade_in_samples: 0,
-                    fade_out_samples: 0,
+                    fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
                     color: None,
                     playback_rate: 1.0,
                     preserve_pitch: false,
@@ -1594,7 +1603,7 @@ impl DawApp {
                     source: ClipSource::AudioBuffer { buffer_id: shared_buffer_id },
                     muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
                     fade_in_samples: 0,
-                    fade_out_samples: 0,
+                    fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
                     color: None,
                     playback_rate: 1.0,
                     preserve_pitch: false,
@@ -1736,7 +1745,7 @@ impl DawApp {
                     source: ClipSource::AudioBuffer { buffer_id: live_id },
                     muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
                     fade_in_samples: 0,
-                    fade_out_samples: 0,
+                    fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
                     color: None,
                     playback_rate: 1.0,
                     preserve_pitch: false,
@@ -1977,7 +1986,7 @@ impl DawApp {
                 source: clip_source.clone(),
                 muted: clip_muted,
                 fade_in_samples: 0,
-                fade_out_samples: 0,
+                fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
                 color: clip_color,
                 playback_rate: clip_rate,
                 preserve_pitch: clip_preserve_pitch,
@@ -2079,7 +2088,7 @@ impl DawApp {
                     source: clip_source.clone(),
                     muted: clip_muted,
                     fade_in_samples: 0,
-                    fade_out_samples: 0,
+                    fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
                     color: clip_color,
                     playback_rate: clip_rate,
                     preserve_pitch: clip_preserve_pitch,
@@ -2167,7 +2176,7 @@ impl DawApp {
                     source: clip_source.clone(),
                     muted: clip_muted,
                     fade_in_samples: 0,
-                    fade_out_samples: 0,
+                    fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
                     color: clip_color,
                     playback_rate: clip_rate,
                     preserve_pitch: clip_preserve_pitch,
@@ -2523,7 +2532,7 @@ impl DawApp {
                     source: ClipSource::AudioBuffer { buffer_id },
                     muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
                     fade_in_samples: 0,
-                    fade_out_samples: 0,
+                    fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
                     color: None,
                     playback_rate: 1.0,
                     preserve_pitch: false,
@@ -2638,7 +2647,7 @@ impl DawApp {
             transpose_semitones: 0,
             reversed: false,
             fade_in_samples: 0,
-            fade_out_samples: 0,
+            fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
             color: None,
             playback_rate: 1.0,
             preserve_pitch: false,
@@ -2686,7 +2695,7 @@ impl DawApp {
                     name: frozen_name,
                     start_sample: 0, duration_samples: duration,
                     source: ClipSource::AudioBuffer { buffer_id },
-                    muted: false, fade_in_samples: 0, fade_out_samples: 0,
+                    muted: false, fade_in_samples: 0, fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
                     color: None, playback_rate: 1.0, preserve_pitch: false, loop_count: 1, gain_db: 0.0, take_index: 0, content_offset: 0, transpose_semitones: 0, reversed: false,
                 });
                 self.project.tracks[track_idx].frozen = true;
@@ -2751,7 +2760,7 @@ impl DawApp {
                     name: bounced_name,
                     start_sample: range_start, duration_samples: duration,
                     source: ClipSource::AudioBuffer { buffer_id },
-                    muted: false, fade_in_samples: 0, fade_out_samples: 0,
+                    muted: false, fade_in_samples: 0, fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
                     color: None, playback_rate: 1.0, preserve_pitch: false, loop_count: 1, gain_db: 0.0, take_index: 0, content_offset: 0, transpose_semitones: 0, reversed: false,
                 });
                 self.sync_project();
@@ -3587,7 +3596,7 @@ impl DawApp {
             source: ClipSource::AudioBuffer { buffer_id },
             muted: false, content_offset: 0, transpose_semitones: 0, reversed: false,
             fade_in_samples: 0,
-            fade_out_samples: 0,
+            fade_out_samples: 0, fade_in_curve: Default::default(), fade_out_curve: Default::default(),
             color: None,
             playback_rate: 1.0,
             preserve_pitch: false,
@@ -4000,6 +4009,24 @@ impl eframe::App for DawApp {
         } else {
             // Idle: 10fps refresh for meters, status messages, etc.
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
+        // Beat flash: detect beat changes and trigger visual flash
+        if is_playing {
+            let pos = self.position_samples();
+            let sr = self.sample_rate() as f64;
+            let beat = self.project.tempo.beat_at_sample(pos, sr);
+            let beat_num = beat.floor() as u64;
+            if beat_num != self.last_beat_num {
+                self.last_beat_num = beat_num;
+                self.beat_flash = 1.0;
+            }
+            // Decay the flash
+            if self.beat_flash > 0.0 {
+                self.beat_flash = (self.beat_flash - 0.08).max(0.0);
+            }
+        } else {
+            self.beat_flash = 0.0;
         }
 
         // Auto-save check: use preferences interval (0 = disabled)

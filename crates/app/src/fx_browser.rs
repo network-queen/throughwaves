@@ -418,6 +418,11 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                             ("Reverb", jamhub_model::TrackEffect::Reverb { decay: 0.7, mix: 0.3 }),
                             ("Chorus", jamhub_model::TrackEffect::Chorus { rate_hz: 1.0, depth: 0.5, mix: 0.3 }),
                             ("Distortion", jamhub_model::TrackEffect::Distortion { drive: 12.0, mix: 0.5 }),
+                            ("Limiter", jamhub_model::TrackEffect::Limiter { threshold_db: -1.0, ceiling_db: -0.3, release_ms: 50.0 }),
+                            ("Gate", jamhub_model::TrackEffect::Gate { threshold_db: -40.0, attack_ms: 1.0, release_ms: 50.0, range_db: -80.0 }),
+                            ("Phaser", jamhub_model::TrackEffect::Phaser { rate_hz: 0.5, depth: 0.5, stages: 4, mix: 0.5 }),
+                            ("Flanger", jamhub_model::TrackEffect::Flanger { rate_hz: 0.3, depth: 0.5, feedback: 0.5, mix: 0.5 }),
+                            ("Tremolo", jamhub_model::TrackEffect::Tremolo { rate_hz: 5.0, depth: 0.5 }),
                         ];
 
                         for (label, effect) in built_ins {

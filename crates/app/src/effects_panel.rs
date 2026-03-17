@@ -794,6 +794,37 @@ fn show_effect_controls(
             slider_with_learn!(ui, egui::Slider::new(drive, 0.0..=40.0).text("Drive").suffix(" dB"), "Drive", needs_sync, slot_ctx);
             slider_with_learn!(ui, egui::Slider::new(mix, 0.0..=1.0).text("Mix"), "Mix", needs_sync, slot_ctx);
         }
+        TrackEffect::Limiter { threshold_db, ceiling_db, release_ms } => {
+            slider_with_learn!(ui, egui::Slider::new(threshold_db, -30.0..=0.0).text("Threshold").suffix(" dB"), "Threshold dB", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(ceiling_db, -12.0..=0.0).text("Ceiling").suffix(" dB"), "Ceiling dB", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(release_ms, 1.0..=500.0).text("Release").suffix(" ms").logarithmic(true), "Release ms", needs_sync, slot_ctx);
+        }
+        TrackEffect::Gate { threshold_db, attack_ms, release_ms, range_db } => {
+            slider_with_learn!(ui, egui::Slider::new(threshold_db, -80.0..=0.0).text("Threshold").suffix(" dB"), "Threshold dB", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(attack_ms, 0.1..=50.0).text("Attack").suffix(" ms").logarithmic(true), "Attack ms", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(release_ms, 5.0..=500.0).text("Release").suffix(" ms").logarithmic(true), "Release ms", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(range_db, -120.0..=0.0).text("Range").suffix(" dB"), "Range dB", needs_sync, slot_ctx);
+        }
+        TrackEffect::Phaser { rate_hz, depth, stages, mix } => {
+            slider_with_learn!(ui, egui::Slider::new(rate_hz, 0.05..=5.0).text("Rate").suffix(" Hz"), "Rate Hz", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(depth, 0.0..=1.0).text("Depth"), "Depth", needs_sync, slot_ctx);
+            let mut stages_f = *stages as f32;
+            if ui.add(egui::Slider::new(&mut stages_f, 2.0..=12.0).text("Stages").step_by(2.0)).changed() {
+                *stages = stages_f as u32;
+                *needs_sync = true;
+            }
+            slider_with_learn!(ui, egui::Slider::new(mix, 0.0..=1.0).text("Mix"), "Mix", needs_sync, slot_ctx);
+        }
+        TrackEffect::Flanger { rate_hz, depth, feedback, mix } => {
+            slider_with_learn!(ui, egui::Slider::new(rate_hz, 0.05..=5.0).text("Rate").suffix(" Hz"), "Rate Hz", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(depth, 0.0..=1.0).text("Depth"), "Depth", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(feedback, -0.95..=0.95).text("Feedback"), "Feedback", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(mix, 0.0..=1.0).text("Mix"), "Mix", needs_sync, slot_ctx);
+        }
+        TrackEffect::Tremolo { rate_hz, depth } => {
+            slider_with_learn!(ui, egui::Slider::new(rate_hz, 0.1..=20.0).text("Rate").suffix(" Hz"), "Rate Hz", needs_sync, slot_ctx);
+            slider_with_learn!(ui, egui::Slider::new(depth, 0.0..=1.0).text("Depth"), "Depth", needs_sync, slot_ctx);
+        }
         TrackEffect::Vst3Plugin { .. } => {}
     }
 }

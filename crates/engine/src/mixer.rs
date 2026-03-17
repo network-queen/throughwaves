@@ -706,14 +706,16 @@ impl Mixer {
                         if clip.fade_in_samples > 0 {
                             let pos_in_clip = global_sample - clip.start_sample;
                             if pos_in_clip < clip.fade_in_samples {
-                                gain *= pos_in_clip as f32 / clip.fade_in_samples as f32;
+                                let t = pos_in_clip as f32 / clip.fade_in_samples as f32;
+                                gain *= clip.fade_in_curve.apply(t);
                             }
                         }
                         // Per-clip fade out
                         if clip.fade_out_samples > 0 {
                             let pos_from_end = clip_visual_end - global_sample;
                             if pos_from_end <= clip.fade_out_samples {
-                                gain *= pos_from_end as f32 / clip.fade_out_samples as f32;
+                                let t = pos_from_end as f32 / clip.fade_out_samples as f32;
+                                gain *= clip.fade_out_curve.apply(t);
                             }
                         }
                         track_mono[i] += rendered[i] * gain;
@@ -1001,7 +1003,8 @@ fn render_clip_ola_impl(
             if clip.fade_in_samples > 0 {
                 let pos_in_clip = global_sample - clip.start_sample;
                 if pos_in_clip < clip.fade_in_samples {
-                    gain *= pos_in_clip as f32 / clip.fade_in_samples as f32;
+                    let t = pos_in_clip as f32 / clip.fade_in_samples as f32;
+                    gain *= clip.fade_in_curve.apply(t);
                 }
             }
 
@@ -1009,7 +1012,8 @@ fn render_clip_ola_impl(
             if clip.fade_out_samples > 0 {
                 let pos_from_end = clip_visual_end - global_sample;
                 if pos_from_end <= clip.fade_out_samples {
-                    gain *= pos_from_end as f32 / clip.fade_out_samples as f32;
+                    let t = pos_from_end as f32 / clip.fade_out_samples as f32;
+                    gain *= clip.fade_out_curve.apply(t);
                 }
             }
 
