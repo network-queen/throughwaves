@@ -1,4 +1,4 @@
-# JamHub Stem Separator Service
+# ThroughWaves Stem Separator Service
 
 AI-powered stem separation using Meta's Demucs model. Separates mixed audio into vocals, drums, bass, and other stems.
 

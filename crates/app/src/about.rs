@@ -8,7 +8,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
     }
 
     let mut open = true;
-    egui::Window::new("About JamHub")
+    egui::Window::new("About ThroughWaves")
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -17,7 +17,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
             ui.vertical_centered(|ui| {
                 ui.add_space(10.0);
                 ui.heading(
-                    egui::RichText::new("JamHub")
+                    egui::RichText::new("ThroughWaves")
                         .size(28.0)
                         .color(egui::Color32::from_rgb(100, 180, 255)),
                 );

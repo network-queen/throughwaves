@@ -211,7 +211,7 @@ impl StemSeparatorPanel {
                 .unwrap_or_else(|| "audio.wav".to_string());
 
             // Build multipart form body manually
-            let boundary = format!("----JamHub{}", uuid::Uuid::new_v4().simple());
+            let boundary = format!("----ThroughWaves{}", uuid::Uuid::new_v4().simple());
             let mut body = Vec::new();
 
             // File part

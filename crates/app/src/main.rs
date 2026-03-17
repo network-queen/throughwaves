@@ -250,12 +250,12 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
-            .with_title("JamHub — Collaborative DAW"),
+            .with_title("ThroughWaves — Collaborative DAW"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "JamHub",
+        "ThroughWaves",
         options,
         Box::new(|cc| {
             setup_theme(&cc.egui_ctx);
@@ -3997,7 +3997,7 @@ impl eframe::App for DawApp {
         } else {
             format!(" [{}]", self.project.current_branch)
         };
-        let title = format!("{}{branch_label}{dirty_mark} — JamHub", self.project.name);
+        let title = format!("{}{branch_label}{dirty_mark} — ThroughWaves", self.project.name);
 
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
@@ -5254,7 +5254,7 @@ impl eframe::App for DawApp {
                     }
                 });
                 ui.menu_button("Help", |ui| {
-                    if ui.button("About JamHub").clicked() {
+                    if ui.button("About ThroughWaves").clicked() {
                         self.show_about = true;
                         ui.close_menu();
                     }
@@ -5303,9 +5303,9 @@ impl eframe::App for DawApp {
             .exact_height(28.0)
             .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // JamHub wordmark at far left
+                // ThroughWaves wordmark at far left
                 ui.label(
-                    egui::RichText::new("JamHub")
+                    egui::RichText::new("ThroughWaves")
                         .size(10.0)
                         .strong()
                         .color(egui::Color32::from_rgb(240, 192, 64)),
@@ -5673,7 +5673,7 @@ impl eframe::App for DawApp {
         // ── Welcome Screen ───────────────────────────────────────────────
         if self.show_welcome {
             let mut wel_open = true;
-            egui::Window::new("Welcome to JamHub")
+            egui::Window::new("Welcome to ThroughWaves")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -5682,7 +5682,7 @@ impl eframe::App for DawApp {
                 .show(ctx, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.add_space(8.0);
-                        ui.heading(egui::RichText::new("JamHub").size(28.0).strong());
+                        ui.heading(egui::RichText::new("ThroughWaves").size(28.0).strong());
                         ui.label(egui::RichText::new("Collaborative DAW").size(14.0).weak());
                         ui.add_space(16.0);
                     });

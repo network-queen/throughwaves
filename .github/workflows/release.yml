@@ -1,0 +1,204 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_NAME: ThroughWaves
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+
+      # Build for Apple Silicon
+      - name: Build (aarch64)
+        run: cargo build --release --bin jamhub-app --target aarch64-apple-darwin
+
+      # Build for Intel
+      - name: Build (x86_64)
+        run: cargo build --release --bin jamhub-app --target x86_64-apple-darwin
+
+      # Create universal binary
+      - name: Create universal binary
+        run: |
+          mkdir -p target/release-universal
+          lipo -create \
+            target/aarch64-apple-darwin/release/jamhub-app \
+            target/x86_64-apple-darwin/release/jamhub-app \
+            -output target/release-universal/jamhub-app
+
+      # Create .app bundle
+      - name: Create app bundle
+        run: |
+          APP="${APP_NAME}.app"
+          mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
+          cp target/release-universal/jamhub-app "${APP}/Contents/MacOS/${APP_NAME}"
+          chmod +x "${APP}/Contents/MacOS/${APP_NAME}"
+
+      # Create DMG
+      - name: Create DMG
+        run: |
+          VERSION=${GITHUB_REF_NAME:-dev}
+          DMG="${APP_NAME}-${VERSION}-macOS-universal.dmg"
+          hdiutil create -size 200m -fs HFS+ -volname "$APP_NAME" tmp.dmg
+          MOUNT=$(hdiutil attach tmp.dmg | grep "/Volumes" | sed 's/.*\/Volumes/\/Volumes/')
+          cp -R "${APP_NAME}.app" "${MOUNT}/"
+          ln -s /Applications "${MOUNT}/Applications"
+          hdiutil detach "$MOUNT" || true
+          sleep 1
+          hdiutil convert tmp.dmg -format UDZO -o "dist/${DMG}"
+          rm tmp.dmg
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/*.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --bin jamhub-app
+
+      - name: Package
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME:-dev}
+          mkdir -p "dist/${APP_NAME}"
+          cp "target/release/jamhub-app.exe" "dist/${APP_NAME}/${APP_NAME}.exe"
+          cat > "dist/${APP_NAME}/README.txt" << 'EOF'
+          ThroughWaves - Professional Digital Audio Workstation
+          Double-click ThroughWaves.exe to start.
+          VST3 plugins: C:\Program Files\Common Files\VST3\
+          EOF
+          cd dist && 7z a "../dist/${APP_NAME}-${VERSION}-Windows-x64.zip" "${APP_NAME}/"
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: dist/*.zip
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgl1-mesa-dev libx11-dev \
+            libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev \
+            libgtk-3-dev libatk1.0-dev
+
+      - name: Build
+        run: cargo build --release --bin jamhub-app
+
+      - name: Create .deb package
+        run: |
+          VERSION=${GITHUB_REF_NAME:-dev}
+          VERSION_CLEAN=${VERSION#v}
+          DEB_DIR=dist/deb
+          mkdir -p ${DEB_DIR}/DEBIAN
+          mkdir -p ${DEB_DIR}/usr/bin
+          mkdir -p ${DEB_DIR}/usr/share/applications
+          mkdir -p ${DEB_DIR}/usr/share/icons/hicolor/256x256/apps
+          cp target/release/jamhub-app ${DEB_DIR}/usr/bin/jamhub
+          chmod +x ${DEB_DIR}/usr/bin/jamhub
+
+          cat > ${DEB_DIR}/DEBIAN/control << EOF
+          Package: jamhub
+          Version: ${VERSION_CLEAN}
+          Section: sound
+          Priority: optional
+          Architecture: amd64
+          Depends: libasound2, libgl1, libx11-6, libxcursor1, libxrandr2, libxi6
+          Maintainer: ThroughWaves Team <hello@throughwaves.app>
+          Description: Professional Digital Audio Workstation
+           Full-featured DAW with VST3 hosting, MIDI, AI stem separation,
+           built-in effects, live jam sessions, and collaboration.
+          EOF
+
+          cat > ${DEB_DIR}/usr/share/applications/jamhub.desktop << EOF
+          [Desktop Entry]
+          Type=Application
+          Name=ThroughWaves
+          Comment=Professional DAW
+          Exec=jamhub
+          Icon=jamhub
+          Terminal=false
+          Categories=AudioVideo;Audio;Music;
+          EOF
+
+          dpkg-deb --build ${DEB_DIR} dist/jamhub-${VERSION}-linux-amd64.deb
+          rm -rf ${DEB_DIR}
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
+      - name: Create tar.gz
+        run: |
+          VERSION=${GITHUB_REF_NAME:-dev}
+          mkdir -p dist/tar/ThroughWaves
+          cp target/release/jamhub-app dist/tar/ThroughWaves/jamhub
+          chmod +x dist/tar/ThroughWaves/jamhub
+          (cd dist/tar && tar -czf "../ThroughWaves-${VERSION}-linux-x86_64.tar.gz" ThroughWaves/)
+          rm -rf dist/tar
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            dist/*.deb
+            dist/*.tar.gz
+
+  # Create GitHub Release with all artifacts
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "ThroughWaves ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.zip
+            artifacts/**/*.deb
+            artifacts/**/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

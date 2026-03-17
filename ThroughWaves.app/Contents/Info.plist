@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>JamHub</string>
+    <string>ThroughWaves</string>
     <key>CFBundleIdentifier</key>
-    <string>com.jamhub.daw</string>
+    <string>com.throughwaves.daw</string>
     <key>CFBundleName</key>
-    <string>JamHub</string>
+    <string>ThroughWaves</string>
     <key>CFBundleDisplayName</key>
-    <string>JamHub</string>
+    <string>ThroughWaves</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
@@ -17,9 +17,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleSignature</key>
-    <string>JMHB</string>
+    <string>TWAV</string>
     <key>CFBundleIconFile</key>
-    <string>JamHub.icns</string>
+    <string>ThroughWaves.icns</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
@@ -27,7 +27,7 @@
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>JamHub needs microphone access for audio recording.</string>
+    <string>ThroughWaves needs microphone access for audio recording.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>

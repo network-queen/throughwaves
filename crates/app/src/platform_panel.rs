@@ -12,7 +12,7 @@ pub struct PlatformTrack {
     pub like_count: u64,
 }
 
-/// State for the JamHub platform integration panel.
+/// State for the ThroughWaves platform integration panel.
 pub struct PlatformPanel {
     pub server_url: String,
     pub jwt_token: Option<String>,
@@ -165,7 +165,7 @@ fn platform_upload_file(
         .unwrap_or("mixdown.wav");
 
     // Build a simple multipart body manually
-    let boundary = "----JamHubUploadBoundary9876543210";
+    let boundary = "----ThroughWavesUploadBoundary9876543210";
     let mut body = Vec::new();
 
     // Title field

@@ -32,7 +32,7 @@ impl PluginWindowManager {
         };
 
         let (w, h) = jamhub_engine::vst3_host::Vst3Plugin::get_editor_size(view);
-        let title = format!("{} — JamHub", plugin.name);
+        let title = format!("{} — ThroughWaves", plugin.name);
 
         match PluginEditorWindow::new(view, w, h, &title, plugin) {
             Some(win) => {

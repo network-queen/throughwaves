@@ -60,13 +60,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api", api)
         .nest("/api", jam::router())
         .nest_service("/uploads", ServeDir::new("./uploads"))
+        .nest_service("/downloads", ServeDir::new("./dist"))
         .fallback_service(ServeDir::new("./crates/server/web"))
         .layer(middleware::from_fn(log_request))
         .layer(CorsLayer::permissive())
         .with_state(pool);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    println!("JamHub web server listening on http://0.0.0.0:3000");
+    println!("ThroughWaves web server listening on http://0.0.0.0:3000");
     axum::serve(listener, app).await?;
 
     Ok(())

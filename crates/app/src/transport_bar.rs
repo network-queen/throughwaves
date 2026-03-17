@@ -508,7 +508,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 ui.separator();
             }
             ui.label(
-                egui::RichText::new("JamHub")
+                egui::RichText::new("ThroughWaves")
                     .size(18.0)
                     .strong()
                     .color(egui::Color32::from_rgb(240, 192, 64)),

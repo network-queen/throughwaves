@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>JamHub — Collaborative Music Platform</title>
+<title>ThroughWaves — Collaborative Music Platform</title>
 <style>
 /* ===== Reset & Base ===== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -590,7 +590,7 @@ select { cursor: pointer; }
     <div class="topnav-inner">
       <a href="#/home" class="logo">
         <div class="logo-icon">J</div>
-        JamHub
+        ThroughWaves
       </a>
       <div class="nav-links" id="navLinks">
         <a href="#/home" data-route="home">Home</a>
@@ -598,6 +598,7 @@ select { cursor: pointer; }
         <a href="#/feed" data-route="feed">Feed</a>
         <a href="#/projects" data-route="projects">Projects</a>
         <a href="#/upload" data-route="upload">Upload</a>
+        <a href="#/download" data-route="download">Download DAW</a>
         <a href="#/profile" data-route="profile">Profile</a>
       </div>
       <div class="nav-right">
@@ -645,7 +646,7 @@ select { cursor: pointer; }
       <div class="modal-header">
         <div class="modal-header-text">
           <div class="modal-title" id="authModalTitle">Welcome back</div>
-          <div class="modal-subtitle" id="authModalSubtitle">Sign in to your JamHub account</div>
+          <div class="modal-subtitle" id="authModalSubtitle">Sign in to your ThroughWaves account</div>
         </div>
         <button class="btn btn-ghost btn-sm" onclick="closeAuthModal()" style="font-size:1.1rem;padding:0.2rem 0.5rem;">&#10005;</button>
       </div>
@@ -680,7 +681,7 @@ select { cursor: pointer; }
 
 <script>
 /* ================================================================
-   JamHub — Single Page Application
+   ThroughWaves — Single Page Application
    ================================================================ */
 
 // ===== State =====
@@ -912,12 +913,12 @@ function switchAuthTab(tab) {
   if (tab === 'register') {
     ug.classList.remove('hidden');
     title.textContent = 'Create account';
-    subtitle.textContent = 'Join the JamHub community';
+    subtitle.textContent = 'Join the ThroughWaves community';
     submitBtn.textContent = 'Create Account';
   } else {
     ug.classList.add('hidden');
     title.textContent = 'Welcome back';
-    subtitle.textContent = 'Sign in to your JamHub account';
+    subtitle.textContent = 'Sign in to your ThroughWaves account';
     submitBtn.textContent = 'Sign In';
   }
   document.getElementById('authError').classList.remove('show');
@@ -944,8 +945,8 @@ async function handleAuth(e) {
       localStorage.setItem('jamhub_token', result.token);
     } else if (result === null) {
       // Server unreachable — demo mode: simulate login
-      console.log('[JamHub] Server unreachable, entering demo mode');
-      state.user = { username: email.split('@')[0], email, bio: 'Music creator on JamHub' };
+      console.log('[ThroughWaves] Server unreachable, entering demo mode');
+      state.user = { username: email.split('@')[0], email, bio: 'Music creator on ThroughWaves' };
       state.token = 'demo_token';
       localStorage.setItem('jamhub_token', 'demo_token');
     } else {
@@ -1338,6 +1339,7 @@ function renderPage() {
   else if (route.startsWith('track/')) renderTrackDetail(main, route.split('/')[1]);
   else if (route.startsWith('user/')) renderUserProfile(main, route.split('/')[1]);
   else if (route === 'upload') renderUpload(main);
+  else if (route === 'download') renderDownload(main);
   else if (route === 'profile') renderProfile(main);
   else if (route === 'feed') renderFeed(main);
   else renderHome(main);
@@ -1580,6 +1582,204 @@ function proposeTrackPrompt(projectId) {
 }
 
 // --- Upload ---
+function renderDownload(el) {
+  // Detect user's OS
+  const ua = navigator.userAgent.toLowerCase();
+  let detectedOS = 'macos';
+  if (ua.includes('win')) detectedOS = 'windows';
+  else if (ua.includes('linux')) detectedOS = 'linux';
+
+  const version = '1.0.0';
+  const downloads = {
+    macos: {
+      name: 'macOS',
+      icon: '\uD83C\uDF4E',
+      file: `ThroughWaves-v${version}-macOS-universal.dmg`,
+      size: '~45 MB',
+      desc: 'Universal binary (Apple Silicon + Intel)',
+      req: 'macOS 13.0 or later',
+      instructions: 'Open DMG, drag ThroughWaves to Applications folder'
+    },
+    windows: {
+      name: 'Windows',
+      icon: '\uD83E\uDE9F',
+      file: `ThroughWaves-v${version}-Windows-x64.zip`,
+      size: '~40 MB',
+      desc: '64-bit Windows executable',
+      req: 'Windows 10 or later (64-bit)',
+      instructions: 'Extract ZIP, run ThroughWaves.exe'
+    },
+    linux: {
+      name: 'Linux',
+      icon: '\uD83D\uDC27',
+      file: `ThroughWaves-v${version}-linux-x86_64.tar.gz`,
+      size: '~35 MB',
+      desc: 'x86_64 binary',
+      req: 'Ubuntu 22.04+, Fedora 38+, or Arch Linux',
+      instructions: 'Extract, chmod +x jamhub, run ./jamhub'
+    }
+  };
+
+  const primary = downloads[detectedOS];
+
+  el.innerHTML = `
+    <div style="max-width:900px; margin:0 auto;">
+      <div style="text-align:center; margin-bottom:3rem;">
+        <h1 class="page-title" style="font-size:2.4rem; margin-bottom:0.5rem;">
+          Download ThroughWaves
+        </h1>
+        <p style="color:var(--text-secondary); font-size:1.1rem; max-width:600px; margin:0 auto;">
+          Professional Digital Audio Workstation with VST3 hosting, AI stem separation,
+          MIDI sequencing, built-in effects, and real-time collaboration.
+        </p>
+        <p style="color:var(--text-muted); margin-top:0.5rem;">
+          Version ${version} &mdash; Free &amp; Open Source (GPL-3.0)
+        </p>
+      </div>
+
+      <!-- Primary download (detected OS) -->
+      <div style="
+        background: linear-gradient(135deg, rgba(235,180,60,0.12) 0%, rgba(235,180,60,0.04) 100%);
+        border: 1px solid rgba(235,180,60,0.3);
+        border-radius: var(--radius-lg);
+        padding: 2.5rem;
+        text-align: center;
+        margin-bottom: 2rem;
+      ">
+        <div style="font-size:3rem; margin-bottom:0.5rem;">${primary.icon}</div>
+        <h2 style="font-size:1.5rem; margin-bottom:0.5rem;">ThroughWaves for ${primary.name}</h2>
+        <p style="color:var(--text-secondary); margin-bottom:1.5rem;">${primary.desc}</p>
+        <a href="/downloads/${primary.file}" download
+           class="btn btn-primary" style="
+            font-size:1.15rem;
+            padding:0.9rem 2.5rem;
+            border-radius:12px;
+            display:inline-block;
+            text-decoration:none;
+          ">
+          Download for ${primary.name} (${primary.size})
+        </a>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin-top:1rem;">
+          ${primary.instructions}
+        </p>
+      </div>
+
+      <!-- All platforms grid -->
+      <h3 style="margin-bottom:1rem; color:var(--text-secondary);">All Platforms</h3>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap:1rem; margin-bottom:2rem;">
+        ${Object.entries(downloads).map(([key, dl]) => `
+          <div class="card" style="padding:1.5rem; ${key === detectedOS ? 'border-color:var(--accent);' : ''}">
+            <div style="font-size:2rem; margin-bottom:0.5rem;">${dl.icon}</div>
+            <h4 style="margin-bottom:0.3rem;">${dl.name}</h4>
+            <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:0.3rem;">${dl.desc}</p>
+            <p style="color:var(--text-muted); font-size:0.8rem; margin-bottom:1rem;">${dl.req}</p>
+            <a href="/downloads/${dl.file}" download
+               class="btn ${key === detectedOS ? 'btn-primary' : 'btn-secondary'}"
+               style="width:100%; text-align:center; display:block; text-decoration:none;">
+              Download ${dl.size}
+            </a>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- Linux extra: .deb -->
+      <div class="card" style="padding:1.2rem; margin-bottom:2rem;">
+        <h4 style="margin-bottom:0.5rem;">\uD83D\uDCE6 Linux .deb Package (Debian/Ubuntu)</h4>
+        <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:0.8rem;">
+          Install with: <code style="background:var(--bg-base); padding:2px 6px; border-radius:4px;">sudo dpkg -i jamhub-v${version}-linux-amd64.deb</code>
+        </p>
+        <a href="/downloads/jamhub-v${version}-linux-amd64.deb" download
+           class="btn btn-secondary" style="text-decoration:none;">
+          Download .deb
+        </a>
+      </div>
+
+      <!-- Build from source -->
+      <div class="card" style="padding:1.5rem; margin-bottom:2rem;">
+        <h4 style="margin-bottom:0.8rem;">\uD83D\uDEE0 Build from Source</h4>
+        <p style="color:var(--text-secondary); margin-bottom:1rem;">
+          ThroughWaves is open-source. Build it yourself with Rust:
+        </p>
+        <pre style="
+          background:var(--bg-base);
+          padding:1rem;
+          border-radius:var(--radius);
+          overflow-x:auto;
+          font-size:0.9rem;
+          color:var(--green);
+          line-height:1.5;
+        "><code>git clone https://github.com/jamhub/jamhub.git
+cd jamhub
+cargo build --release --bin jamhub-app
+
+# macOS: create .app bundle
+make bundle
+
+# Run directly
+cargo run --release --bin jamhub-app</code></pre>
+      </div>
+
+      <!-- Features list -->
+      <div class="card" style="padding:1.5rem; margin-bottom:2rem;">
+        <h4 style="margin-bottom:1rem;">What's Included</h4>
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:0.5rem;">
+          ${[
+            'Multi-track recording',
+            'VST3 plugin hosting',
+            'MIDI sequencing & piano roll',
+            'Built-in synthesizer',
+            '15 built-in effects',
+            'Parametric EQ visualizer',
+            'AI stem separation (Demucs)',
+            'Real-time spectrum analyzer',
+            'LUFS loudness metering',
+            'Reference track A/B',
+            'Audio-to-MIDI conversion',
+            'Chord detection',
+            'Live jam sessions',
+            'Version branching (git-like)',
+            'WAV/FLAC/AIFF export',
+            'Stem export',
+            'MIDI learn & mapping',
+            'Tap tempo',
+            'Session/clip launcher',
+            'Collaborative projects',
+          ].map(f => `<div style="color:var(--text-secondary); font-size:0.9rem; padding:0.3rem 0;">
+            <span style="color:var(--green); margin-right:0.4rem;">&#10003;</span>${f}
+          </div>`).join('')}
+        </div>
+      </div>
+
+      <!-- System requirements -->
+      <div class="card" style="padding:1.5rem;">
+        <h4 style="margin-bottom:1rem;">System Requirements</h4>
+        <table style="width:100%; border-collapse:collapse;">
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:0.5rem; color:var(--text-muted);">CPU</td>
+            <td style="padding:0.5rem;">64-bit processor (multi-core recommended)</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:0.5rem; color:var(--text-muted);">RAM</td>
+            <td style="padding:0.5rem;">4 GB minimum, 8 GB recommended</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:0.5rem; color:var(--text-muted);">Disk</td>
+            <td style="padding:0.5rem;">200 MB for app + space for projects</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:0.5rem; color:var(--text-muted);">Audio</td>
+            <td style="padding:0.5rem;">Built-in audio or USB/Thunderbolt interface</td>
+          </tr>
+          <tr>
+            <td style="padding:0.5rem; color:var(--text-muted);">OS</td>
+            <td style="padding:0.5rem;">macOS 13+, Windows 10+, Linux (Ubuntu 22.04+)</td>
+          </tr>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 function renderUpload(el) {
   el.innerHTML = `
     <h1 class="page-title">Upload Track</h1>
@@ -1691,9 +1891,9 @@ async function handleUpload() {
     fd.append('key', document.getElementById('uploadKey').value);
     try {
       uploadResult = await apiUploadTrack(fd);
-      console.log('[JamHub] Upload result:', uploadResult);
+      console.log('[ThroughWaves] Upload result:', uploadResult);
     } catch (e) {
-      console.error('[JamHub] Upload error:', e.message);
+      console.error('[ThroughWaves] Upload error:', e.message);
       uploadError = e.message;
     }
   }
@@ -1941,7 +2141,7 @@ async function renderUserProfile(el, userId) {
       <div class="profile-avatar">${(profile.username || '?').charAt(0).toUpperCase()}</div>
       <div class="profile-info">
         <h2>${esc(profile.username)}</h2>
-        <div class="profile-bio">${esc(profile.bio || 'JamHub member')}</div>
+        <div class="profile-bio">${esc(profile.bio || 'ThroughWaves member')}</div>
         <div class="profile-stats">
           <span class="profile-stat"><strong>${profile.follower_count}</strong> followers</span>
           <span class="profile-stat"><strong>${profile.following_count}</strong> following</span>
@@ -2047,7 +2247,7 @@ function renderProfile(el) {
       <div class="profile-avatar">${u.username.charAt(0).toUpperCase()}</div>
       <div class="profile-info">
         <h2>${esc(u.username)}</h2>
-        <div class="profile-bio">${esc(u.bio || 'JamHub member')}</div>
+        <div class="profile-bio">${esc(u.bio || 'ThroughWaves member')}</div>
       </div>
       <button class="btn btn-secondary btn-sm" onclick="logout()" style="margin-left:auto;align-self:start;">Log out</button>
     </div>
@@ -2092,7 +2292,7 @@ function init() {
       if (user) { state.user = user; updateAuthUI(); renderPage(); }
     }).catch(() => {});
   } else if (state.token === 'demo_token') {
-    state.user = { username: 'DemoUser', email: 'demo@jamhub.io', bio: 'Music creator on JamHub' };
+    state.user = { username: 'DemoUser', email: 'demo@jamhub.io', bio: 'Music creator on ThroughWaves' };
     updateAuthUI();
   }
 

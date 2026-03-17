@@ -1,4 +1,4 @@
-APP_NAME = JamHub
+APP_NAME = ThroughWaves
 APP_BUNDLE = $(APP_NAME).app
 BINARY_NAME = jamhub-app
 CARGO_TARGET_DIR = target
@@ -48,17 +48,17 @@ clean:
 #
 # Requires iconutil (ships with Xcode command line tools).
 icon: icon.png
-	@mkdir -p JamHub.iconset
-	sips -z 16 16     icon.png --out JamHub.iconset/icon_16x16.png
-	sips -z 32 32     icon.png --out JamHub.iconset/icon_16x16@2x.png
-	sips -z 32 32     icon.png --out JamHub.iconset/icon_32x32.png
-	sips -z 64 64     icon.png --out JamHub.iconset/icon_32x32@2x.png
-	sips -z 128 128   icon.png --out JamHub.iconset/icon_128x128.png
-	sips -z 256 256   icon.png --out JamHub.iconset/icon_128x128@2x.png
-	sips -z 256 256   icon.png --out JamHub.iconset/icon_256x256.png
-	sips -z 512 512   icon.png --out JamHub.iconset/icon_256x256@2x.png
-	sips -z 512 512   icon.png --out JamHub.iconset/icon_512x512.png
-	sips -z 1024 1024 icon.png --out JamHub.iconset/icon_512x512@2x.png
-	iconutil -c icns JamHub.iconset -o "$(APP_BUNDLE)/Contents/Resources/JamHub.icns"
-	@rm -rf JamHub.iconset
-	@echo "Icon installed into $(APP_BUNDLE)/Contents/Resources/JamHub.icns"
+	@mkdir -p ThroughWaves.iconset
+	sips -z 16 16     icon.png --out ThroughWaves.iconset/icon_16x16.png
+	sips -z 32 32     icon.png --out ThroughWaves.iconset/icon_16x16@2x.png
+	sips -z 32 32     icon.png --out ThroughWaves.iconset/icon_32x32.png
+	sips -z 64 64     icon.png --out ThroughWaves.iconset/icon_32x32@2x.png
+	sips -z 128 128   icon.png --out ThroughWaves.iconset/icon_128x128.png
+	sips -z 256 256   icon.png --out ThroughWaves.iconset/icon_128x128@2x.png
+	sips -z 256 256   icon.png --out ThroughWaves.iconset/icon_256x256.png
+	sips -z 512 512   icon.png --out ThroughWaves.iconset/icon_256x256@2x.png
+	sips -z 512 512   icon.png --out ThroughWaves.iconset/icon_512x512.png
+	sips -z 1024 1024 icon.png --out ThroughWaves.iconset/icon_512x512@2x.png
+	iconutil -c icns ThroughWaves.iconset -o "$(APP_BUNDLE)/Contents/Resources/ThroughWaves.icns"
+	@rm -rf ThroughWaves.iconset
+	@echo "Icon installed into $(APP_BUNDLE)/Contents/Resources/ThroughWaves.icns"

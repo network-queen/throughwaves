@@ -1,4 +1,4 @@
--- JamHub Web Platform Schema
+-- ThroughWaves Web Platform Schema
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 

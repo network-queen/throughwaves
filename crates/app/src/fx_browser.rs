@@ -209,9 +209,9 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                         .color(egui::Color32::GRAY),
                 );
 
-                // "JamHub" (built-in)
+                // "ThroughWaves" (built-in)
                 if cols[0]
-                    .selectable_label(app.fx_browser.show_builtin, "  JamHub")
+                    .selectable_label(app.fx_browser.show_builtin, "  ThroughWaves")
                     .clicked()
                 {
                     app.fx_browser.show_builtin = true;
@@ -375,7 +375,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                         } else if let Some(ref vendor) = app.fx_browser.vendor_filter {
                             &p.vendor == vendor
                         } else if app.fx_browser.show_builtin {
-                            false // hide VSTs when "JamHub" (built-in) is selected
+                            false // hide VSTs when "ThroughWaves" (built-in) is selected
                         } else {
                             true // "All" — show everything
                         }

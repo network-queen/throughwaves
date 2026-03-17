@@ -1,5 +1,5 @@
 """
-JamHub Stem Separator Service
+ThroughWaves Stem Separator Service
 Uses Meta's Demucs model to separate audio into stems (vocals, drums, bass, other).
 Supports file uploads and URL downloads via yt-dlp.
 """
@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="JamHub Stem Separator", version="1.0.0")
+app = FastAPI(title="ThroughWaves Stem Separator", version="1.0.0")
 
 # Allow CORS from the DAW and web frontend
 app.add_middleware(
@@ -340,7 +340,7 @@ async def delete_job(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    print("JamHub Stem Separator Service")
+    print("ThroughWaves Stem Separator Service")
     print("Listening on http://localhost:8000")
     print("Endpoints:")
     print("  POST /separate       — upload a file for separation")
