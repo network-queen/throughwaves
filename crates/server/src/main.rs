@@ -1,4 +1,5 @@
 mod auth;
+mod jam;
 mod models;
 mod projects;
 mod social;
@@ -57,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .nest("/api", api)
+        .nest("/api", jam::router())
         .nest_service("/uploads", ServeDir::new("./uploads"))
         .fallback_service(ServeDir::new("./crates/server/web"))
         .layer(middleware::from_fn(log_request))

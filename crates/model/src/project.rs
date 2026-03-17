@@ -3,6 +3,22 @@ use uuid::Uuid;
 
 use crate::time::{Tempo, TimeSignature};
 
+/// A version snapshot in the project's branching history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectVersion {
+    pub id: Uuid,
+    /// Branch name, e.g. "main", "verse-option-A"
+    pub branch: String,
+    /// Parent version (None for the initial commit)
+    pub parent_id: Option<Uuid>,
+    /// Human-readable commit message
+    pub message: String,
+    /// ISO 8601 timestamp
+    pub timestamp: String,
+    /// SHA-256 hex digest of the serialized project snapshot (for identity)
+    pub project_hash: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
@@ -37,6 +53,15 @@ pub struct Project {
     /// Saved loop regions (named, colored loop areas)
     #[serde(default)]
     pub regions: Vec<Region>,
+    /// Version control: history of commits across all branches
+    #[serde(default)]
+    pub version_history: Vec<ProjectVersion>,
+    /// Current branch name (default "main")
+    #[serde(default = "default_branch_name")]
+    pub current_branch: String,
+    /// ID of the current version (HEAD). None if no commits yet.
+    #[serde(default)]
+    pub current_version_id: Option<Uuid>,
 }
 
 /// A saved loop region on the timeline.
@@ -103,8 +128,15 @@ impl Default for Project {
             midi_mappings: Vec::new(),
             macros: default_macros(),
             regions: Vec::new(),
+            version_history: Vec::new(),
+            current_branch: "main".to_string(),
+            current_version_id: None,
         }
     }
+}
+
+fn default_branch_name() -> String {
+    "main".to_string()
 }
 
 fn default_macros() -> Vec<MacroControl> {

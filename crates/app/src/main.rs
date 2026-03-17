@@ -3,6 +3,7 @@ mod analysis_tools;
 mod audio_settings;
 mod effects_panel;
 mod fx_browser;
+mod jam_session;
 mod media_browser;
 mod midi_mapping;
 mod midi_panel;
@@ -20,6 +21,7 @@ mod plugin_window;
 mod undo_panel;
 mod project_info;
 mod stem_separator;
+mod version_control;
 pub mod templates;
 
 use std::collections::{HashMap, HashSet};
@@ -135,7 +137,7 @@ fn setup_theme(ctx: &egui::Context) {
     style.text_styles.insert(TextStyle::Body, FontId::proportional(14.0));
     style.text_styles.insert(TextStyle::Heading, FontId::proportional(20.0));
     style.text_styles.insert(TextStyle::Button, FontId::proportional(14.0));
-    style.text_styles.insert(TextStyle::Small, FontId::proportional(11.0));
+    style.text_styles.insert(TextStyle::Small, FontId::proportional(12.0));
     style.text_styles.insert(TextStyle::Monospace, FontId::monospace(13.5));
 
     ctx.set_style(style);
@@ -289,6 +291,7 @@ pub struct DawApp {
     pub audio_buffers: HashMap<Uuid, Vec<f32>>,
     pub project_path: Option<PathBuf>,
     pub session: SessionPanel,
+    pub jam: jam_session::JamSessionPanel,
     pub platform: platform_panel::PlatformPanel,
     pub metronome_enabled: bool,
     pub snap_mode: SnapMode,
@@ -510,6 +513,8 @@ pub struct DawApp {
     pub chord_detection_running: bool,
     /// Detected chords per clip ID (for overlay rendering on timeline)
     pub detected_chords: HashMap<Uuid, Vec<analysis_tools::DetectedChord>>,
+    /// Version control (branching) panel state
+    pub version_panel: version_control::VersionControlPanel,
 }
 
 /// State for slip-editing: shifting audio content within clip boundaries.
@@ -1061,6 +1066,7 @@ impl DawApp {
             audio_buffers: HashMap::new(),
             project_path: None,
             session: SessionPanel::default(),
+            jam: jam_session::JamSessionPanel::default(),
             platform: platform_panel::PlatformPanel::default(),
             metronome_enabled: false,
             snap_mode: SnapMode::Off,
@@ -1200,6 +1206,7 @@ impl DawApp {
             loudness_match_state: None,
             chord_detection_running: false,
             detected_chords: HashMap::new(),
+            version_panel: version_control::VersionControlPanel::default(),
         };
 
         // Apply persisted layout
@@ -3632,6 +3639,11 @@ impl DawApp {
                 self.last_autosave = std::time::Instant::now();
                 self.cleanup_autosave();
                 add_to_recent_projects(&mut self.recent_projects, &dir);
+
+                // Auto-create a version commit on save
+                let msg = format!("Saved — {}", chrono::Local::now().format("%b %d %H:%M"));
+                self.version_commit(&msg);
+
                 self.set_status(&format!("Saved to {}", dir.display()));
             }
             Err(e) => self.set_status(&format!("Save failed: {e}")),
@@ -3969,9 +3981,14 @@ pub fn find_nearest_zero_crossing(samples: &[f32], position: usize, search_range
 impl eframe::App for DawApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 
-        // Update window title with project name and dirty indicator
+        // Update window title with project name, branch, and dirty indicator
         let dirty_mark = if self.dirty { " *" } else { "" };
-        let title = format!("{}{dirty_mark} — JamHub", self.project.name);
+        let branch_label = if self.project.current_branch == "main" {
+            String::new()
+        } else {
+            format!(" [{}]", self.project.current_branch)
+        };
+        let title = format!("{}{branch_label}{dirty_mark} — JamHub", self.project.name);
 
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
@@ -4175,8 +4192,10 @@ impl eframe::App for DawApp {
             else if i.modifiers.command && i.key_pressed(egui::Key::P) { actions.push("piano_roll".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::B) { actions.push("bounce_selection".into()); }
             else if i.modifiers.command && i.key_pressed(egui::Key::B) { actions.push("bounce".into()); }
-            if i.modifiers.command && i.key_pressed(egui::Key::C) { actions.push("copy".into()); }
-            if i.modifiers.command && i.key_pressed(egui::Key::V) { actions.push("paste".into()); }
+            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::C) { actions.push("version_quick_commit".into()); }
+            else if i.modifiers.command && i.key_pressed(egui::Key::C) { actions.push("copy".into()); }
+            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::V) { actions.push("version_panel".into()); }
+            else if i.modifiers.command && i.key_pressed(egui::Key::V) { actions.push("paste".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::M) { actions.push("add_marker".into()); }
             else if i.modifiers.command && i.key_pressed(egui::Key::M) { actions.push("toggle_mute_selected".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::S) { actions.push("toggle_solo_selected".into()); }
@@ -4762,6 +4781,12 @@ impl eframe::App for DawApp {
                 "consolidate" => {
                     self.consolidate_selected_clips();
                 }
+                "version_panel" => {
+                    self.version_panel.show = !self.version_panel.show;
+                }
+                "version_quick_commit" => {
+                    self.version_quick_commit();
+                }
                 _ => {}
             }
         }
@@ -5052,6 +5077,16 @@ impl eframe::App for DawApp {
                         self.session.show_panel = !self.session.show_panel;
                         ui.close_menu();
                     }
+                    ui.separator();
+                    let jam_label = if self.jam.connected {
+                        "Live Jam Session (connected)"
+                    } else {
+                        "Live Jam Session..."
+                    };
+                    if ui.button(jam_label).clicked() {
+                        self.jam.show = !self.jam.show;
+                        ui.close_menu();
+                    }
                 });
                 ui.menu_button("Share", |ui| {
                     let label = if self.platform.logged_in {
@@ -5156,6 +5191,34 @@ impl eframe::App for DawApp {
                         }
                         ui.close_menu();
                     }
+                });
+                ui.menu_button("Versions", |ui| {
+                    if ui.button("Version Control...   Cmd+Shift+V").clicked() {
+                        self.version_panel.show = !self.version_panel.show;
+                        ui.close_menu();
+                    }
+                    if ui.button("Quick Commit         Cmd+Shift+C").clicked() {
+                        self.version_quick_commit();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    let branch = self.project.current_branch.clone();
+                    let branch_color = if branch == "main" {
+                        egui::Color32::from_rgb(100, 200, 140)
+                    } else {
+                        egui::Color32::from_rgb(180, 140, 255)
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("Current: {branch}"))
+                            .small()
+                            .color(branch_color),
+                    );
+                    let version_count = self.project.version_history.len();
+                    ui.label(
+                        egui::RichText::new(format!("{version_count} version(s)"))
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
                 });
                 ui.menu_button("AI", |ui| {
                     if ui.button("Stem Separation...").clicked() {
@@ -5385,6 +5448,9 @@ impl eframe::App for DawApp {
         // Session panel (right side)
         session_panel::show(self, ctx);
 
+        // Live jam session panel
+        jam_session::show(self, ctx);
+
         // Platform integration panel
         platform_panel::show(self, ctx);
 
@@ -5404,6 +5470,7 @@ impl eframe::App for DawApp {
         midi_mapping::show_mapping_manager(self, ctx);
         stem_separator::show(self, ctx);
         analysis_tools::show(self, ctx);
+        version_control::show(self, ctx);
 
         // Template & preset dialogs
         templates::show_template_name_dialog(self, ctx);
@@ -5443,8 +5510,12 @@ impl eframe::App for DawApp {
                         self.project.created_at = chrono::Local::now().to_rfc3339();
                         tpl.apply(&mut self.project);
                         self.audio_buffers.clear();
+                        self.waveform_cache.clear();
+                        self.undo_manager.clear();
                         self.project_path = None;
                         self.dirty = false;
+                        self.selected_track = Some(0);
+                        self.selected_clips.clear();
                         self.sync_project();
                         self.show_template_picker = false;
                         self.set_status(&format!("New project from template: {}", tpl.label()));

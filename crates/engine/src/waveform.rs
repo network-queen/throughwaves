@@ -90,6 +90,10 @@ impl WaveformPeaks {
     }
 }
 
+/// Maximum number of waveform cache entries. Prevents unbounded memory growth
+/// when many clips are imported/recorded across project sessions without restart.
+const MAX_WAVEFORM_CACHE_ENTRIES: usize = 512;
+
 /// Shared cache of waveform peaks, keyed by buffer ID.
 #[derive(Clone)]
 pub struct WaveformCache {
@@ -105,7 +109,20 @@ impl WaveformCache {
 
     pub fn insert(&self, id: Uuid, samples: &[f32]) {
         let peaks = WaveformPeaks::from_samples(samples);
-        self.inner.write().insert(id, peaks);
+        let mut cache = self.inner.write();
+        cache.insert(id, peaks);
+        // Evict oldest entries if cache exceeds limit (simple size cap).
+        // In practice this is rarely hit since clips are removed via remove(),
+        // but it guards against slow leaks.
+        if cache.len() > MAX_WAVEFORM_CACHE_ENTRIES {
+            // Remove arbitrary entries to get back under limit.
+            // HashMap iteration order is arbitrary, which is acceptable here.
+            let excess = cache.len() - MAX_WAVEFORM_CACHE_ENTRIES;
+            let keys_to_remove: Vec<Uuid> = cache.keys().take(excess).copied().collect();
+            for key in keys_to_remove {
+                cache.remove(&key);
+            }
+        }
     }
 
     pub fn get(&self, id: &Uuid) -> Option<WaveformPeaks> {
@@ -114,5 +131,16 @@ impl WaveformCache {
 
     pub fn remove(&self, id: Uuid) {
         self.inner.write().remove(&id);
+    }
+
+    /// Clear all cached waveform data. Called when creating a new project
+    /// to ensure stale data from the previous project is freed.
+    pub fn clear(&self) {
+        self.inner.write().clear();
+    }
+
+    /// Number of entries currently in the cache.
+    pub fn len(&self) -> usize {
+        self.inner.read().len()
     }
 }

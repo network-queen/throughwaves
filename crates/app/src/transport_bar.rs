@@ -74,7 +74,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         let sq_size = 10.0;
         let sq_rect = egui::Rect::from_center_size(stop_rect.center(), egui::vec2(sq_size, sq_size));
         ui.painter().rect_filled(sq_rect, 2.0, egui::Color32::WHITE);
-        if stop_resp.on_hover_text("Stop playback").clicked() {
+        if stop_resp.on_hover_text("Stop playback [Space]").clicked() {
             app.send_command(EngineCommand::Stop);
         }
 

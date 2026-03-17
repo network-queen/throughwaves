@@ -109,6 +109,14 @@ pub struct Mixer {
     master_mono_buf: Vec<f32>,
     /// Built-in synthesizers for MIDI tracks, keyed by track ID.
     synths: HashMap<Uuid, Synth>,
+    /// Pre-allocated reusable mono buffer for per-track rendering (avoids per-block allocation).
+    track_mono_buf: Vec<f32>,
+    /// Pre-allocated reusable buffer for send routing (avoids per-block HashMap allocation).
+    send_bufs: HashMap<Uuid, Vec<f32>>,
+    /// Pre-allocated reusable buffer for pre-effect audio (avoids per-block HashMap allocation).
+    pre_effect_bufs: HashMap<Uuid, Vec<f32>>,
+    /// Pre-allocated reusable buffer for output target routing.
+    output_target_bufs: HashMap<Uuid, Vec<f32>>,
 }
 
 impl Mixer {
@@ -125,6 +133,10 @@ impl Mixer {
             output_buf: Vec::new(),
             master_mono_buf: Vec::new(),
             synths: HashMap::new(),
+            track_mono_buf: Vec::new(),
+            send_bufs: HashMap::new(),
+            pre_effect_bufs: HashMap::new(),
+            output_target_bufs: HashMap::new(),
         }
     }
 
@@ -261,14 +273,20 @@ impl Mixer {
 
         let any_solo = project.tracks.iter().any(|t| t.solo);
 
-        // Accumulator for send contributions, keyed by target track ID.
-        // Any track can be a send target — not just Bus tracks.
-        let mut send_buffers: HashMap<Uuid, Vec<f32>> = HashMap::new();
+        // Reuse pre-allocated send buffers — clear values but keep allocations
+        for buf in self.send_bufs.values_mut() {
+            buf.resize(block_size, 0.0);
+            buf.fill(0.0);
+        }
+        let mut send_buffers = std::mem::take(&mut self.send_bufs);
 
-        // ---- Pre-pass: Render raw (pre-effect) clip audio for all tracks ----
-        // Stored for sidechain access so compressors on other tracks can use
-        // this track's audio as their detection signal.
-        let mut pre_effect_audio: HashMap<Uuid, Vec<f32>> = HashMap::new();
+        // Reuse pre-allocated pre-effect audio buffers
+        // Clear all buffers but keep allocations. Tracks that produce audio
+        // will overwrite their buffer; we mark which ones are active below.
+        for buf in self.pre_effect_bufs.values_mut() {
+            buf.clear();
+        }
+        let mut pre_effect_audio = std::mem::take(&mut self.pre_effect_bufs);
 
         let block_end = position_samples + block_size as u64;
 
@@ -326,7 +344,11 @@ impl Mixer {
         // Each track renders its own clips (if any), receives send/routed audio,
         // applies effects, and mixes to output. "Bus" tracks just happen to have
         // no clips, so they only get send audio — but the code path is the same.
-        let mut output_target_buffers: HashMap<Uuid, Vec<f32>> = HashMap::new();
+        for buf in self.output_target_bufs.values_mut() {
+            buf.resize(block_size, 0.0);
+            buf.fill(0.0);
+        }
+        let mut output_target_buffers = std::mem::take(&mut self.output_target_bufs);
 
         for track in &project.tracks {
             if track.muted {
@@ -336,10 +358,15 @@ impl Mixer {
                 continue;
             }
 
-            // Start with clip audio (if any)
-            let mut track_mono = pre_effect_audio.get(&track.id)
-                .cloned()
-                .unwrap_or_else(|| vec![0.0f32; block_size]);
+            // Start with clip audio (if any) — take ownership to avoid clone
+            let mut track_mono = pre_effect_audio.remove(&track.id)
+                .unwrap_or_else(|| {
+                    // Reuse the shared track mono buffer when no pre-effect audio exists
+                    let mut buf = std::mem::take(&mut self.track_mono_buf);
+                    buf.resize(block_size, 0.0);
+                    buf.fill(0.0);
+                    buf
+                });
 
             // Mix in audio from sends targeting this track
             if let Some(send_audio) = send_buffers.remove(&track.id) {
@@ -457,7 +484,11 @@ impl Mixer {
             for send in &track.sends {
                 let send_buf = send_buffers
                     .entry(send.target_track_id)
-                    .or_insert_with(|| vec![0.0f32; block_size]);
+                    .or_insert_with(|| {
+                        let mut v = Vec::with_capacity(block_size);
+                        v.resize(block_size, 0.0);
+                        v
+                    });
                 if send.pre_fader {
                     for i in 0..block_size {
                         send_buf[i] += track_mono[i] * send.level;
@@ -477,7 +508,11 @@ impl Mixer {
                 // Route to another track instead of master
                 let target_buf = output_target_buffers
                     .entry(target_id)
-                    .or_insert_with(|| vec![0.0f32; block_size]);
+                    .or_insert_with(|| {
+                        let mut v = Vec::with_capacity(block_size);
+                        v.resize(block_size, 0.0);
+                        v
+                    });
                 for i in 0..block_size {
                     target_buf[i] += track_mono[i] * auto_volume;
                 }
@@ -499,7 +534,14 @@ impl Mixer {
             }
         }
 
-        // Return the buffer, stashing the allocation back for reuse next block
+        // Stash pre-allocated buffers back for reuse next block
+        self.send_bufs = send_buffers;
+        self.pre_effect_bufs = pre_effect_audio;
+        self.output_target_bufs = output_target_buffers;
+
+        // Return the buffer, stashing the allocation back for reuse next block.
+        // The clone is an unavoidable memcpy — the caller (audio channel) consumes the Vec
+        // while we retain the allocation for the next render_block call.
         let result = output.clone();
         self.output_buf = output;
         result

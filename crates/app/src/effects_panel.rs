@@ -140,7 +140,9 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                 if i > 0 {
                                     if ui.add(egui::Button::new(
                                         egui::RichText::new("▲").size(8.0).color(arrow_bright)
-                                    ).frame(false).min_size(egui::vec2(14.0, 14.0))).clicked() {
+                                    ).frame(false).min_size(egui::vec2(14.0, 14.0)))
+                                        .on_hover_text("Move effect up in chain")
+                                        .clicked() {
                                         move_up = Some(i);
                                     }
                                 } else {
@@ -151,7 +153,9 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                 if i + 1 < effects_len {
                                     if ui.add(egui::Button::new(
                                         egui::RichText::new("▼").size(8.0).color(arrow_bright)
-                                    ).frame(false).min_size(egui::vec2(14.0, 14.0))).clicked() {
+                                    ).frame(false).min_size(egui::vec2(14.0, 14.0)))
+                                        .on_hover_text("Move effect down in chain")
+                                        .clicked() {
                                         move_down = Some(i);
                                     }
                                 } else {
@@ -198,7 +202,12 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                     )
                                     .frame(false),
                                 );
-                                if resp.clicked() {
+                                let hover_msg = if is_vst {
+                                    if is_open { "Close plugin editor" } else { "Open plugin editor" }
+                                } else {
+                                    "Toggle effect parameters"
+                                };
+                                if resp.on_hover_text(hover_msg).clicked() {
                                     if is_vst {
                                         if is_open {
                                             close_editor = Some(slot_id);
