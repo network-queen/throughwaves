@@ -789,58 +789,43 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         track_actions.push(TrackAction::ToggleLanes(i));
                                     }
                                 }
+
+                                // Volume & Pan knobs — right-aligned, Reaper-style
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.spacing_mut().item_spacing.x = 2.0;
+                                    // Pan knob
+                                    let mut pan = track.pan;
+                                    let pan_label = if pan < -0.01 { format!("{:.0}L", pan.abs() * 100.0) }
+                                        else if pan > 0.01 { format!("{:.0}R", pan * 100.0) }
+                                        else { "C".into() };
+                                    let pan_r = ui.add_sized(egui::vec2(28.0, 18.0),
+                                        egui::DragValue::new(&mut pan).range(-1.0..=1.0).speed(0.01)
+                                            .custom_formatter(|v, _| {
+                                                if v < -0.01 { format!("{:.0}L", v.abs() * 100.0) }
+                                                else if v > 0.01 { format!("{:.0}R", v * 100.0) }
+                                                else { "C".into() }
+                                            })
+                                    );
+                                    let pan_dbl = pan_r.double_clicked();
+                                    pan_r.on_hover_text("Pan — drag to adjust, double-click to center");
+                                    if pan != track.pan { track_actions.push(TrackAction::SetPan(i, pan)); }
+                                    if pan_dbl { track_actions.push(TrackAction::SetPan(i, 0.0)); }
+
+                                    // Volume knob
+                                    let mut vol = track.volume;
+                                    ui.add_sized(egui::vec2(32.0, 18.0),
+                                        egui::DragValue::new(&mut vol).range(0.0..=1.5).speed(0.005)
+                                            .custom_formatter(|v, _| {
+                                                if v < 0.001 { "-∞".into() }
+                                                else { format!("{:.1}", 20.0 * (v as f64).log10()) }
+                                            })
+                                    ).on_hover_text(format!("Volume: {:.0}%  ({:.1} dB)", vol * 100.0,
+                                        if vol > 0.001 { 20.0 * vol.log10() } else { -100.0 }));
+                                    if vol != track.volume { track_actions.push(TrackAction::SetVolume(i, vol)); }
+                                });
                             });
 
-                            // Row 3: Volume slider
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                let mut vol = track.volume;
-                                if ui.add(egui::Slider::new(&mut vol, 0.0..=1.5)
-                                    .show_value(false)
-                                    .trailing_fill(true))
-                                    .on_hover_text("Track volume").changed() {
-                                    track_actions.push(TrackAction::SetVolume(i, vol));
-                                }
-                                ui.label(
-                                    egui::RichText::new(format!("{:.0}%", vol * 100.0))
-                                        .size(9.5)
-                                        .color(egui::Color32::from_rgb(110, 110, 120)),
-                                );
-                            });
-
-                            // Row 4: Pan slider (Reaper-style, in track header)
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                let mut pan = track.pan;
-                                let pan_slider = ui.add(
-                                    egui::Slider::new(&mut pan, -1.0..=1.0)
-                                        .show_value(false)
-                                        .trailing_fill(true)
-                                );
-                                let pan_changed = pan_slider.changed();
-                                let pan_dbl = pan_slider.double_clicked();
-                                pan_slider.on_hover_text("Pan (L/R) — double-click to center");
-                                if pan_changed {
-                                    track_actions.push(TrackAction::SetPan(i, pan));
-                                }
-                                if pan_dbl {
-                                    track_actions.push(TrackAction::SetPan(i, 0.0));
-                                }
-                                let pan_label = if pan < -0.01 {
-                                    format!("{:.0}L", pan.abs() * 100.0)
-                                } else if pan > 0.01 {
-                                    format!("{:.0}R", pan * 100.0)
-                                } else {
-                                    "C".to_string()
-                                };
-                                ui.label(
-                                    egui::RichText::new(pan_label)
-                                        .size(9.5)
-                                        .color(egui::Color32::from_rgb(110, 110, 120)),
-                                );
-                            });
-
-                            // Row 5: Tiny horizontal level meter (2px tall)
+                            // Tiny horizontal level meter (2px tall)
                             {
                                 let (left, right) = track_levels[i];
                                 let peak = left.max(right).clamp(0.0, 1.5);
@@ -869,9 +854,12 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         });
                     });
 
-                    // Thin separator line between tracks
-                    let (_, sep) = ui.allocate_space(egui::vec2(HEADER_WIDTH, 1.0));
-                    ui.painter().rect_filled(sep, 0.0, egui::Color32::from_rgb(42, 43, 50));
+                    // Thin separator line at bottom of track header (painted, not allocated)
+                    ui.painter().line_segment(
+                        [egui::pos2(header_rect.left(), header_rect.bottom() - 0.5),
+                         egui::pos2(header_rect.right(), header_rect.bottom() - 0.5)],
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(42, 43, 50)),
+                    );
                 });
             }
 
