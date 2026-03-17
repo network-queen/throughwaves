@@ -257,7 +257,16 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             } else {
                 ui.allocate_space(egui::vec2(HEADER_WIDTH, RULER_HEIGHT));
             }
-            ui.separator();
+
+            // Draw separator line manually (no extra spacing)
+            let sep_rect = ui.cursor();
+            ui.painter().line_segment(
+                [egui::pos2(sep_rect.min.x, sep_rect.min.y), egui::pos2(sep_rect.min.x + HEADER_WIDTH, sep_rect.min.y)],
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 41, 48)),
+            );
+
+            // Zero vertical spacing so headers align exactly with timeline tracks
+            ui.spacing_mut().item_spacing.y = 0.0;
 
             let mut track_actions: Vec<TrackAction> = Vec::new();
 
