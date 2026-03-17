@@ -16,15 +16,23 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(10.0);
+                // Waveform logo
+                let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
+                crate::draw_waveform_logo(
+                    ui.painter(), icon_rect.center(), 44.0,
+                    egui::Color32::from_rgb(235, 180, 60),
+                    egui::Color32::from_rgb(20, 18, 14),
+                );
+                ui.add_space(4.0);
                 ui.heading(
                     egui::RichText::new("ThroughWaves")
                         .size(28.0)
-                        .color(egui::Color32::from_rgb(100, 180, 255)),
+                        .color(egui::Color32::from_rgb(240, 192, 64)),
                 );
-                ui.label("Collaborative Digital Audio Workstation");
-                ui.add_space(5.0);
+                ui.label("Professional Digital Audio Workstation");
+                ui.add_space(3.0);
                 ui.label(
-                    egui::RichText::new("v0.1.0")
+                    egui::RichText::new("v1.0.0")
                         .color(egui::Color32::GRAY),
                 );
                 ui.add_space(15.0);

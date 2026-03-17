@@ -507,9 +507,16 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 ui.colored_label(egui::Color32::from_rgb(80, 210, 100), "\u{25CF} Online");
                 ui.separator();
             }
+            // Waveform logo icon
+            let (logo_rect, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
+            crate::draw_waveform_logo(
+                ui.painter(), logo_rect.center(), 26.0,
+                egui::Color32::from_rgb(235, 180, 60),
+                egui::Color32::from_rgb(20, 18, 14),
+            );
             ui.label(
                 egui::RichText::new("ThroughWaves")
-                    .size(18.0)
+                    .size(16.0)
                     .strong()
                     .color(egui::Color32::from_rgb(240, 192, 64)),
             );

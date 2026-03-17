@@ -3955,6 +3955,42 @@ impl DawApp {
 
 /// Find the nearest zero crossing in an audio buffer near a given position.
 /// Searches within search_range samples in both directions from position.
+/// Draw the ThroughWaves waveform logo icon at the given position.
+/// `size` is the side length of the square icon area.
+pub fn draw_waveform_logo(painter: &egui::Painter, center: egui::Pos2, size: f32, bg_color: egui::Color32, bar_color: egui::Color32) {
+    let half = size / 2.0;
+    let r = size * 0.22;
+
+    // Background rounded rectangle
+    let icon_rect = egui::Rect::from_center_size(center, egui::vec2(size, size));
+    painter.rect_filled(icon_rect, r, bg_color);
+
+    // Glass highlight
+    let highlight_rect = egui::Rect::from_min_max(
+        icon_rect.left_top(),
+        egui::pos2(icon_rect.right(), icon_rect.center().y),
+    );
+    painter.rect_filled(highlight_rect, r, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 40));
+
+    // 5 waveform bars with varying heights
+    let bar_heights: [f32; 5] = [0.35, 0.7, 0.55, 0.85, 0.25];
+    let bar_w = size * 0.08;
+    let spacing = size * 0.16;
+    let total_w = 4.0 * spacing;
+    let start_x = center.x - total_w / 2.0;
+
+    for (i, &h_frac) in bar_heights.iter().enumerate() {
+        let x = start_x + i as f32 * spacing;
+        let bar_h = half * h_frac * 1.6;
+        let top = center.y - bar_h / 2.0;
+        let bot = center.y + bar_h / 2.0;
+        painter.line_segment(
+            [egui::pos2(x, top), egui::pos2(x, bot)],
+            egui::Stroke::new(bar_w, bar_color),
+        );
+    }
+}
+
 /// Returns the adjusted position snapped to the nearest zero crossing, or
 /// the original position if no crossing is found.
 pub fn find_nearest_zero_crossing(samples: &[f32], position: usize, search_range: usize) -> usize {
@@ -5303,7 +5339,13 @@ impl eframe::App for DawApp {
             .exact_height(28.0)
             .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // ThroughWaves wordmark at far left
+                // ThroughWaves logo + wordmark at far left
+                let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                draw_waveform_logo(
+                    ui.painter(), icon_rect.center(), 18.0,
+                    egui::Color32::from_rgb(235, 180, 60),
+                    egui::Color32::from_rgb(20, 18, 14),
+                );
                 ui.label(
                     egui::RichText::new("ThroughWaves")
                         .size(10.0)
@@ -5682,8 +5724,16 @@ impl eframe::App for DawApp {
                 .show(ctx, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.add_space(8.0);
+                        // Waveform logo
+                        let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(52.0, 52.0), egui::Sense::hover());
+                        draw_waveform_logo(
+                            ui.painter(), icon_rect.center(), 52.0,
+                            egui::Color32::from_rgb(235, 180, 60),
+                            egui::Color32::from_rgb(20, 18, 14),
+                        );
+                        ui.add_space(6.0);
                         ui.heading(egui::RichText::new("ThroughWaves").size(28.0).strong());
-                        ui.label(egui::RichText::new("Collaborative DAW").size(14.0).weak());
+                        ui.label(egui::RichText::new("Professional DAW — Create, Mix, Collaborate").size(13.0).weak());
                         ui.add_space(16.0);
                     });
 
