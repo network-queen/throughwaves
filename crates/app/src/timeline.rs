@@ -1526,14 +1526,24 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 for &(ti, ci, _, cr) in &clip_rects {
                     if cr.contains(pos) {
                         clicked_on_clip = true;
-                        // Toggle clip properties panel (double-click again to close)
-                        if app.editing_clip == Some((ti, ci)) {
-                            app.editing_clip = None;
-                        } else {
-                            app.editing_clip = Some((ti, ci));
-                        }
                         app.selected_clips = std::collections::HashSet::from([(ti, ci)]);
                         app.selected_track = Some(ti);
+
+                        // MIDI clip: open piano roll; Audio clip: open clip properties
+                        let is_midi = matches!(
+                            app.project.tracks[ti].clips[ci].source,
+                            ClipSource::Midi { .. }
+                        );
+                        if is_midi || app.project.tracks[ti].kind == TrackKind::Midi {
+                            app.show_piano_roll = true;
+                        } else {
+                            // Toggle clip properties panel
+                            if app.editing_clip == Some((ti, ci)) {
+                                app.editing_clip = None;
+                            } else {
+                                app.editing_clip = Some((ti, ci));
+                            }
+                        }
                         break;
                     }
                 }
