@@ -32,14 +32,33 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
     let mut open = true;
     egui::Window::new("FX Chain").constrain(false)
         .open(&mut open)
-        .default_width(260.0)
+        .default_width(300.0)
+        .min_width(280.0)
         .show(ctx, |ui| {
+            // Header with track name and signal flow
             let track_name = app.project.tracks[track_idx].name.clone();
-            ui.label(
-                egui::RichText::new(format!("Track: {track_name}"))
-                    .size(12.0)
-                    .color(egui::Color32::from_rgb(160, 160, 170)),
-            );
+            let tc = app.project.tracks[track_idx].color;
+            let track_color = egui::Color32::from_rgb(tc[0], tc[1], tc[2]);
+
+            ui.horizontal(|ui| {
+                // Track color dot
+                let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter().circle_filled(dot_rect.center(), 5.0, track_color);
+                ui.label(egui::RichText::new(&track_name).size(13.0).strong().color(egui::Color32::from_rgb(220, 218, 212)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let fx_count = app.project.tracks[track_idx].effects.len();
+                    ui.label(egui::RichText::new(format!("{} FX", fx_count)).size(10.0).color(egui::Color32::from_rgb(110, 110, 120)));
+                });
+            });
+            ui.add_space(4.0);
+
+            // Signal flow: IN label
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("IN").size(8.0).color(egui::Color32::from_rgb(80, 200, 140)));
+                let (line_rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width() - 16.0, 1.0), egui::Sense::hover());
+                ui.painter().rect_filled(line_rect, 0.0, egui::Color32::from_rgb(45, 50, 58));
+            });
             ui.add_space(2.0);
 
             let mut needs_sync = false;
@@ -50,7 +69,6 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
             let mut bypass_toggled_slot: Option<usize> = None;
             let effects_len = app.project.tracks[track_idx].effects.len();
 
-            // Read crashed plugin IDs from engine state
             let crashed_plugins = app.engine.as_ref()
                 .map(|e| e.state.read().crashed_plugins.clone())
                 .unwrap_or_default();
@@ -67,20 +85,13 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                     let is_vst = s.effect.is_vst();
                     let vst_path = if let TrackEffect::Vst3Plugin { ref path, .. } = s.effect {
                         path.clone()
-                    } else {
-                        String::new()
-                    };
+                    } else { String::new() };
                     (s.id, is_editor_open, is_vst, vst_path)
                 })
                 .collect();
 
-            // --- FX list: flat, uniform, Reaper-style ---
             let mut move_up: Option<usize> = None;
             let mut move_down: Option<usize> = None;
-
-            // Track color for the accent bar — read before mutable borrows in the loop
-            let tc = app.project.tracks[track_idx].color;
-            let track_color = egui::Color32::from_rgb(tc[0], tc[1], tc[2]);
 
             for i in 0..effects_len {
                 ui.push_id(i, |ui| {
@@ -88,155 +99,151 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                     let slot = &mut app.project.tracks[track_idx].effects[i];
                     let is_enabled = slot.enabled;
                     let is_crashed = crashed_plugins.contains(&slot_id);
-                    let name = if is_crashed {
-                        format!("[CRASHED] {}", slot.name())
-                    } else {
-                        slot.name().to_string()
-                    };
+                    let effect_name = slot.name().to_string();
+
+                    // Get mix value if effect has one
+                    let mix_val = slot.effect.get_param("Mix");
 
                     let row_bg = if is_crashed {
                         egui::Color32::from_rgb(55, 22, 22)
                     } else if is_open {
-                        egui::Color32::from_rgb(30, 36, 48)
+                        egui::Color32::from_rgb(28, 34, 48)
+                    } else if !is_enabled {
+                        egui::Color32::from_rgb(22, 22, 28)
                     } else {
-                        egui::Color32::from_rgb(26, 27, 36)
+                        egui::Color32::from_rgb(28, 29, 38)
                     };
 
-                    // Card design — 10px rounded with subtle gradient
+                    let slot_stroke = if is_open {
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 120, 200).gamma_multiply(0.5))
+                    } else {
+                        egui::Stroke::new(0.5, egui::Color32::from_rgb(44, 46, 58))
+                    };
+
+                    // Signal flow connector line before each slot
+                    if i > 0 {
+                        ui.horizontal(|ui| {
+                            ui.add_space(18.0);
+                            let (line_rect, _) = ui.allocate_exact_size(egui::vec2(2.0, 6.0), egui::Sense::hover());
+                            ui.painter().rect_filled(line_rect, 0.0, egui::Color32::from_rgb(50, 55, 65));
+                        });
+                    }
+
                     egui::Frame::default()
-                        .inner_margin(egui::Margin::symmetric(8, 6))
+                        .inner_margin(egui::Margin::symmetric(6, 5))
                         .fill(row_bg)
-                        .corner_radius(10.0)
-                        .stroke(egui::Stroke::new(0.5, egui::Color32::from_rgb(42, 44, 56)))
+                        .corner_radius(6.0)
+                        .stroke(slot_stroke)
                         .show(ui, |ui| {
-                            // Subtle gradient overlay on card
-                            let card_rect = ui.max_rect();
-                            ui.painter().rect_filled(
-                                egui::Rect::from_min_max(card_rect.min, egui::pos2(card_rect.max.x, card_rect.min.y + card_rect.height() * 0.4)),
-                                egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 },
-                                egui::Color32::from_rgba_premultiplied(255, 255, 255, 3),
-                            );
-
                             ui.horizontal(|ui| {
-                                // Left accent stripe — 3px, bright track color for active
-                                if is_enabled && !is_crashed {
-                                    let (accent_rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(3.0, 20.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter().rect_filled(accent_rect, 1.5, track_color);
-                                } else {
-                                    let (accent_rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(3.0, 20.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter().rect_filled(accent_rect, 1.5, egui::Color32::from_rgb(40, 40, 50));
-                                }
+                                ui.spacing_mut().item_spacing.x = 3.0;
 
-                                // Move up/down arrows
-                                let arrow_dim = egui::Color32::from_rgb(55, 55, 62);
-                                let arrow_bright = egui::Color32::from_rgb(170, 170, 185);
-                                ui.spacing_mut().item_spacing.x = 0.0;
+                                // Slot number
+                                ui.label(egui::RichText::new(format!("{}.", i + 1)).size(9.0)
+                                    .color(egui::Color32::from_rgb(75, 75, 85)));
+
+                                // Move up/down
+                                let arrow_active = egui::Color32::from_rgb(150, 150, 165);
+                                let arrow_dim = egui::Color32::from_rgb(50, 50, 58);
                                 if i > 0 {
-                                    if ui.add(egui::Button::new(
-                                        egui::RichText::new("▲").size(8.0).color(arrow_bright)
-                                    ).frame(false).min_size(egui::vec2(14.0, 14.0)))
-                                        .on_hover_text("Move effect up in chain")
-                                        .clicked() {
+                                    if ui.add(egui::Button::new(egui::RichText::new("\u{25B2}").size(7.0).color(arrow_active))
+                                        .frame(false).min_size(egui::vec2(12.0, 16.0))).on_hover_text("Move up").clicked() {
                                         move_up = Some(i);
                                     }
                                 } else {
-                                    ui.add(egui::Button::new(
-                                        egui::RichText::new("▲").size(8.0).color(arrow_dim)
-                                    ).frame(false).min_size(egui::vec2(14.0, 14.0)));
+                                    ui.add(egui::Button::new(egui::RichText::new("\u{25B2}").size(7.0).color(arrow_dim))
+                                        .frame(false).min_size(egui::vec2(12.0, 16.0)));
                                 }
                                 if i + 1 < effects_len {
-                                    if ui.add(egui::Button::new(
-                                        egui::RichText::new("▼").size(8.0).color(arrow_bright)
-                                    ).frame(false).min_size(egui::vec2(14.0, 14.0)))
-                                        .on_hover_text("Move effect down in chain")
-                                        .clicked() {
+                                    if ui.add(egui::Button::new(egui::RichText::new("\u{25BC}").size(7.0).color(arrow_active))
+                                        .frame(false).min_size(egui::vec2(12.0, 16.0))).on_hover_text("Move down").clicked() {
                                         move_down = Some(i);
                                     }
                                 } else {
-                                    ui.add(egui::Button::new(
-                                        egui::RichText::new("▼").size(8.0).color(arrow_dim)
-                                    ).frame(false).min_size(egui::vec2(14.0, 14.0)));
+                                    ui.add(egui::Button::new(egui::RichText::new("\u{25BC}").size(7.0).color(arrow_dim))
+                                        .frame(false).min_size(egui::vec2(12.0, 16.0)));
                                 }
-                                ui.spacing_mut().item_spacing.x = 4.0;
 
-                                // Bypass toggle — smooth animated circle with green glow
-                                let (dot_rect, dot_resp) = ui.allocate_exact_size(
-                                    egui::vec2(14.0, 20.0),
-                                    egui::Sense::click(),
-                                );
-                                if is_enabled {
-                                    // Smooth animated glow for active
-                                    let pulse = (ui.input(|i| i.time) * 1.6).sin() as f32 * 0.12 + 0.88;
-                                    let glow_alpha = (35.0 * pulse) as u8;
-                                    ui.painter().circle_filled(dot_rect.center(), 7.0, egui::Color32::from_rgba_premultiplied(60, 200, 80, glow_alpha));
-                                    ui.painter().circle_filled(dot_rect.center(), 4.5, egui::Color32::from_rgb(60, 210, 80));
-                                    ui.painter().circle_filled(dot_rect.center(), 2.5, egui::Color32::from_rgb(120, 240, 140));
-                                    ui.ctx().request_repaint();
+                                // Bypass toggle — power icon style
+                                let (pwr_rect, pwr_resp) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+                                if is_enabled && !is_crashed {
+                                    ui.painter().circle_filled(pwr_rect.center(), 7.0, egui::Color32::from_rgb(40, 140, 60));
+                                    ui.painter().circle_stroke(pwr_rect.center(), 7.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(60, 200, 80)));
+                                    // Power symbol
+                                    ui.painter().line_segment(
+                                        [egui::pos2(pwr_rect.center().x, pwr_rect.center().y - 4.0),
+                                         egui::pos2(pwr_rect.center().x, pwr_rect.center().y - 7.5)],
+                                        egui::Stroke::new(1.5, egui::Color32::from_rgb(60, 200, 80)),
+                                    );
                                 } else {
-                                    ui.painter().circle_filled(dot_rect.center(), 4.5, egui::Color32::from_rgb(60, 60, 72));
-                                    ui.painter().circle_stroke(dot_rect.center(), 4.5, egui::Stroke::new(0.5, egui::Color32::from_rgb(80, 80, 95)));
+                                    ui.painter().circle_stroke(pwr_rect.center(), 7.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(65, 65, 78)));
+                                    ui.painter().line_segment(
+                                        [egui::pos2(pwr_rect.center().x, pwr_rect.center().y - 4.0),
+                                         egui::pos2(pwr_rect.center().x, pwr_rect.center().y - 7.5)],
+                                        egui::Stroke::new(1.5, egui::Color32::from_rgb(65, 65, 78)),
+                                    );
                                 }
-                                if dot_resp.on_hover_text("Toggle bypass").clicked() {
+                                if pwr_resp.on_hover_text(if is_enabled { "Bypass" } else { "Enable" }).clicked() {
                                     slot.enabled = !slot.enabled;
                                     needs_sync = true;
                                     bypass_toggled_slot = Some(i);
                                 }
 
-                                // Clickable name — larger for premium feel (13px)
-                                let name_color = if !is_enabled {
-                                    egui::Color32::from_rgb(90, 90, 105)
+                                // Effect name — clickable to open editor
+                                let name_text = if is_crashed {
+                                    format!("\u{26A0} {}", effect_name)
+                                } else {
+                                    effect_name.clone()
+                                };
+                                let name_color = if is_crashed {
+                                    egui::Color32::from_rgb(230, 80, 80)
+                                } else if !is_enabled {
+                                    egui::Color32::from_rgb(85, 85, 100)
                                 } else if is_open {
-                                    egui::Color32::from_rgb(120, 185, 255)
+                                    egui::Color32::from_rgb(100, 170, 240)
                                 } else {
-                                    egui::Color32::from_rgb(220, 220, 228)
+                                    egui::Color32::from_rgb(215, 215, 225)
                                 };
-                                let resp = ui.add(
-                                    egui::Button::new(
-                                        egui::RichText::new(&name).size(13.0).color(name_color),
-                                    )
-                                    .frame(false),
-                                );
-                                let hover_msg = if is_vst {
+                                let name_rt = if !is_enabled {
+                                    egui::RichText::new(&name_text).size(12.0).color(name_color).strikethrough()
+                                } else {
+                                    egui::RichText::new(&name_text).size(12.0).color(name_color)
+                                };
+                                let resp = ui.add(egui::Button::new(name_rt).frame(false));
+                                if resp.on_hover_text(if is_vst {
                                     if is_open { "Close plugin editor" } else { "Open plugin editor" }
-                                } else {
-                                    "Toggle effect parameters"
-                                };
-                                if resp.on_hover_text(hover_msg).clicked() {
+                                } else { "Edit parameters" }).clicked() {
                                     if is_vst {
-                                        if is_open {
-                                            close_editor = Some(slot_id);
-                                        } else {
-                                            open_editor = Some((slot_id, vst_path.clone()));
-                                        }
+                                        if is_open { close_editor = Some(slot_id); }
+                                        else { open_editor = Some((slot_id, vst_path.clone())); }
                                     } else {
                                         toggle_builtin_popup = Some(i);
                                     }
                                 }
 
-                                // Remove X
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            egui::RichText::new("\u{2715}")
-                                                .size(10.0)
-                                                .color(egui::Color32::from_rgb(140, 60, 60)),
-                                        )
-                                        .frame(false),
-                                    )
-                                    .on_hover_text("Remove")
-                                    .clicked()
-                                {
-                                    remove_idx = Some(i);
-                                }
+                                // Right side: mix indicator + remove
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    // Remove button
+                                    if ui.add(egui::Button::new(
+                                        egui::RichText::new("\u{2715}").size(9.0).color(egui::Color32::from_rgb(160, 70, 70)))
+                                        .frame(false)).on_hover_text("Remove effect").clicked() {
+                                        remove_idx = Some(i);
+                                    }
+
+                                    // Mix percentage if available
+                                    if let Some(mix) = mix_val {
+                                        ui.label(egui::RichText::new(format!("{:.0}%", mix * 100.0))
+                                            .size(9.0).color(egui::Color32::from_rgb(90, 90, 105)));
+                                    }
+
+                                    // VST badge
+                                    if is_vst {
+                                        ui.label(egui::RichText::new("VST3").size(7.0)
+                                            .color(egui::Color32::from_rgb(100, 180, 100)));
+                                    }
+                                });
                             });
                         });
-                    ui.add_space(1.0);
                 });
             }
 
@@ -252,21 +259,30 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                 needs_sync = true;
             }
 
+            // Signal flow: OUT label
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                if effects_len > 0 {
+                    let (line_rect, _) = ui.allocate_exact_size(egui::vec2(2.0, 6.0), egui::Sense::hover());
+                    ui.painter().rect_filled(line_rect, 0.0, egui::Color32::from_rgb(50, 55, 65));
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("OUT").size(8.0).color(egui::Color32::from_rgb(240, 180, 60)));
+                let (line_rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width() - 16.0, 1.0), egui::Sense::hover());
+                ui.painter().rect_filled(line_rect, 0.0, egui::Color32::from_rgb(45, 50, 58));
+            });
+
             if effects_len == 0 {
-                ui.add_space(12.0);
+                ui.add_space(16.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new("No effects")
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(90, 90, 100)),
-                    );
-                    ui.label(
-                        egui::RichText::new("Add effects to shape your sound")
-                            .size(9.0)
-                            .color(egui::Color32::from_rgb(65, 65, 75)),
-                    );
+                    ui.label(egui::RichText::new("No effects in chain").size(11.0).color(egui::Color32::from_rgb(90, 90, 105)));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("Use the FX Browser (Cmd+F) to add effects").size(9.0).color(egui::Color32::from_rgb(70, 70, 82)));
                 });
-                ui.add_space(12.0);
+                ui.add_space(8.0);
             }
 
             // --- Actions ---
