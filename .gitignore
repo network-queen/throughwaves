@@ -2,3 +2,6 @@
 .DS_Store
 tools/stem_separator/venv/
 tools/stem_separator/jobs/
+uploads/
+dist/
+*.app/Contents/MacOS/*
