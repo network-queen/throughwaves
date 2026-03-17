@@ -2,7 +2,16 @@
 
 **Collaborative DAW built in Rust**
 
-A professional-grade digital audio workstation with real-time collaboration, VST3 plugin hosting, and a modern GPU-accelerated interface. Built entirely in Rust for safety, speed, and low-latency audio performance.
+A professional-grade digital audio workstation with real-time collaboration, live jam sessions, version branching, AI-powered stem separation, and a modern GPU-accelerated interface. Built entirely in Rust for safety, speed, and low-latency audio performance.
+
+![JamHub Screenshot](docs/screenshots/arrange-view.png)
+*Arrange view with timeline, track headers, and minimap*
+
+![Mixer View](docs/screenshots/mixer-view.png)
+*Full mixer with channel strips, sends, and level meters*
+
+![Session View](docs/screenshots/session-view.png)
+*Ableton-style clip launcher with scenes*
 
 ---
 
@@ -11,6 +20,7 @@ A professional-grade digital audio workstation with real-time collaboration, VST
 ### Audio Engine
 - Low-latency audio I/O via **cpal** with configurable device selection
 - Real-time mixing with per-track volume, pan (equal-power pan law), mute, solo, and exclusive solo
+- Parallel track rendering via **rayon** for multi-core utilization
 - Plugin Delay Compensation (PDC) across the entire signal chain with per-track delay buffers
 - Audio recording with punch-in/out, count-in (configurable bars), and input monitoring
 - MIDI recording from hardware controllers with real-time note capture
@@ -18,6 +28,7 @@ A professional-grade digital audio workstation with real-time collaboration, VST
 - Non-destructive clip editing: fade in/out, gain, reverse, transpose, looping, slip editing, playback rate
 - Auto-crossfade between overlapping clips
 - Soft-clipping on master output to prevent harsh digital distortion
+- Pre-allocated audio buffers in the render path — zero heap allocations in the hot loop
 - Bounded audio ring buffer (~0.5s cap) to prevent unbounded memory growth
 
 ### Export
@@ -49,6 +60,7 @@ A professional-grade digital audio workstation with real-time collaboration, VST
 
 ### Arrangement & Editing
 - Multi-track timeline with mip-mapped waveform display (5 resolution levels)
+- Viewport-culled waveform rendering — only visible clips are drawn
 - Clip splitting, duplicating, copy/paste, nudge, and consolidation
 - Multi-clip selection with rubber-band (marquee) tool
 - Take lanes with swipe comping and flatten
@@ -86,21 +98,61 @@ A professional-grade digital audio workstation with real-time collaboration, VST
 
 ### Metering & Analysis
 - EBU R128 LUFS loudness metering: momentary (400ms), short-term (3s), and integrated (gated)
+- True peak metering with 4x oversampled cubic Hermite interpolation
+- Stereo phase correlation meter
 - Clipping detection with visual indicator
 - Real-time FFT spectrum analyzer with Hann windowing
-- Per-track level meters (L/R peak) with smooth decay
+- Per-track level meters (L/R peak) with smooth decay and peak hold
 - Master level meters
 - CPU usage estimation
+- Reference track A/B comparison
+- Loudness matching: auto-compensate volume when toggling effects
+- Chord detection overlay on timeline clips
+
+### AI Stem Separation
+- Neural network-based stem separation powered by Demucs (via local Python service)
+- Separate any audio clip into vocals, drums, bass, and other stems
+- Import separated stems as individual tracks for remixing
+- Non-destructive: original audio is preserved
 
 ### Session View
 - Ableton-style clip launcher with scenes
 - Session clips with per-slot triggering
 - Scene management (add, delete, rename)
 
+### Live Jam Sessions
+- Real-time multi-user jam rooms via WebSocket
+- Low-latency audio streaming between participants
+- Per-participant volume control and mute
+- Shared BPM synchronization
+- In-session chat
+- Multi-participant recording with per-user stem export
+- Up to 8 participants per room
+- Join via short room codes
+
+### Version Branching
+- Git-style version control for project snapshots
+- Create named branches for alternative arrangements (e.g., "verse-option-A")
+- Commit with messages to save project state
+- Browse version history with visual branch graph
+- Restore any previous version instantly
+- SHA-256 content hashing for snapshot identity
+
 ### Collaboration
 - Real-time networked sessions via WebSocket
 - Project sharing with synchronized state
 - Session panel with connection management
+
+### Platform Features
+- Project templates: Empty, Singer/Songwriter, Band, Electronic, Podcast
+- User preferences: buffer size, default template, autosave interval, UI scale, theme
+- Persistent layout saving (panel visibility, view mode, zoom, scroll)
+- Autosave with recovery dialog
+- Recent projects list
+- Drag-and-drop audio file import from Finder
+- Track templates (save/load track configurations with effects)
+- FX chain presets (save/load effect chains)
+- Audio pool manager for project audio buffers
 
 ### Interface
 - GPU-accelerated UI via **egui/eframe**
@@ -110,21 +162,18 @@ A professional-grade digital audio workstation with real-time collaboration, VST
 - Docked mixer panel in arrange view
 - Minimap overview bar for timeline navigation
 - Auto-follow playhead during playback
+- Smart repaint scheduling: full-speed during playback, 10fps when idle
 - FX browser with VST3 plugin scanning
 - Media browser for audio file browsing
 - Audio pool manager for project audio buffers
 - Piano roll for MIDI editing
 - Drag-and-drop audio file import from Finder
-- Project templates (save/load track configurations)
-- FX chain presets
 - Track color palette with custom RGB picker
 - Welcome screen with recent projects
 - Keyboard shortcuts panel with search
 - Project info panel (name, notes, creation date, statistics)
-- Autosave with recovery dialog
-- Recent projects list
-- Persistent layout saving
 - 9 locator memory positions (Shift+1-9 to save, 1-9 to recall)
+- Tooltips on all interactive controls
 
 ---
 
@@ -150,10 +199,22 @@ cd jamhub
 cargo build --release
 
 # Run the application
-cargo run --bin jamhub-app
+cargo run --bin jamhub-app --release
 
 # Run the collaboration server
-cargo run --bin jamhub-server
+cargo run --bin jamhub-server --release
+```
+
+### AI Stem Separation (optional)
+
+The stem separator requires a local Python service with Demucs:
+
+```bash
+cd tools/stem_separator
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python server.py  # starts on http://127.0.0.1:8765
 ```
 
 ---
@@ -172,6 +233,8 @@ cargo run --bin jamhub-server
 | `P` | Toggle punch in/out |
 | `H` | Toggle follow playhead |
 | `F` | Focus / scroll to playhead |
+| `I` | Toggle input monitor |
+| `A` | Toggle automation lanes |
 
 ### Editing
 | Key | Action |
@@ -203,7 +266,6 @@ cargo run --bin jamhub-server
 | `Tab` | Cycle views (Arrange / Mixer / Session) |
 | `Cmd+E` | Toggle effects panel |
 | `Cmd+F` | Toggle FX browser |
-| `A` | Toggle automation lanes |
 | `Q` | Toggle spectrum analyzer |
 | `?` | Open shortcuts panel |
 
@@ -214,11 +276,15 @@ cargo run --bin jamhub-server
 ```
 jamhub/
   crates/
-    app/       UI layer (egui/eframe) -- timeline, mixer, session views, plugin windows
-    engine/    Audio engine -- mixer, effects, VST3 hosting, recording, export, transport
-    model/     Data model -- project, tracks, clips, effects, automation, MIDI
-    network/   Collaboration -- WebSocket client/server, session sync
-    server/    Standalone collaboration server binary
+    app/       UI layer (egui/eframe) — timeline, mixer, session views, plugin windows,
+               jam session panel, version control, stem separator, analysis tools
+    engine/    Audio engine — mixer, effects, VST3 hosting, recording, export, transport,
+               waveform cache, spectrum buffer, LUFS metering, synthesizer
+    model/     Data model — project, tracks, clips, effects, automation, MIDI, versions
+    network/   Collaboration — WebSocket client/server, session sync
+    server/    Standalone collaboration + jam session server binary
+  tools/
+    stem_separator/  Python FastAPI service wrapping Demucs for AI stem separation
 ```
 
 ### Thread Safety Model
@@ -228,13 +294,23 @@ jamhub/
 - **Shared state**: `parking_lot::RwLock` for level meters, LUFS readings, spectrum data, PDC info; `parking_lot::Mutex` for recording buffer and input monitor
 - **No data races**: all cross-thread communication uses `Arc<RwLock>`, `Arc<Mutex>`, or bounded channels; no raw shared mutable state
 
+### Performance Design
+- **Zero-allocation render path**: output buffer, send buffers, pre-effect buffers, and output-target buffers are all pre-allocated and reused across render blocks via `std::mem::take` / stash pattern
+- **Parallel track rendering**: audio track clips are rendered in parallel via rayon; MIDI tracks are sequential (require mutable synth/VSTi state)
+- **Viewport culling**: waveform rendering only computes peaks for the visible portion of each clip
+- **Mip-mapped waveforms**: 5 resolution levels (256 to 4096 samples/peak) chosen based on zoom
+- **Smart repaint**: full-speed repaint during playback/recording; 10fps idle refresh for meters
+- **Estimated capacity**: ~50-100 audio tracks at 256-sample block size on modern hardware (with effects, limited by per-track effect chain complexity)
+
 ### Memory Management
 - Undo history capped at 50 entries with automatic pruning
+- Waveform cache capped at 512 entries with automatic eviction; cleared on new project
 - Audio ring buffer capped at ~0.5s of audio
 - LUFS integrated measurement blocks capped at ~1 hour
 - Spectrum analyzer uses a fixed 4096-sample ring buffer
 - Input monitor ring buffer capped at 4096 samples
 - Waveform cache entries removed when clips are deleted
+- New project creation clears all audio buffers, waveform cache, and undo history
 - VST3 plugin windows intentionally kept alive (hidden) on close to avoid JUCE teardown crashes; OS reclaims on exit
 
 ### Technology Stack
@@ -246,6 +322,8 @@ jamhub/
 - **MIDI**: midir for hardware MIDI input
 - **Concurrency**: `parking_lot` RwLock/Mutex for lock-free audio thread access; crossbeam channels for command passing
 - **Parallelism**: rayon for parallel track rendering in the mixer
+- **Networking**: tokio + axum for the jam session server; tungstenite for WebSocket clients
+- **AI/ML**: Demucs (PyTorch) via FastAPI microservice for stem separation
 - **Serialization**: serde with JSON for project files
 
 ---
@@ -268,5 +346,8 @@ Built with:
 - [rayon](https://github.com/rayon-rs/rayon) -- Data parallelism
 - [parking_lot](https://github.com/Amanieu/parking_lot) -- Fast synchronization primitives
 - [crossbeam](https://github.com/crossbeam-rs/crossbeam) -- Lock-free data structures
+- [axum](https://github.com/tokio-rs/axum) -- Web framework for jam session server
+- [tokio](https://github.com/tokio-rs/tokio) -- Async runtime
+- [Demucs](https://github.com/facebookresearch/demucs) -- AI source separation
 - [serde](https://serde.rs/) -- Serialization framework
 - [uuid](https://github.com/uuid-rs/uuid) -- Unique identifiers

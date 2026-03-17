@@ -1334,7 +1334,7 @@ function renderPage() {
   if (route === 'home') renderHome(main);
   else if (route === 'explore') renderExplore(main);
   else if (route === 'projects') renderProjects(main);
-  else if (route.startsWith('project/')) renderProject(main, parseInt(route.split('/')[1]));
+  else if (route.startsWith('project/')) renderProject(main, route.split('/')[1]);
   else if (route.startsWith('track/')) renderTrackDetail(main, route.split('/')[1]);
   else if (route.startsWith('user/')) renderUserProfile(main, route.split('/')[1]);
   else if (route === 'upload') renderUpload(main);
@@ -1757,7 +1757,13 @@ async function handleUpload() {
 async function renderTrackDetail(el, trackId) {
   el.innerHTML = '<div class="empty-state"><div class="empty-state-text">Loading track...</div></div>';
 
-  const detail = await apiGetTrack(trackId);
+  let detail;
+  try {
+    detail = await apiGetTrack(trackId);
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">&#127925;</div><div class="empty-state-text">Error loading track</div><div style="color:#888;font-size:12px">${e.message}</div></div>`;
+    return;
+  }
   if (!detail || !detail.track) {
     el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#127925;</div><div class="empty-state-text">Track not found</div></div>';
     return;
