@@ -6212,9 +6212,11 @@ impl eframe::App for DawApp {
                                 }
                                 ui.end_row();
 
-                                ui.label("Gain:");
+                                ui.label("Clip Gain:");
                                 ui.add(egui::Slider::new(&mut clip.gain_db, -24.0..=24.0)
                                     .suffix(" dB").step_by(0.1));
+                                ui.end_row();
+
                                 ui.end_row();
 
                                 ui.label("Speed:");
@@ -6258,6 +6260,21 @@ impl eframe::App for DawApp {
                                 ui.end_row();
                             });
 
+                        // Track volume (outside clip borrow)
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("Track Volume:");
+                            let mut tvol = self.project.tracks[ti].volume;
+                            if ui.add(egui::Slider::new(&mut tvol, 0.0..=2.0)
+                                .custom_formatter(|v, _| {
+                                    if v < 0.001 { "-\u{221E} dB".into() }
+                                    else { format!("{:.1} dB", 20.0 * (v as f64).log10()) }
+                                })
+                            ).changed() {
+                                self.project.tracks[ti].volume = tvol;
+                            }
+                        });
+
                         ui.separator();
                         ui.horizontal(|ui| {
                             if ui.button("Reset Gain").clicked() {
@@ -6272,17 +6289,18 @@ impl eframe::App for DawApp {
                         });
                         ui.horizontal(|ui| {
                             if ui.button("Maximize Volume")
-                                .on_hover_text("Increase gain to maximum level without clipping (normalize to 0dB)")
+                                .on_hover_text("Set clip gain to bring peak to 0 dB without clipping.\nAlso sets track volume to unity (100%).")
                                 .clicked()
                             {
                                 if let ClipSource::AudioBuffer { buffer_id } = &self.project.tracks[ti].clips[ci].source {
                                     if let Some(buf) = self.audio_buffers.get(buffer_id) {
                                         let peak = buf.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
                                         if peak > 0.0001 {
-                                            // Calculate gain needed to bring peak to 1.0 (0dB)
                                             let gain_needed = 20.0 * (1.0 / peak).log10();
                                             self.project.tracks[ti].clips[ci].gain_db = gain_needed.min(24.0);
-                                            self.set_status(&format!("Volume maximized: +{:.1} dB", gain_needed.min(24.0)));
+                                            // Reset track volume to unity so the knob reflects the maximized state
+                                            self.project.tracks[ti].volume = 1.0;
+                                            self.set_status(&format!("Volume maximized: clip gain +{:.1} dB, track at 0 dB", gain_needed.min(24.0)));
                                         } else {
                                             self.set_status("Clip is silent — cannot maximize");
                                         }

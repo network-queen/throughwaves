@@ -832,13 +832,32 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         vol_resp.hovered(),
                                     );
                                     let vol_db = if vol > 0.001 { 20.0 * vol.log10() } else { -100.0 };
-                                    let vol_db_str = if vol > 0.001 { format!("{:.1}", vol_db) } else { "-∞".into() };
-                                    vol_resp.on_hover_text(format!("Volume: {:.0}% ({vol_db_str} dB)\nDrag up/down, double-click for unity (0 dB)", vol * 100.0));
-                                    // Small dB label below knob
+                                    let vol_db_str = if vol > 0.001 { format!("{:.1}", vol_db) } else { "-\u{221E}".into() };
+                                    // Effective dB = track volume dB + max clip gain dB
+                                    let max_clip_gain = track.clips.iter()
+                                        .map(|c| c.gain_db)
+                                        .fold(0.0_f32, f32::max);
+                                    let effective_db = vol_db + max_clip_gain;
+                                    let eff_str = if vol > 0.001 {
+                                        if max_clip_gain.abs() > 0.01 {
+                                            format!("Track: {vol_db_str} dB + Clip: {max_clip_gain:+.1} dB = {effective_db:.1} dB")
+                                        } else {
+                                            format!("Volume: {vol_db_str} dB")
+                                        }
+                                    } else {
+                                        "Volume: -\u{221E} dB".into()
+                                    };
+                                    vol_resp.on_hover_text(format!("{eff_str}\nDrag up/down, double-click for unity (0 dB)"));
+                                    // Small dB label below knob — show effective if clip gain present
+                                    let label_str = if max_clip_gain.abs() > 0.01 && vol > 0.001 {
+                                        format!("{:.1}", effective_db)
+                                    } else {
+                                        vol_db_str
+                                    };
                                     ui.painter().text(
                                         egui::pos2(vol_rect.center().x, vol_rect.max.y + 1.0),
                                         egui::Align2::CENTER_TOP,
-                                        &vol_db_str,
+                                        &label_str,
                                         egui::FontId::proportional(7.0),
                                         egui::Color32::from_rgb(100, 100, 110),
                                     );
