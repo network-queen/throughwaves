@@ -140,6 +140,13 @@ impl Mixer {
         }
     }
 
+    /// Silence all sounding notes on a track's synth (reset all voices).
+    pub fn silence_track_synth(&mut self, track_id: &Uuid) {
+        if let Some(synth) = self.synths.get_mut(track_id) {
+            synth.reset();
+        }
+    }
+
     /// Return the set of VST3 effect slot IDs whose plugins have crashed.
     pub fn crashed_plugin_ids(&self) -> std::collections::HashSet<Uuid> {
         self.vst_instances.iter()

@@ -43,6 +43,8 @@ pub enum EngineCommand {
     /// (pitch, velocity, track_id for synth params). velocity=0 means note-off.
     PreviewNoteOn { pitch: u8, velocity: u8, track_id: Uuid },
     PreviewNoteOff { pitch: u8 },
+    /// Silence all sounding notes on a track's synth (used when editing MIDI)
+    AllNotesOff { track_id: Uuid },
     /// Load reference track samples for A/B comparison playback.
     PlayReference { samples: Vec<f32>, sample_rate: u32 },
     /// Stop reference track playback.
@@ -230,6 +232,10 @@ fn engine_loop(
                     // We need clip_start + tick_to_sample(start_tick + duration_ticks) == preview_position
                     // With start_tick=0, duration_ticks=0: note_off at clip_start_sample = preview_position
                     preview_synth.render_block(&notes, preview_position, preview_position, 1, sample_rate, &project.tempo);
+                }
+                EngineCommand::AllNotesOff { track_id } => {
+                    // Reset synth for this track to silence all voices
+                    mixer.silence_track_synth(&track_id);
                 }
                 EngineCommand::PlayReference { samples, sample_rate: sr } => {
                     reference_samples = Some(samples);

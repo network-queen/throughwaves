@@ -174,6 +174,11 @@ pub struct Synth {
 }
 
 impl Synth {
+    /// Silence all active voices immediately.
+    pub fn reset(&mut self) {
+        self.voices.clear();
+    }
+
     pub fn new() -> Self {
         Self {
             voices: Vec::with_capacity(MAX_VOICES),

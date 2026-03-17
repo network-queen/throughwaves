@@ -1047,6 +1047,8 @@ fn show_note_grid(app: &mut DawApp, ui: &mut egui::Ui, track_idx: usize) {
                                         }
                                     }
                                     update_clip_duration(app, track_idx);
+                                    let track_id = app.project.tracks[track_idx].id;
+                                    app.send_command(jamhub_engine::EngineCommand::AllNotesOff { track_id });
                                     app.sync_project();
                                 }
                             }
@@ -1673,6 +1675,9 @@ fn delete_selected(app: &mut DawApp, track_idx: usize) {
 
     app.piano_roll_state.selected_notes.clear();
     update_clip_duration(app, track_idx);
+    // Silence any still-sounding notes from the deleted MIDI data
+    let track_id = app.project.tracks[track_idx].id;
+    app.send_command(jamhub_engine::EngineCommand::AllNotesOff { track_id });
     app.sync_project();
 }
 
