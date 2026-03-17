@@ -11,14 +11,23 @@ use uuid::Uuid;
 use crate::auth::AuthUser;
 use crate::models::*;
 
+/// Helper type for JSON error responses.
+type ProjError = (StatusCode, Json<ErrorResponse>);
+
+fn proj_err(status: StatusCode, msg: &str) -> ProjError {
+    (status, Json(ErrorResponse { error: msg.into() }))
+}
+
 // ── Create project ──
 
 async fn create_project(
     State(pool): State<PgPool>,
     auth: AuthUser,
     Json(body): Json<CreateProjectRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, ProjError> {
     let is_public = body.is_public.unwrap_or(true);
+
+    println!("[PROJECTS] Create project: title={:?}, owner={}", body.title, auth.0);
 
     let project = sqlx::query_as::<_, Project>(
         r#"INSERT INTO projects (owner_id, title, description, is_public)
@@ -32,7 +41,7 @@ async fn create_project(
     .await
     .map_err(|e| {
         eprintln!("create project error: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
+        proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}"))
     })?;
 
     Ok((StatusCode::CREATED, Json(project)))
@@ -43,7 +52,7 @@ async fn create_project(
 async fn list_projects(
     State(pool): State<PgPool>,
     Query(q): Query<ProjectQuery>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, ProjError> {
     let page = q.page.unwrap_or(1).max(1);
     let per_page = q.per_page.unwrap_or(20).clamp(1, 100);
     let offset = (page - 1) * per_page;
@@ -51,7 +60,7 @@ async fn list_projects(
     let total: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*)::bigint FROM projects WHERE is_public = true")
         .fetch_one(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     let projects = sqlx::query_as::<_, Project>(
         "SELECT * FROM projects WHERE is_public = true ORDER BY created_at DESC LIMIT $1 OFFSET $2",
@@ -60,7 +69,7 @@ async fn list_projects(
     .bind(offset)
     .fetch_all(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     Ok(Json(Paginated {
         data: projects,
@@ -75,20 +84,20 @@ async fn list_projects(
 async fn get_project(
     State(pool): State<PgPool>,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, ProjError> {
     let project = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE id = $1")
         .bind(id)
         .fetch_optional(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?
+        .ok_or_else(|| proj_err(StatusCode::NOT_FOUND, "Project not found"))?;
 
     let owner =
         sqlx::query_as::<_, crate::models::User>("SELECT * FROM users WHERE id = $1")
             .bind(project.owner_id)
             .fetch_one(&pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     let tracks = sqlx::query_as::<_, ProjectTrack>(
         "SELECT * FROM project_tracks WHERE project_id = $1 ORDER BY added_at DESC",
@@ -96,7 +105,7 @@ async fn get_project(
     .bind(id)
     .fetch_all(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     Ok(Json(ProjectDetail {
         project,
@@ -112,14 +121,14 @@ async fn propose_track(
     auth: AuthUser,
     Path(project_id): Path<Uuid>,
     Json(body): Json<ProposeTrackRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, ProjError> {
     // Verify project exists
     let _project = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE id = $1")
         .bind(project_id)
         .fetch_optional(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?
+        .ok_or_else(|| proj_err(StatusCode::NOT_FOUND, "Project not found"))?;
 
     // Verify track exists and belongs to the user
     let track = sqlx::query_as::<_, Track>("SELECT * FROM tracks WHERE id = $1 AND user_id = $2")
@@ -127,8 +136,8 @@ async fn propose_track(
         .bind(auth.0)
         .fetch_optional(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::BAD_REQUEST)?;
+        .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?
+        .ok_or_else(|| proj_err(StatusCode::BAD_REQUEST, "Track not found or not owned by you"))?;
 
     let name = body
         .name
@@ -146,7 +155,7 @@ async fn propose_track(
     .await
     .map_err(|e| {
         eprintln!("propose track error: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
+        proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}"))
     })?;
 
     Ok((StatusCode::CREATED, Json(pt)))
@@ -159,9 +168,9 @@ async fn vote_track(
     auth: AuthUser,
     Path((project_id, track_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<VoteRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, ProjError> {
     if body.vote != "up" && body.vote != "down" {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(proj_err(StatusCode::BAD_REQUEST, "Vote must be 'up' or 'down'"));
     }
 
     // Get the project_track
@@ -172,8 +181,8 @@ async fn vote_track(
     .bind(project_id)
     .fetch_optional(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .ok_or(StatusCode::NOT_FOUND)?;
+    .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?
+    .ok_or_else(|| proj_err(StatusCode::NOT_FOUND, "Project track not found"))?;
 
     // Check existing vote
     let existing = sqlx::query_as::<_, Vote>(
@@ -183,7 +192,7 @@ async fn vote_track(
     .bind(pt.id)
     .fetch_optional(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     if let Some(old_vote) = existing {
         if old_vote.vote == body.vote {
@@ -192,7 +201,7 @@ async fn vote_track(
                 .bind(old_vote.id)
                 .execute(&pool)
                 .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
             let col = if body.vote == "up" {
                 "votes_up"
@@ -205,7 +214,7 @@ async fn vote_track(
             .bind(pt.id)
             .execute(&pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
         } else {
             // Switch vote
             sqlx::query("UPDATE votes SET vote = $1 WHERE id = $2")
@@ -213,7 +222,7 @@ async fn vote_track(
                 .bind(old_vote.id)
                 .execute(&pool)
                 .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
             let (inc, dec) = if body.vote == "up" {
                 ("votes_up", "votes_down")
@@ -226,7 +235,7 @@ async fn vote_track(
             .bind(pt.id)
             .execute(&pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
         }
     } else {
         // New vote
@@ -238,7 +247,7 @@ async fn vote_track(
         .bind(&body.vote)
         .execute(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
         let col = if body.vote == "up" {
             "votes_up"
@@ -251,7 +260,7 @@ async fn vote_track(
         .bind(pt.id)
         .execute(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
     }
 
     // Return updated project track
@@ -261,7 +270,7 @@ async fn vote_track(
     .bind(pt.id)
     .fetch_one(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     Ok(Json(updated))
 }
@@ -273,17 +282,17 @@ async fn release_version(
     auth: AuthUser,
     Path(project_id): Path<Uuid>,
     Json(body): Json<ReleaseRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, ProjError> {
     // Only owner can release
     let project = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE id = $1")
         .bind(project_id)
         .fetch_optional(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?
+        .ok_or_else(|| proj_err(StatusCode::NOT_FOUND, "Project not found"))?;
 
     if project.owner_id != auth.0 {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(proj_err(StatusCode::FORBIDDEN, "Only the project owner can release versions"));
     }
 
     // Mark selected tracks as accepted
@@ -293,11 +302,11 @@ async fn release_version(
             .bind(project_id)
             .execute(&pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
     }
 
     let track_ids_json = serde_json::to_value(&body.track_ids)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| proj_err(StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize track IDs"))?;
 
     let version = sqlx::query_as::<_, ProjectVersion>(
         r#"INSERT INTO project_versions (project_id, name, description, track_ids, is_released)
@@ -311,7 +320,7 @@ async fn release_version(
     .await
     .map_err(|e| {
         eprintln!("release error: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
+        proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}"))
     })?;
 
     Ok((StatusCode::CREATED, Json(version)))
@@ -322,14 +331,14 @@ async fn release_version(
 async fn list_versions(
     State(pool): State<PgPool>,
     Path(project_id): Path<Uuid>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, ProjError> {
     let versions = sqlx::query_as::<_, ProjectVersion>(
         "SELECT * FROM project_versions WHERE project_id = $1 ORDER BY created_at DESC",
     )
     .bind(project_id)
     .fetch_all(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     Ok(Json(versions))
 }
@@ -340,13 +349,15 @@ async fn checkout_project(
     State(pool): State<PgPool>,
     _auth: AuthUser,
     Path(project_id): Path<Uuid>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, ProjError> {
+    println!("[PROJECTS] Checkout project: {project_id}");
+
     let project = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE id = $1")
         .bind(project_id)
         .fetch_optional(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?
+        .ok_or_else(|| proj_err(StatusCode::NOT_FOUND, "Project not found"))?;
 
     let pt_list = sqlx::query_as::<_, ProjectTrack>(
         "SELECT * FROM project_tracks WHERE project_id = $1 AND status = 'accepted'",
@@ -354,7 +365,7 @@ async fn checkout_project(
     .bind(project_id)
     .fetch_all(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     let mut track_files = Vec::new();
     for pt in &pt_list {
@@ -362,7 +373,7 @@ async fn checkout_project(
             .bind(pt.track_id)
             .fetch_optional(&pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| proj_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
         if let Some(t) = track {
             track_files.push(TrackFile {

@@ -173,11 +173,11 @@ fn platform_upload_file(
         append_multipart_field(&mut body, boundary, "projectId", pid);
     }
 
-    // File field
+    // File field — must be named "audio" to match the server's expected field name
     body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(
         format!(
-            "Content-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\n"
+            "Content-Disposition: form-data; name=\"audio\"; filename=\"{file_name}\"\r\n"
         )
         .as_bytes(),
     );
@@ -229,9 +229,10 @@ impl PlatformPanel {
 
         match platform_request("POST", &self.server_url, "/api/auth/login", None, Some(&body)) {
             Ok(resp) => {
-                // Expect JSON with { "token": "...", "user": { "name": "..." } }
+                // Expect JSON with { "token": "...", "user": { "username": "..." } }
                 if let Some(token) = extract_json_string(&resp, "token") {
-                    let username = extract_json_string(&resp, "name")
+                    let username = extract_json_string(&resp, "username")
+                        .or_else(|| extract_json_string(&resp, "name"))
                         .or_else(|| extract_json_string(&resp, "email"))
                         .unwrap_or_else(|| self.email.clone());
                     self.jwt_token = Some(token);
@@ -253,8 +254,11 @@ impl PlatformPanel {
     }
 
     pub fn register(&mut self) {
+        // Derive a username from the email (part before @) if not provided separately
+        let username = self.email.split('@').next().unwrap_or("user").replace('"', "\\\"");
         let body = format!(
-            r#"{{"email":"{}","password":"{}"}}"#,
+            r#"{{"username":"{}","email":"{}","password":"{}"}}"#,
+            username,
             self.email.replace('"', "\\\""),
             self.password.replace('"', "\\\"")
         );
@@ -263,7 +267,8 @@ impl PlatformPanel {
         {
             Ok(resp) => {
                 if let Some(token) = extract_json_string(&resp, "token") {
-                    let username = extract_json_string(&resp, "name")
+                    let username = extract_json_string(&resp, "username")
+                        .or_else(|| extract_json_string(&resp, "name"))
                         .or_else(|| extract_json_string(&resp, "email"))
                         .unwrap_or_else(|| self.email.clone());
                     self.jwt_token = Some(token);
@@ -664,7 +669,7 @@ fn do_checkout_project(app: &mut DawApp) {
     };
 
     let path = format!("/api/projects/{}/checkout", project_id);
-    match platform_request("GET", &app.platform.server_url, &path, Some(&jwt), None) {
+    match platform_request("POST", &app.platform.server_url, &path, Some(&jwt), None) {
         Ok(resp) => {
             // The response should contain project JSON data.
             // For now, extract the project name and report success.

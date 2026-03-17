@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::{AuthResponse, LoginRequest, RegisterRequest, User, UserPublic};
+use crate::models::{AuthResponse, ErrorResponse, LoginRequest, RegisterRequest, User, UserPublic};
 
 const JWT_SECRET: &str = "jamhub-secret-change-in-production";
 
@@ -27,7 +27,7 @@ pub struct Claims {
 pub struct AuthUser(pub Uuid);
 
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for AuthUser {
-    type Rejection = StatusCode;
+    type Rejection = (StatusCode, Json<ErrorResponse>);
 
     async fn from_request_parts(
         parts: &mut http::request::Parts,
@@ -38,7 +38,14 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for AuthUser {
             .get::<Uuid>()
             .copied()
             .map(AuthUser)
-            .ok_or(StatusCode::UNAUTHORIZED)
+            .ok_or_else(|| {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponse {
+                        error: "Authentication required".into(),
+                    }),
+                )
+            })
     }
 }
 
@@ -64,7 +71,14 @@ pub async fn jwt_auth(mut req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-fn make_token(user_id: Uuid) -> Result<String, StatusCode> {
+/// Helper type for JSON error responses from auth handlers.
+type AuthError = (StatusCode, Json<ErrorResponse>);
+
+fn err(status: StatusCode, msg: &str) -> AuthError {
+    (status, Json(ErrorResponse { error: msg.into() }))
+}
+
+fn make_token(user_id: Uuid) -> Result<String, AuthError> {
     let exp = (Utc::now() + chrono::Duration::days(30)).timestamp() as usize;
     let claims = Claims { sub: user_id, exp };
     encode(
@@ -72,7 +86,7 @@ fn make_token(user_id: Uuid) -> Result<String, StatusCode> {
         &claims,
         &EncodingKey::from_secret(JWT_SECRET.as_bytes()),
     )
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Failed to create token"))
 }
 
 // ── Handlers ──
@@ -80,9 +94,21 @@ fn make_token(user_id: Uuid) -> Result<String, StatusCode> {
 async fn register(
     State(pool): State<PgPool>,
     Json(body): Json<RegisterRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, AuthError> {
+    if body.username.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "Username is required"));
+    }
+    if body.email.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "Email is required"));
+    }
+    if body.password.len() < 4 {
+        return Err(err(StatusCode::BAD_REQUEST, "Password too short (min 4 chars)"));
+    }
+
+    println!("[AUTH] Register: username={}, email={}", body.username, body.email);
+
     let hash = bcrypt::hash(&body.password, bcrypt::DEFAULT_COST)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Failed to hash password"))?;
 
     let user = sqlx::query_as::<_, User>(
         "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING *",
@@ -94,7 +120,7 @@ async fn register(
     .await
     .map_err(|e| {
         eprintln!("register error: {e}");
-        StatusCode::CONFLICT
+        err(StatusCode::CONFLICT, "Username or email already exists")
     })?;
 
     let token = make_token(user.id)?;
@@ -111,21 +137,26 @@ async fn register(
 async fn login(
     State(pool): State<PgPool>,
     Json(body): Json<LoginRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, AuthError> {
+    println!("[AUTH] Login attempt: email={}", body.email);
+
     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE email = $1")
         .bind(&body.email)
         .fetch_optional(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
+        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Invalid email or password"))?;
 
     let valid =
-        bcrypt::verify(&body.password, &user.password_hash).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        bcrypt::verify(&body.password, &user.password_hash)
+            .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Password verification failed"))?;
     if !valid {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(err(StatusCode::UNAUTHORIZED, "Invalid email or password"));
     }
 
     let token = make_token(user.id)?;
+
+    println!("[AUTH] Login success: user_id={}", user.id);
 
     Ok(Json(AuthResponse {
         token,
@@ -136,13 +167,13 @@ async fn login(
 async fn me(
     State(pool): State<PgPool>,
     auth: AuthUser,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, AuthError> {
     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
         .bind(auth.0)
         .fetch_optional(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
 
     Ok(Json(UserPublic::from(user)))
 }

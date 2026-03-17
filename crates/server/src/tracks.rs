@@ -11,13 +11,22 @@ use uuid::Uuid;
 use crate::auth::AuthUser;
 use crate::models::*;
 
+/// Helper type for JSON error responses.
+type TrackError = (StatusCode, Json<ErrorResponse>);
+
+fn track_err(status: StatusCode, msg: &str) -> TrackError {
+    (status, Json(ErrorResponse { error: msg.into() }))
+}
+
 // ── Upload track (multipart) ──
 
 async fn create_track(
     State(pool): State<PgPool>,
     auth: AuthUser,
     mut multipart: Multipart,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, TrackError> {
+    println!("[TRACKS] Upload request from user_id={}", auth.0);
+
     let mut title = String::new();
     let mut description = String::new();
     let mut genre = String::new();
@@ -28,27 +37,41 @@ async fn create_track(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .map_err(|e| {
+            eprintln!("[TRACKS] Multipart parse error: {e}");
+            track_err(StatusCode::BAD_REQUEST, &format!("Invalid multipart data: {e}"))
+        })?
     {
         let name = field.name().unwrap_or("").to_string();
+        println!("[TRACKS] Processing field: {name:?}");
         match name.as_str() {
             "title" => {
-                title = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                title = field.text().await.map_err(|e| {
+                    track_err(StatusCode::BAD_REQUEST, &format!("Failed to read title: {e}"))
+                })?;
             }
             "description" => {
-                description = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                description = field.text().await.map_err(|e| {
+                    track_err(StatusCode::BAD_REQUEST, &format!("Failed to read description: {e}"))
+                })?;
             }
             "genre" => {
-                genre = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                genre = field.text().await.map_err(|e| {
+                    track_err(StatusCode::BAD_REQUEST, &format!("Failed to read genre: {e}"))
+                })?;
             }
             "bpm" => {
-                let s = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                let s = field.text().await.map_err(|e| {
+                    track_err(StatusCode::BAD_REQUEST, &format!("Failed to read bpm: {e}"))
+                })?;
                 bpm = s.parse().ok();
             }
             "key" => {
-                key = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                key = field.text().await.map_err(|e| {
+                    track_err(StatusCode::BAD_REQUEST, &format!("Failed to read key: {e}"))
+                })?;
             }
-            "audio" => {
+            "audio" | "file" => {
                 let original = field
                     .file_name()
                     .unwrap_or("upload.wav")
@@ -60,28 +83,50 @@ async fn create_track(
                 let filename = format!("{}.{}", Uuid::new_v4(), ext);
                 let path = format!("./uploads/{filename}");
 
+                println!("[TRACKS] Receiving audio file: {original} -> {filename}");
+
                 // Ensure uploads directory exists
                 tokio::fs::create_dir_all("./uploads")
                     .await
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    .map_err(|_| track_err(StatusCode::INTERNAL_SERVER_ERROR, "Failed to create uploads directory"))?;
 
-                let bytes = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                let bytes = field.bytes().await.map_err(|e| {
+                    eprintln!("[TRACKS] Failed to read file bytes: {e}");
+                    track_err(StatusCode::BAD_REQUEST, &format!("Failed to read audio data: {e}"))
+                })?;
+
+                println!("[TRACKS] Received {} bytes, writing to {path}", bytes.len());
+
                 tokio::fs::write(&path, &bytes)
                     .await
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    .map_err(|e| {
+                        eprintln!("[TRACKS] Failed to write file: {e}");
+                        track_err(StatusCode::INTERNAL_SERVER_ERROR, "Failed to save audio file")
+                    })?;
 
                 audio_filename = Some(filename);
             }
-            _ => {}
+            other => {
+                println!("[TRACKS] Ignoring unknown field: {other:?}");
+            }
         }
     }
 
-    let audio_filename = audio_filename.ok_or(StatusCode::BAD_REQUEST)?;
+    let audio_filename = match audio_filename {
+        Some(f) => f,
+        None => {
+            eprintln!("[TRACKS] Upload error: no audio file received. Title={title:?}");
+            return Err(track_err(StatusCode::BAD_REQUEST, "No audio file received. Send file in a field named 'audio'."));
+        }
+    };
     let audio_url = format!("/uploads/{audio_filename}");
 
     if title.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        eprintln!("[TRACKS] Upload error: empty title");
+        return Err(track_err(StatusCode::BAD_REQUEST, "Title is required"));
     }
+
+    println!("[TRACKS] Inserting track: title={title:?}, genre={genre:?}, bpm={bpm:?}");
 
     let track = sqlx::query_as::<_, Track>(
         r#"INSERT INTO tracks (user_id, title, description, audio_url, genre, bpm, key)
@@ -98,9 +143,11 @@ async fn create_track(
     .fetch_one(&pool)
     .await
     .map_err(|e| {
-        eprintln!("create track error: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
+        eprintln!("[TRACKS] create track DB error: {e}");
+        track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}"))
     })?;
+
+    println!("[TRACKS] Track created: id={}", track.id);
 
     Ok((StatusCode::CREATED, Json(track)))
 }
@@ -110,7 +157,7 @@ async fn create_track(
 async fn list_tracks(
     State(pool): State<PgPool>,
     Query(q): Query<TrackQuery>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, TrackError> {
     let page = q.page.unwrap_or(1).max(1);
     let per_page = q.per_page.unwrap_or(20).clamp(1, 100);
     let offset = (page - 1) * per_page;
@@ -125,7 +172,7 @@ async fn list_tracks(
     .bind(q.user_id)
     .fetch_one(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     let tracks = sqlx::query_as::<_, Track>(
         r#"SELECT * FROM tracks
@@ -141,7 +188,7 @@ async fn list_tracks(
     .bind(offset)
     .fetch_all(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     Ok(Json(Paginated {
         data: tracks,
@@ -156,19 +203,19 @@ async fn list_tracks(
 async fn get_track(
     State(pool): State<PgPool>,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, TrackError> {
     let track = sqlx::query_as::<_, Track>("SELECT * FROM tracks WHERE id = $1")
         .bind(id)
         .fetch_optional(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?
+        .ok_or_else(|| track_err(StatusCode::NOT_FOUND, "Track not found"))?;
 
     let user = sqlx::query_as::<_, crate::models::User>("SELECT * FROM users WHERE id = $1")
         .bind(track.user_id)
         .fetch_one(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     let raw_comments = sqlx::query_as::<_, Comment>(
         "SELECT * FROM comments WHERE track_id = $1 ORDER BY timestamp_seconds ASC NULLS LAST, created_at ASC",
@@ -176,7 +223,7 @@ async fn get_track(
     .bind(id)
     .fetch_all(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     let mut comments = Vec::with_capacity(raw_comments.len());
     for c in raw_comments {
@@ -184,7 +231,7 @@ async fn get_track(
             .bind(c.user_id)
             .fetch_one(&pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
         comments.push(CommentWithUser {
             id: c.id,
             user: cu.into(),
@@ -207,7 +254,7 @@ async fn like_track(
     State(pool): State<PgPool>,
     auth: AuthUser,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, TrackError> {
     // Check if already liked
     let existing: Option<(Uuid,)> = sqlx::query_as(
         "SELECT user_id FROM track_likes WHERE user_id = $1 AND track_id = $2",
@@ -216,7 +263,7 @@ async fn like_track(
     .bind(id)
     .fetch_optional(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     if existing.is_some() {
         // Unlike
@@ -225,13 +272,13 @@ async fn like_track(
             .bind(id)
             .execute(&pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
         sqlx::query("UPDATE tracks SET likes = likes - 1 WHERE id = $1")
             .bind(id)
             .execute(&pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
         Ok(Json(serde_json::json!({"liked": false})))
     } else {
@@ -241,13 +288,13 @@ async fn like_track(
             .bind(id)
             .execute(&pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
         sqlx::query("UPDATE tracks SET likes = likes + 1 WHERE id = $1")
             .bind(id)
             .execute(&pool)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
         Ok(Json(serde_json::json!({"liked": true})))
     }
@@ -258,12 +305,12 @@ async fn like_track(
 async fn play_track(
     State(pool): State<PgPool>,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, TrackError> {
     sqlx::query("UPDATE tracks SET plays = plays + 1 WHERE id = $1")
         .bind(id)
         .execute(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -274,16 +321,16 @@ async fn delete_track(
     State(pool): State<PgPool>,
     auth: AuthUser,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, TrackError> {
     let result = sqlx::query("DELETE FROM tracks WHERE id = $1 AND user_id = $2")
         .bind(id)
         .bind(auth.0)
         .execute(&pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
 
     if result.rows_affected() == 0 {
-        return Err(StatusCode::NOT_FOUND);
+        return Err(track_err(StatusCode::NOT_FOUND, "Track not found or not owned by you"));
     }
 
     Ok(StatusCode::NO_CONTENT)
@@ -296,7 +343,7 @@ async fn post_comment(
     auth: AuthUser,
     Path(id): Path<Uuid>,
     Json(body): Json<CommentRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, TrackError> {
     let comment = sqlx::query_as::<_, Comment>(
         r#"INSERT INTO comments (user_id, track_id, text, timestamp_seconds)
            VALUES ($1, $2, $3, $4) RETURNING *"#,
@@ -309,7 +356,7 @@ async fn post_comment(
     .await
     .map_err(|e| {
         eprintln!("comment error: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
+        track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}"))
     })?;
 
     Ok((StatusCode::CREATED, Json(comment)))

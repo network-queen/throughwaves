@@ -663,9 +663,10 @@ const API_BASE = '';
 
 async function fetchAPI(path, options = {}) {
   const headers = { ...options.headers };
-  if (state.token) {
+  if (state.token && state.token !== 'demo_token') {
     headers['Authorization'] = `Bearer ${state.token}`;
   }
+  // For FormData, do NOT set Content-Type — the browser sets it with the boundary
   if (options.body && !(options.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(options.body);
@@ -674,11 +675,14 @@ async function fetchAPI(path, options = {}) {
     const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || err.message || 'Request failed');
+      throw new Error(err.error || err.message || `Request failed (${res.status})`);
     }
+    // Handle 204 No Content
+    if (res.status === 204) return {};
     return res.json();
   } catch (e) {
-    if (e.message === 'Failed to fetch') return null;
+    // Network error (server not running) — return null so demo mode can kick in
+    if (e instanceof TypeError && e.message === 'Failed to fetch') return null;
     throw e;
   }
 }
@@ -797,11 +801,17 @@ async function handleAuth(e) {
       state.token = result.token;
       state.user = result.user;
       localStorage.setItem('jamhub_token', result.token);
-    } else {
-      // Demo mode: simulate login
+    } else if (result === null) {
+      // Server unreachable — demo mode: simulate login
+      console.log('[JamHub] Server unreachable, entering demo mode');
       state.user = { username: email.split('@')[0], email, bio: 'Music creator on JamHub' };
       state.token = 'demo_token';
       localStorage.setItem('jamhub_token', 'demo_token');
+    } else {
+      // Server responded but with unexpected format
+      errEl.textContent = 'Unexpected server response';
+      errEl.classList.add('show');
+      return;
     }
     updateAuthUI();
     closeAuthModal();
@@ -1367,9 +1377,10 @@ function handleFileSelect(input) {
 }
 
 async function handleUpload() {
+  if (!state.user) { openAuthModal(); return; }
   const title = document.getElementById('uploadTitle').value;
   if (!title) { alert('Please enter a title'); return; }
-  if (!selectedFile && !state.user) { openAuthModal(); return; }
+  if (!selectedFile) { alert('Please select an audio file'); return; }
 
   const btn = document.getElementById('uploadBtn');
   const progress = document.getElementById('uploadProgress');
@@ -1388,60 +1399,78 @@ async function handleUpload() {
   }, 200);
 
   // Try actual upload
+  let uploadError = null;
+  let uploadResult = null;
   if (selectedFile) {
     const fd = new FormData();
     fd.append('audio', selectedFile);
     fd.append('title', title);
     fd.append('description', document.getElementById('uploadDesc').value);
     fd.append('genre', document.getElementById('uploadGenre').value);
-    fd.append('bpm', document.getElementById('uploadBpm').value);
+    fd.append('bpm', document.getElementById('uploadBpm').value || '0');
     fd.append('key', document.getElementById('uploadKey').value);
     try {
-      await apiUploadTrack(fd);
-    } catch (e) { /* demo mode */ }
+      uploadResult = await apiUploadTrack(fd);
+      console.log('[JamHub] Upload result:', uploadResult);
+    } catch (e) {
+      console.error('[JamHub] Upload error:', e.message);
+      uploadError = e.message;
+    }
   }
 
   // Finish
-  setTimeout(() => {
-    clearInterval(interval);
-    fill.style.width = '100%';
-    btn.textContent = 'Uploaded!';
+  clearInterval(interval);
 
-    // Add to demo data
-    const newTrack = {
-      id: Date.now(),
-      title,
-      artist: state.user ? state.user.username : 'You',
-      genre: document.getElementById('uploadGenre').value,
-      bpm: parseInt(document.getElementById('uploadBpm').value) || null,
-      key: document.getElementById('uploadKey').value || null,
-      duration: Math.floor(Math.random() * 180 + 120),
-      likes: 0,
-      liked: false,
-    };
-    demoTracks.unshift(newTrack);
+  if (uploadError) {
+    fill.style.width = '0%';
+    progress.classList.remove('active');
+    btn.textContent = 'Upload';
+    btn.disabled = false;
+    alert('Upload failed: ' + uploadError);
+    return;
+  }
 
-    // Add to project if selected
-    const projId = parseInt(document.getElementById('uploadProject').value);
-    if (projId) {
-      const proj = demoProjects.find(p => p.id === projId);
-      if (proj) {
-        proj.tracks.push({
-          id: Date.now(), name: title,
-          contributor: newTrack.artist, status: 'proposed', votes: 0
-        });
-      }
+  fill.style.width = '100%';
+  btn.textContent = 'Uploaded!';
+
+  // Add to demo data
+  const newTrack = {
+    id: Date.now(),
+    title,
+    artist: state.user ? state.user.username : 'You',
+    genre: document.getElementById('uploadGenre').value,
+    bpm: parseInt(document.getElementById('uploadBpm').value) || null,
+    key: document.getElementById('uploadKey').value || null,
+    duration: Math.floor(Math.random() * 180 + 120),
+    likes: 0,
+    liked: false,
+  };
+  if (uploadResult && uploadResult.audio_url) {
+    newTrack.audioUrl = uploadResult.audio_url;
+    newTrack.id = uploadResult.id || newTrack.id;
+  }
+  demoTracks.unshift(newTrack);
+
+  // Add to project if selected
+  const projId = parseInt(document.getElementById('uploadProject').value);
+  if (projId) {
+    const proj = demoProjects.find(p => p.id === projId);
+    if (proj) {
+      proj.tracks.push({
+        id: Date.now(), name: title,
+        contributor: newTrack.artist, status: 'proposed', votes: 0
+      });
     }
+  }
 
-    setTimeout(() => {
-      btn.textContent = 'Upload';
-      btn.disabled = false;
-      progress.classList.remove('active');
-      fill.style.width = '0%';
-      selectedFile = null;
-      navigate('home');
-    }, 1200);
-  }, 1500);
+  setTimeout(() => {
+    btn.textContent = 'Upload';
+    btn.disabled = false;
+    progress.classList.remove('active');
+    fill.style.width = '0%';
+    selectedFile = null;
+    navigate('home');
+  }, 1200);
 }
 
 // --- Profile ---

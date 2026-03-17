@@ -3,6 +3,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+// ── Error Response ──
+
+#[derive(Debug, Serialize)]
+pub struct ErrorResponse {
+    pub error: String,
+}
+
 // ── User ──
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

@@ -3,11 +3,21 @@ mod models;
 mod projects;
 mod tracks;
 
-use axum::{middleware, Router};
+use axum::{extract::Request, middleware, response::Response, Router};
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
+
+/// Logging middleware — prints method, path, and response status for every request.
+async fn log_request(req: Request, next: axum::middleware::Next) -> Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    println!("[REQ] {method} {uri}");
+    let response = next.run(req).await;
+    println!("[RES] {method} {uri} -> {}", response.status());
+    response
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -47,6 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api", api)
         .nest_service("/uploads", ServeDir::new("./uploads"))
         .fallback_service(ServeDir::new("./crates/server/web"))
+        .layer(middleware::from_fn(log_request))
         .layer(CorsLayer::permissive())
         .with_state(pool);
 
