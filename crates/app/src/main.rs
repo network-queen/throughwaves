@@ -533,6 +533,8 @@ pub struct DawApp {
     pub show_piano_roll: bool,
     /// Set by piano roll when it handles Delete key, so main app skips delete
     pub piano_roll_consumed_delete: bool,
+    /// Confirm track deletion dialog: (track_idx, track_name)
+    pub confirm_delete_track: Option<(usize, String)>,
     pub show_about: bool,
     input_monitor: InputMonitor,
     pub resizing_track: Option<usize>,
@@ -1314,6 +1316,7 @@ impl DawApp {
             renaming_track: None,
             show_piano_roll: false,
             piano_roll_consumed_delete: false,
+            confirm_delete_track: None,
             show_about: false,
             input_monitor: InputMonitor::new(),
             resizing_track: None,
@@ -2121,13 +2124,22 @@ impl DawApp {
     pub fn delete_selected_track(&mut self) {
         if let Some(track_idx) = self.selected_track {
             if track_idx < self.project.tracks.len() && self.project.tracks.len() > 1 {
-                self.push_undo("Delete track");
-                self.project.tracks.remove(track_idx);
-                self.selected_track = Some(track_idx.min(self.project.tracks.len() - 1));
-                self.selected_clips.clear();
-                self.sync_project();
-                self.set_status("Track deleted");
+                // Show confirmation dialog instead of deleting immediately
+                let name = self.project.tracks[track_idx].name.clone();
+                self.confirm_delete_track = Some((track_idx, name));
             }
+        }
+    }
+
+    /// Actually perform track deletion (called after user confirms)
+    fn do_delete_track(&mut self, track_idx: usize) {
+        if track_idx < self.project.tracks.len() && self.project.tracks.len() > 1 {
+            self.push_undo("Delete track");
+            self.project.tracks.remove(track_idx);
+            self.selected_track = Some(track_idx.min(self.project.tracks.len() - 1));
+            self.selected_clips.clear();
+            self.sync_project();
+            self.set_status("Track deleted");
         }
     }
 
@@ -5825,6 +5837,40 @@ impl eframe::App for DawApp {
         templates::show_custom_color_dialog(self, ctx);
         self.show_track_template_picker_window(ctx);
         self.show_color_palette_popup(ctx);
+
+        // ── Confirm Track Delete Dialog ──
+        if let Some((tidx, ref tname)) = self.confirm_delete_track.clone() {
+            let mut open = true;
+            egui::Window::new("Delete Track")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.add_space(8.0);
+                    ui.label(format!("Are you sure you want to delete \"{}\"?", tname));
+                    ui.label(egui::RichText::new("This action can be undone with Cmd+Z.").size(11.0).color(egui::Color32::GRAY));
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new("Delete").color(egui::Color32::WHITE))
+                            .fill(egui::Color32::from_rgb(200, 50, 50))
+                            .min_size(egui::vec2(80.0, 28.0))
+                        ).clicked() {
+                            self.do_delete_track(tidx);
+                            self.confirm_delete_track = None;
+                        }
+                        if ui.add(egui::Button::new("Cancel")
+                            .min_size(egui::vec2(80.0, 28.0))
+                        ).clicked() {
+                            self.confirm_delete_track = None;
+                        }
+                    });
+                });
+            if !open {
+                self.confirm_delete_track = None;
+            }
+        }
 
         // Cleanup closed plugin editor windows
         self.plugin_windows.cleanup_closed();

@@ -831,8 +831,17 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         egui::Color32::from_rgb(80, 210, 140),
                                         vol_resp.hovered(),
                                     );
-                                    let vol_db = if vol > 0.001 { format!("{:.1} dB", 20.0 * vol.log10()) } else { "-∞ dB".into() };
-                                    vol_resp.on_hover_text(format!("Volume: {:.0}% ({vol_db})\nDrag up/down, double-click for unity", vol * 100.0));
+                                    let vol_db = if vol > 0.001 { 20.0 * vol.log10() } else { -100.0 };
+                                    let vol_db_str = if vol > 0.001 { format!("{:.1}", vol_db) } else { "-∞".into() };
+                                    vol_resp.on_hover_text(format!("Volume: {:.0}% ({vol_db_str} dB)\nDrag up/down, double-click for unity (0 dB)", vol * 100.0));
+                                    // Small dB label below knob
+                                    ui.painter().text(
+                                        egui::pos2(vol_rect.center().x, vol_rect.max.y + 1.0),
+                                        egui::Align2::CENTER_TOP,
+                                        &vol_db_str,
+                                        egui::FontId::proportional(7.0),
+                                        egui::Color32::from_rgb(100, 100, 110),
+                                    );
                                 });
                             });
 
