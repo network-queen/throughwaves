@@ -247,87 +247,202 @@ fn apply_theme(ctx: &egui::Context, theme: ThemeChoice) {
 }
 
 /// Generate the ThroughWaves waveform icon as RGBA pixel data.
+/// 3D look with depth, specular highlights, and light reflections.
 fn generate_app_icon() -> egui::IconData {
     let size = 256u32;
+    let sf = size as f32;
     let mut rgba = vec![0u8; (size * size * 4) as usize];
+    let center = sf / 2.0;
+    let corner_r = sf * 0.22;
 
-    let center = size as f32 / 2.0;
-    let radius = size as f32 * 0.42;
+    // Helper: blend (sr, sg, sb, sa) over pixel at idx
+    let blend = |rgba: &mut Vec<u8>, idx: usize, sr: f32, sg: f32, sb: f32, sa: f32| {
+        let bg_a = rgba[idx + 3] as f32 / 255.0;
+        let out_a = sa + bg_a * (1.0 - sa);
+        if out_a > 0.001 {
+            rgba[idx]     = ((sr * sa + rgba[idx] as f32 * bg_a * (1.0 - sa)) / out_a).clamp(0.0, 255.0) as u8;
+            rgba[idx + 1] = ((sg * sa + rgba[idx + 1] as f32 * bg_a * (1.0 - sa)) / out_a).clamp(0.0, 255.0) as u8;
+            rgba[idx + 2] = ((sb * sa + rgba[idx + 2] as f32 * bg_a * (1.0 - sa)) / out_a).clamp(0.0, 255.0) as u8;
+            rgba[idx + 3] = (out_a * 255.0).clamp(0.0, 255.0) as u8;
+        }
+    };
 
-    // Background: rounded rectangle (amber gradient)
-    let corner_r = size as f32 * 0.22;
+    // Rounded rect SDF
+    let sdf = |fx: f32, fy: f32| -> f32 {
+        let dx = (fx - center).abs() - (center - corner_r);
+        let dy = (fy - center).abs() - (center - corner_r);
+        dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - corner_r
+    };
+
+    // ── Pass 1: Drop shadow (offset down-right) ──
+    let shadow_ox = sf * 0.02;
+    let shadow_oy = sf * 0.03;
+    let shadow_blur = sf * 0.06;
     for y in 0..size {
         for x in 0..size {
-            let fx = x as f32;
-            let fy = y as f32;
-
-            // Rounded rect SDF
-            let dx = (fx - center).abs() - (center - corner_r);
-            let dy = (fy - center).abs() - (center - corner_r);
-            let d = dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - corner_r;
-
-            if d < 1.0 {
-                let alpha = if d < -1.0 { 255 } else { ((1.0 - d) * 255.0) as u8 };
-                // Gradient from top-left (brighter) to bottom-right (darker)
-                let t = (fy / size as f32 * 0.5 + fx / size as f32 * 0.3).min(1.0);
-                let r = (235.0 - t * 30.0) as u8;
-                let g = (180.0 - t * 40.0) as u8;
-                let b = (60.0 - t * 20.0) as u8;
-
+            let d = sdf(x as f32 - shadow_ox, y as f32 - shadow_oy);
+            if d < shadow_blur {
+                let a = ((1.0 - d / shadow_blur).clamp(0.0, 1.0) * 0.5 * 255.0) as u8;
                 let idx = ((y * size + x) * 4) as usize;
-                rgba[idx] = r;
-                rgba[idx + 1] = g;
-                rgba[idx + 2] = b;
-                rgba[idx + 3] = alpha;
+                rgba[idx] = 0; rgba[idx + 1] = 0; rgba[idx + 2] = 0; rgba[idx + 3] = a;
             }
         }
     }
 
-    // Waveform bars (5 bars, dark color)
+    // ── Pass 2: Background with 3D gradient + inner glow ──
+    // Light source: top-left
+    for y in 0..size {
+        for x in 0..size {
+            let fx = x as f32;
+            let fy = y as f32;
+            let d = sdf(fx, fy);
+            if d < 1.0 {
+                let alpha = if d < -1.0 { 1.0 } else { 1.0 - d };
+                // Base gradient: warm amber, darker at bottom-right
+                let ny = fy / sf; // 0..1
+                let nx = fx / sf;
+                let t = (ny * 0.6 + nx * 0.3).min(1.0);
+                let mut r = 245.0 - t * 55.0;
+                let mut g = 195.0 - t * 65.0;
+                let mut b = 70.0 - t * 35.0;
+
+                // Inner bevel: bright top edge, dark bottom edge
+                let edge_dist = (-d).min(sf * 0.04) / (sf * 0.04); // 0 at edge, 1 at 4% inside
+                let bevel = 1.0 - edge_dist;
+                let top_light = ((1.0 - ny) * bevel * 0.4).min(0.4);
+                let bot_dark = (ny * bevel * 0.25).min(0.25);
+                r = (r + top_light * 80.0 - bot_dark * 60.0).clamp(0.0, 255.0);
+                g = (g + top_light * 60.0 - bot_dark * 50.0).clamp(0.0, 255.0);
+                b = (b + top_light * 30.0 - bot_dark * 30.0).clamp(0.0, 255.0);
+
+                let idx = ((y * size + x) * 4) as usize;
+                blend(&mut rgba, idx, r, g, b, alpha);
+            }
+        }
+    }
+
+    // ── Pass 3: Glass highlight (top ellipse, white, fading) ──
+    let hl_cx = center - sf * 0.05;
+    let hl_cy = sf * 0.30;
+    let hl_rx = sf * 0.35;
+    let hl_ry = sf * 0.18;
+    for y in 0..size {
+        for x in 0..size {
+            let fx = x as f32;
+            let fy = y as f32;
+            if sdf(fx, fy) < -1.0 {
+                let ex = (fx - hl_cx) / hl_rx;
+                let ey = (fy - hl_cy) / hl_ry;
+                let ed = ex * ex + ey * ey;
+                if ed < 1.0 {
+                    let a = (1.0 - ed).powi(2) * 0.30; // soft falloff
+                    let idx = ((y * size + x) * 4) as usize;
+                    blend(&mut rgba, idx, 255.0, 255.0, 255.0, a);
+                }
+            }
+        }
+    }
+
+    // ── Pass 4: Waveform bars with 3D cylindrical shading ──
     let bar_heights: [f32; 5] = [0.30, 0.65, 0.50, 0.80, 0.22];
-    let bar_width = size as f32 * 0.075;
-    let spacing = size as f32 * 0.155;
-    let total_w = 4.0 * spacing;
-    let start_x = center - total_w / 2.0;
+    let bar_width = sf * 0.09;
+    let spacing = sf * 0.155;
+    let start_x = center - 2.0 * spacing;
+    let radius = sf * 0.42;
 
     for (i, &h_frac) in bar_heights.iter().enumerate() {
         let cx = start_x + i as f32 * spacing;
         let bar_h = radius * h_frac * 1.8;
         let top = center - bar_h / 2.0;
         let bot = center + bar_h / 2.0;
+        let half_w = bar_width / 2.0;
 
         for y in 0..size {
             for x in 0..size {
                 let fx = x as f32;
                 let fy = y as f32;
-                let dx = (fx - cx).abs();
-                let half_w = bar_width / 2.0;
+                let ddx = (fx - cx).abs();
+                if ddx > half_w + 2.0 || fy < top - 2.0 || fy > bot + 2.0 { continue; }
 
-                if dx < half_w + 1.0 && fy >= top - 1.0 && fy <= bot + 1.0 {
-                    // Round caps
-                    let cap_d = if fy < top + half_w {
-                        (fx - cx).hypot(fy - (top + half_w)) - half_w
-                    } else if fy > bot - half_w {
-                        (fx - cx).hypot(fy - (bot - half_w)) - half_w
-                    } else {
-                        dx - half_w
-                    };
+                // Capsule SDF
+                let cap_d = if fy < top + half_w {
+                    (fx - cx).hypot(fy - (top + half_w)) - half_w
+                } else if fy > bot - half_w {
+                    (fx - cx).hypot(fy - (bot - half_w)) - half_w
+                } else {
+                    ddx - half_w
+                };
 
-                    if cap_d < 1.0 {
-                        let a = if cap_d < -1.0 { 255.0 } else { (1.0 - cap_d) * 255.0 };
+                if cap_d < 1.5 {
+                    let fill_a = if cap_d < -0.5 { 1.0 } else { (1.0 - cap_d).clamp(0.0, 1.0) };
+
+                    // Cylindrical 3D shading: lighter on left, darker on right
+                    let nx_bar = ((fx - cx) / half_w).clamp(-1.0, 1.0); // -1 left, +1 right
+                    let cylinder = 1.0 - nx_bar * nx_bar; // parabolic highlight in center
+                    let ny_bar = if fy < top + half_w || fy > bot - half_w { 0.7 } else { 1.0 };
+
+                    // Base dark color with cylindrical highlight
+                    let base_r = 20.0 + cylinder * 45.0 * ny_bar;
+                    let base_g = 16.0 + cylinder * 35.0 * ny_bar;
+                    let base_b = 12.0 + cylinder * 20.0 * ny_bar;
+
+                    // Specular highlight: bright spot on left side of each bar
+                    let spec_x = (nx_bar + 0.4).clamp(0.0, 1.0); // shifted left
+                    let spec = (1.0 - spec_x * 3.0).max(0.0).powi(3) * 0.5;
+
+                    let r = (base_r + spec * 200.0).clamp(0.0, 255.0);
+                    let g = (base_g + spec * 180.0).clamp(0.0, 255.0);
+                    let b = (base_b + spec * 100.0).clamp(0.0, 255.0);
+
+                    let idx = ((y * size + x) * 4) as usize;
+                    blend(&mut rgba, idx, r, g, b, fill_a);
+                }
+            }
+        }
+    }
+
+    // ── Pass 5: Specular sparkle dots (light reflections) ──
+    let sparkles: [(f32, f32, f32); 6] = [
+        (0.28, 0.22, 0.7),  // top-left bright
+        (0.72, 0.25, 0.4),  // top-right medium
+        (0.35, 0.75, 0.25), // bottom-left dim
+        (0.50, 0.18, 0.5),  // top-center
+        (0.65, 0.70, 0.2),  // bottom-right subtle
+        (0.42, 0.35, 0.35), // near center
+    ];
+    for &(sx, sy, intensity) in &sparkles {
+        let scx = sx * sf;
+        let scy = sy * sf;
+        if sdf(scx, scy) > -2.0 { continue; } // only inside the icon
+        let sparkle_r = sf * 0.025;
+        for y in 0..size {
+            for x in 0..size {
+                let dist = ((x as f32 - scx).powi(2) + (y as f32 - scy).powi(2)).sqrt();
+                if dist < sparkle_r * 3.0 {
+                    let a = (1.0 - dist / (sparkle_r * 3.0)).powi(3) * intensity;
+                    if a > 0.01 {
                         let idx = ((y * size + x) * 4) as usize;
-                        // Blend dark bar over existing background
-                        let bg_a = rgba[idx + 3] as f32 / 255.0;
-                        let bar_a = a / 255.0;
-                        let out_a = bar_a + bg_a * (1.0 - bar_a);
-                        if out_a > 0.001 {
-                            let br = 25.0; let bg = 20.0; let bb = 15.0;
-                            rgba[idx] = ((br * bar_a + rgba[idx] as f32 * bg_a * (1.0 - bar_a)) / out_a) as u8;
-                            rgba[idx + 1] = ((bg * bar_a + rgba[idx + 1] as f32 * bg_a * (1.0 - bar_a)) / out_a) as u8;
-                            rgba[idx + 2] = ((bb * bar_a + rgba[idx + 2] as f32 * bg_a * (1.0 - bar_a)) / out_a) as u8;
-                            rgba[idx + 3] = (out_a * 255.0) as u8;
-                        }
+                        blend(&mut rgba, idx, 255.0, 252.0, 230.0, a);
                     }
+                }
+            }
+        }
+    }
+
+    // ── Pass 6: Rim light (bright edge on top-left) ──
+    for y in 0..size {
+        for x in 0..size {
+            let fx = x as f32;
+            let fy = y as f32;
+            let d = sdf(fx, fy);
+            if d > -3.0 && d < 0.5 {
+                let edge = 1.0 - ((d + 1.5).abs() / 1.5).min(1.0);
+                let angle = ((fy - center).atan2(fx - center) + std::f32::consts::PI) / (2.0 * std::f32::consts::PI);
+                // Bright on top-left quadrant
+                let rim = if angle > 0.5 && angle < 0.85 { edge * 0.6 } else { 0.0 };
+                if rim > 0.01 {
+                    let idx = ((y * size + x) * 4) as usize;
+                    blend(&mut rgba, idx, 255.0, 248.0, 220.0, rim);
                 }
             }
         }
@@ -4068,37 +4183,73 @@ impl DawApp {
 /// Searches within search_range samples in both directions from position.
 /// Draw the ThroughWaves waveform logo icon at the given position.
 /// `size` is the side length of the square icon area.
+/// 3D effect with gradient, glass highlight, cylindrical bars, and specular dots.
 pub fn draw_waveform_logo(painter: &egui::Painter, center: egui::Pos2, size: f32, bg_color: egui::Color32, bar_color: egui::Color32) {
     let half = size / 2.0;
     let r = size * 0.22;
 
-    // Background rounded rectangle
+    // Drop shadow
+    let shadow_rect = egui::Rect::from_center_size(
+        egui::pos2(center.x + size * 0.02, center.y + size * 0.03),
+        egui::vec2(size, size),
+    );
+    painter.rect_filled(shadow_rect, r, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 40));
+
+    // Background rounded rectangle with gradient feel
     let icon_rect = egui::Rect::from_center_size(center, egui::vec2(size, size));
     painter.rect_filled(icon_rect, r, bg_color);
 
-    // Glass highlight
-    let highlight_rect = egui::Rect::from_min_max(
+    // Inner bevel: bright top edge
+    let top_highlight = egui::Rect::from_min_max(
         icon_rect.left_top(),
-        egui::pos2(icon_rect.right(), icon_rect.center().y),
+        egui::pos2(icon_rect.right(), icon_rect.top() + size * 0.08),
     );
-    painter.rect_filled(highlight_rect, r, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 40));
+    painter.rect_filled(top_highlight, r, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 50));
 
-    // 5 waveform bars with varying heights
-    let bar_heights: [f32; 5] = [0.35, 0.7, 0.55, 0.85, 0.25];
-    let bar_w = size * 0.08;
-    let spacing = size * 0.16;
-    let total_w = 4.0 * spacing;
-    let start_x = center.x - total_w / 2.0;
+    // Glass highlight ellipse (top half, faded)
+    let hl_rect = egui::Rect::from_min_max(
+        egui::pos2(icon_rect.left() + size * 0.1, icon_rect.top() + size * 0.05),
+        egui::pos2(icon_rect.right() - size * 0.1, icon_rect.center().y - size * 0.05),
+    );
+    painter.rect_filled(hl_rect, size * 0.15, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 30));
+
+    // 5 waveform bars with 3D cylindrical look
+    let bar_heights: [f32; 5] = [0.30, 0.65, 0.50, 0.80, 0.22];
+    let bar_w = size * 0.09;
+    let spacing = size * 0.155;
+    let start_x = center.x - 2.0 * spacing;
 
     for (i, &h_frac) in bar_heights.iter().enumerate() {
         let x = start_x + i as f32 * spacing;
         let bar_h = half * h_frac * 1.6;
         let top = center.y - bar_h / 2.0;
         let bot = center.y + bar_h / 2.0;
+
+        // Main bar (dark)
         painter.line_segment(
             [egui::pos2(x, top), egui::pos2(x, bot)],
             egui::Stroke::new(bar_w, bar_color),
         );
+
+        // Left highlight (specular, thinner, brighter)
+        let hl_x = x - bar_w * 0.25;
+        painter.line_segment(
+            [egui::pos2(hl_x, top + bar_w * 0.3), egui::pos2(hl_x, bot - bar_w * 0.3)],
+            egui::Stroke::new(bar_w * 0.15, egui::Color32::from_rgba_unmultiplied(255, 250, 220, 80)),
+        );
+    }
+
+    // Specular sparkle dots
+    if size > 20.0 {
+        let sparkle_r = (size * 0.015).max(0.5);
+        let sparkles = [
+            (center.x - size * 0.22, center.y - size * 0.28, 120u8),
+            (center.x + size * 0.18, center.y - size * 0.22, 70),
+            (center.x - size * 0.08, center.y - size * 0.15, 50),
+        ];
+        for (sx, sy, alpha) in sparkles {
+            painter.circle_filled(egui::pos2(sx, sy), sparkle_r, egui::Color32::from_rgba_unmultiplied(255, 252, 230, alpha));
+        }
     }
 }
 
