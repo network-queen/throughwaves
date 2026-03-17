@@ -6213,8 +6213,8 @@ impl eframe::App for DawApp {
                                 ui.end_row();
 
                                 ui.label("Clip Gain:");
-                                ui.add(egui::Slider::new(&mut clip.gain_db, -24.0..=24.0)
-                                    .suffix(" dB").step_by(0.1));
+                                ui.add(egui::Slider::new(&mut clip.gain_db, -60.0..=60.0)
+                                    .suffix(" dB").step_by(0.1).logarithmic(true));
                                 ui.end_row();
 
                                 ui.end_row();
@@ -6264,14 +6264,13 @@ impl eframe::App for DawApp {
                         ui.separator();
                         ui.horizontal(|ui| {
                             ui.label("Track Volume:");
-                            let mut tvol = self.project.tracks[ti].volume;
-                            if ui.add(egui::Slider::new(&mut tvol, 0.0..=2.0)
-                                .custom_formatter(|v, _| {
-                                    if v < 0.001 { "-\u{221E} dB".into() }
-                                    else { format!("{:.1} dB", 20.0 * (v as f64).log10()) }
-                                })
+                            // Edit in dB space for symmetric control
+                            let vol_lin = self.project.tracks[ti].volume;
+                            let mut vol_db = if vol_lin > 0.0001 { 20.0 * vol_lin.log10() } else { -40.0 };
+                            if ui.add(egui::Slider::new(&mut vol_db, -40.0..=40.0)
+                                .suffix(" dB").step_by(0.1)
                             ).changed() {
-                                self.project.tracks[ti].volume = tvol;
+                                self.project.tracks[ti].volume = 10.0_f32.powf(vol_db / 20.0);
                             }
                         });
 
@@ -6297,10 +6296,11 @@ impl eframe::App for DawApp {
                                         let peak = buf.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
                                         if peak > 0.0001 {
                                             let gain_needed = 20.0 * (1.0 / peak).log10();
-                                            self.project.tracks[ti].clips[ci].gain_db = gain_needed.min(24.0);
+                                            // No cap — apply exactly what's needed to reach 0 dB peak
+                                            self.project.tracks[ti].clips[ci].gain_db = gain_needed;
                                             // Reset track volume to unity so the knob reflects the maximized state
                                             self.project.tracks[ti].volume = 1.0;
-                                            self.set_status(&format!("Volume maximized: clip gain +{:.1} dB, track at 0 dB", gain_needed.min(24.0)));
+                                            self.set_status(&format!("Volume maximized: clip gain +{:.1} dB, track at 0 dB", gain_needed));
                                         } else {
                                             self.set_status("Clip is silent — cannot maximize");
                                         }

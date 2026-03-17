@@ -816,29 +816,33 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         else { "Pan: Center".into() };
                                     pan_resp.on_hover_text(format!("{pan_tip}\nDrag up/down, double-click to center"));
 
-                                    // Volume knob
-                                    let mut vol = track.volume;
-                                    let vol_id = ui.id().with("vol_knob").with(i);
+                                    // Volume knob — works in dB space: -40 to +40, symmetric
+                                    let vol = track.volume;
+                                    let vol_db = if vol > 0.0001 { 20.0 * vol.log10() } else { -40.0 };
+                                    let mut vol_db_edit = vol_db.clamp(-40.0, 40.0);
                                     let (vol_rect, vol_resp) = ui.allocate_exact_size(knob_size, egui::Sense::click_and_drag());
                                     if vol_resp.dragged() {
-                                        vol = (vol - vol_resp.drag_delta().y * 0.008).clamp(0.0, 2.0);
+                                        vol_db_edit = (vol_db_edit - vol_resp.drag_delta().y * 0.4).clamp(-40.0, 40.0);
+                                        let new_vol = 10.0_f32.powf(vol_db_edit / 20.0);
+                                        track_actions.push(TrackAction::SetVolume(i, new_vol));
                                     }
-                                    if vol_resp.double_clicked() { vol = 1.0; }
-                                    if vol != track.volume { track_actions.push(TrackAction::SetVolume(i, vol)); }
-                                    // Draw volume knob
+                                    if vol_resp.double_clicked() {
+                                        track_actions.push(TrackAction::SetVolume(i, 1.0)); // 0 dB
+                                    }
+                                    // Draw volume knob: map -40..+40 dB to 0..1
+                                    let knob_norm = ((vol_db_edit + 40.0) / 80.0).clamp(0.0, 1.0);
                                     draw_rotary_knob(ui.painter(), vol_rect.center(), knob_r,
-                                        vol / 2.0, // normalize 0..2.0 to 0..1
+                                        knob_norm,
                                         egui::Color32::from_rgb(80, 210, 140),
                                         vol_resp.hovered(),
                                     );
-                                    let vol_db = if vol > 0.001 { 20.0 * vol.log10() } else { -100.0 };
-                                    let vol_db_str = if vol > 0.001 { format!("{:.1}", vol_db) } else { "-\u{221E}".into() };
+                                    let vol_db_str = if vol > 0.0001 { format!("{:.1}", vol_db_edit) } else { "-\u{221E}".into() };
                                     // Effective dB = track volume dB + max clip gain dB
                                     let max_clip_gain = track.clips.iter()
                                         .map(|c| c.gain_db)
                                         .fold(0.0_f32, f32::max);
-                                    let effective_db = vol_db + max_clip_gain;
-                                    let eff_str = if vol > 0.001 {
+                                    let effective_db = vol_db_edit + max_clip_gain;
+                                    let eff_str = if vol > 0.0001 {
                                         if max_clip_gain.abs() > 0.01 {
                                             format!("Track: {vol_db_str} dB + Clip: {max_clip_gain:+.1} dB = {effective_db:.1} dB")
                                         } else {
@@ -847,9 +851,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     } else {
                                         "Volume: -\u{221E} dB".into()
                                     };
-                                    vol_resp.on_hover_text(format!("{eff_str}\nDrag up/down, double-click for unity (0 dB)"));
-                                    // Small dB label below knob — show effective if clip gain present
-                                    let label_str = if max_clip_gain.abs() > 0.01 && vol > 0.001 {
+                                    vol_resp.on_hover_text(format!("{eff_str}\nRange: -40 to +40 dB\nDrag up/down, double-click for 0 dB"));
+                                    // Small dB label below knob
+                                    let label_str = if max_clip_gain.abs() > 0.01 && vol > 0.0001 {
                                         format!("{:.1}", effective_db)
                                     } else {
                                         vol_db_str
