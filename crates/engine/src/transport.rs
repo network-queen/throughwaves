@@ -10,7 +10,7 @@ use uuid::Uuid;
 use jamhub_model::{ClipBufferId, Project, TransportState};
 
 use crate::audio::AudioBackend;
-use crate::levels::{peak_level, LevelMeters};
+use crate::levels::{peak_level, true_peak_level, LevelMeters};
 use crate::lufs::{LufsCalculator, LufsMeter};
 use crate::metronome::Metronome;
 use crate::mixer::Mixer;
@@ -345,9 +345,18 @@ fn engine_loop(
             let (ml, mr) = peak_level(&block, channels as usize);
             levels.set_master_level(ml, mr);
 
+            // Calculate true peak (intersample) levels via 4x oversampling
+            let (tp_l, tp_r) = true_peak_level(&block, channels as usize);
+            levels.set_true_peak(tp_l, tp_r);
+
             // Feed LUFS loudness meter
             let readings = lufs_calc.process(&block);
             lufs_meter.write(readings);
+
+            // Push 1-second history entries for the LUFS history graph
+            if let Some(momentary) = lufs_calc.take_history_entry() {
+                lufs_meter.push_history(momentary);
+            }
 
             // Feed spectrum analyzer buffer
             spectrum.push_block(&block, channels as usize);

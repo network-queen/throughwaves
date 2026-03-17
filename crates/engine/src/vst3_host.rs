@@ -29,6 +29,11 @@ struct HostComponentHandler {
     param_tx: Sender<ParamChange>,
 }
 
+// SAFETY: All handler_* and evtlist_* functions below are COM vtable callbacks invoked by
+// the VST3 plugin through its IComponentHandler / IEventList interfaces. The raw pointer
+// casts (`this as *mut HandlerImpl` etc.) are valid because we control the allocation layout
+// — each COM object is a Box<T> whose first field is the vtable pointer expected by the
+// plugin. These functions are only called from the engine thread during process().
 unsafe extern "system" fn handler_query_interface(
     this: *mut FUnknown,
     iid: *const TUID,
@@ -261,6 +266,10 @@ pub struct Vst3Plugin {
     proc_out_right: Vec<f32>,
 }
 
+// SAFETY: Vst3Plugin contains raw COM pointers (IComponent, IAudioProcessor, IEditController)
+// that are not inherently Send. However, the plugin is only ever accessed from the engine
+// thread after construction. The raw pointers are created on one thread and then moved to
+// the engine thread where all subsequent access occurs — there is no concurrent access.
 unsafe impl Send for Vst3Plugin {}
 
 /// Info about a VST3 parameter.
@@ -301,7 +310,6 @@ impl Vst3Plugin {
 
         let factory = factory_raw as *mut IPluginFactory;
         let class_count = unsafe { ((*(*factory).vtbl).countClasses)(factory) };
-        println!("VST3: '{name}' — {class_count} class(es)");
 
         // Try to create a component instance from each class
         let mut component_raw: *mut c_void = ptr::null_mut();
@@ -329,7 +337,6 @@ impl Vst3Plugin {
             };
 
             if res == 0 && !component_raw.is_null() {
-                println!("VST3: created '{found_name}'");
                 break;
             }
         }
@@ -359,8 +366,7 @@ impl Vst3Plugin {
         // Detect instrument: 0 audio inputs, 1+ audio outputs, 1+ event inputs
         let is_instrument = num_in == 0 && num_out > 0 && num_event_in > 0;
 
-        println!("VST3: '{found_name}' — {num_in} audio in, {num_out} audio out, {num_event_in} event in{}",
-            if is_instrument { " [INSTRUMENT]" } else { "" });
+        let _ = (num_in, num_out); // bus counts used above, suppress unused warnings
 
         // Activate audio buses
         for i in 0..num_in {
@@ -413,12 +419,6 @@ impl Vst3Plugin {
 
             // Query plugin-reported latency
             latency_samples = unsafe { ((*(*proc).vtbl).getLatencySamples)(proc) };
-            if latency_samples > 0 {
-                println!("VST3: '{found_name}' — latency: {latency_samples} samples ({:.1}ms)",
-                    latency_samples as f64 / sample_rate * 1000.0);
-            }
-
-            println!("VST3: '{found_name}' — processing active!");
             true
         } else {
             false
@@ -442,7 +442,6 @@ impl Vst3Plugin {
             unsafe {
                 ((*(*ctrl).vtbl).setComponentHandler)(ctrl, handler);
             }
-            println!("VST3: '{found_name}' — edit controller (combined, handler set)");
             Some(ctrl)
         } else {
             // Separate controller: get the controller class ID from the component,
@@ -452,10 +451,6 @@ impl Vst3Plugin {
                 ((*(*component).vtbl).getControllerClassId)(component, &mut ctrl_cid)
             };
             if cid_result == 0 {
-                let cid_hex: String = ctrl_cid.iter()
-                    .map(|b| format!("{:02X}", *b as u8))
-                    .collect::<Vec<_>>().join("");
-                println!("VST3: controller class ID = {cid_hex}");
                 let mut ctrl_raw: *mut c_void = ptr::null_mut();
                 let create_result = unsafe {
                     ((*(*factory).vtbl).createInstance)(
@@ -497,18 +492,15 @@ impl Vst3Plugin {
                             let ctrl_cp = ctrl_cp_raw as *mut IConnectionPoint;
                             ((*(*comp_cp).vtbl).connect)(comp_cp, ctrl_cp);
                             ((*(*ctrl_cp).vtbl).connect)(ctrl_cp, comp_cp);
-                            println!("VST3: '{found_name}' — component <-> controller connected");
+                            // Component and controller successfully connected
                         }
                     }
 
-                    println!("VST3: '{found_name}' — edit controller (separate, handler set)");
                     Some(ctrl)
                 } else {
-                    println!("VST3: '{found_name}' — failed to create separate controller");
                     None
                 }
             } else {
-                println!("VST3: '{found_name}' — no controller class ID");
                 None
             }
         };
@@ -520,9 +512,6 @@ impl Vst3Plugin {
         // If we have a controller, assume editor is available
         // (createView will be called when user actually opens the UI)
         let has_editor = controller.is_some();
-        if has_editor {
-            println!("VST3: '{found_name}' — editor UI likely available (has controller)");
-        }
 
         let buf_size = block_size as usize;
         Self {
@@ -878,8 +867,6 @@ impl Vst3Plugin {
         let view_types: &[&[u8]] = &[b"editor\0"];
 
         for vt in view_types {
-            println!("VST3: trying createView({:?}) for '{}'...",
-                std::str::from_utf8(&vt[..vt.len()-1]).unwrap_or("?"), self.name);
             let view = unsafe {
                 ((*(*controller).vtbl).createView)(controller, vt.as_ptr() as *const i8)
             };
@@ -889,7 +876,7 @@ impl Vst3Plugin {
                 let supported = unsafe {
                     ((*(*view).vtbl).isPlatformTypeSupported)(view, platform.as_ptr() as *const i8)
                 };
-                println!("VST3: createView succeeded, NSView supported={}", supported == 0);
+                let _ = supported; // NSView support checked, proceed with view
                 return Some(view);
             }
         }
@@ -904,11 +891,9 @@ impl Vst3Plugin {
             )
         };
         if qr == 0 && !view_raw.is_null() {
-            println!("VST3: got IPlugView via queryInterface for '{}'", self.name);
             return Some(view_raw as *mut IPlugView);
         }
 
-        println!("VST3: no editor view available for '{}'", self.name);
         None
     }
 

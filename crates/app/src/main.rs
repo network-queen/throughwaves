@@ -1503,10 +1503,6 @@ impl DawApp {
             // 3. Resample to engine sample rate if needed
             let engine_sr = self.sample_rate();
             let samples = if result.sample_rate != engine_sr {
-                println!(
-                    "Resampling recording from {}Hz to {}Hz",
-                    result.sample_rate, engine_sr
-                );
                 jamhub_engine::resample(&result.samples, result.sample_rate, engine_sr)
             } else {
                 result.samples
@@ -1536,16 +1532,6 @@ impl DawApp {
 
             // Load the shared audio buffer into the engine once
             let shared_buffer_id = Uuid::new_v4();
-
-            println!(
-                "Recording clip on {} tracks: start={}, duration={} ({:.2}s), buffer_len={}, engine_sr={}",
-                armed_tracks.len(),
-                rec_start,
-                duration,
-                duration as f64 / engine_sr as f64,
-                samples.len(),
-                engine_sr,
-            );
 
             // Build waveform for display (shared across all clips)
             self.waveform_cache.insert(shared_buffer_id, &samples);
@@ -3254,8 +3240,6 @@ impl DawApp {
                 format: self.export_format,
                 sample_rate: if self.export_sample_rate > 0 { self.export_sample_rate } else { 0 },
             };
-            // Collect track names for progress display
-            let track_names: Vec<String> = self.project.tracks.iter().map(|t| t.name.clone()).collect();
             let start_time = std::time::Instant::now();
             self.set_status("Exporting stems...");
             let result = jamhub_engine::export_stems(
@@ -3264,9 +3248,8 @@ impl DawApp {
                 &self.audio_buffers,
                 sr,
                 &options,
-                |current, total| {
-                    let name = track_names.get(current.saturating_sub(1)).map(|s| s.as_str()).unwrap_or("?");
-                    eprintln!("Exporting stem {current}/{total}: {name}...");
+                |_current, _total| {
+                    // Progress callback — could be used for UI progress bar in future
                 },
             );
             match result {
@@ -3630,10 +3613,7 @@ impl DawApp {
         Self::backup_project(&dir);
 
         // Clean up unreferenced audio buffers before saving
-        let cleaned = self.cleanup_unused_audio();
-        if cleaned > 0 {
-            eprintln!("Save: cleaned up {cleaned} unused audio buffer(s)");
-        }
+        let _cleaned = self.cleanup_unused_audio();
 
         let sr = self.sample_rate();
         match jamhub_engine::save_project(&dir, &self.project, &self.audio_buffers, sr) {

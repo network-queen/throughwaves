@@ -27,9 +27,12 @@ impl VstInstance {
 
         match lib_path {
             Some(lp) => {
+                // SAFETY: Loading a dynamic library is inherently unsafe (foreign code
+                // execution). We validate the path exists and check for known entry points
+                // before using it. The library is only loaded for scanning; it is dropped
+                // after entry-point detection.
                 match unsafe { libloading::Library::new(&lp) } {
                     Ok(lib) => {
-                        println!("VST loaded: {} from {}", name, lp.display());
 
                         // Try to find the VST3 entry point
                         let has_vst3_entry = unsafe {
@@ -51,15 +54,7 @@ impl VstInstance {
                             .is_ok()
                         };
 
-                        let plugin_type = if has_vst3_entry {
-                            "VST3"
-                        } else if has_vst2_entry {
-                            "VST2"
-                        } else {
-                            "Unknown format"
-                        };
-
-                        println!("  Plugin type: {plugin_type}");
+                        let _ = (has_vst3_entry, has_vst2_entry); // type detection complete
 
                         VstInstance {
                             name,

@@ -138,10 +138,8 @@ impl Mixer {
 
     /// Load a VST3 plugin instance for a given effect slot.
     pub fn load_vst3(&mut self, slot_id: Uuid, path: &PathBuf) {
-        println!("Mixer: loading VST3 for slot {slot_id} from {}", path.display());
         let plugin = Vst3Plugin::load(path, self.sample_rate as f64, 256);
         if plugin.loaded {
-            println!("Mixer: VST3 loaded for slot {slot_id}, processing={}", plugin.processing);
             self.vst_instances.insert(slot_id, plugin);
         } else {
             eprintln!(
@@ -155,24 +153,18 @@ impl Mixer {
     pub fn attach_param_rx(&mut self, slot_id: &Uuid, rx: crate::vst3_host::ParamChangeRx) {
         if let Some(vst) = self.vst_instances.get_mut(slot_id) {
             vst.param_change_rx = Some(rx);
-            println!("Mixer: attached param rx for slot {slot_id}");
         }
     }
 
     /// Unload a VST3 plugin instance.
     pub fn unload_vst3(&mut self, slot_id: &Uuid) {
-        if self.vst_instances.remove(slot_id).is_some() {
-            println!("Mixer: VST3 unloaded for slot {slot_id}");
-        }
+        self.vst_instances.remove(slot_id);
     }
 
     /// Load a VST3 instrument plugin for a MIDI track.
     pub fn load_vsti(&mut self, track_id: Uuid, path: &PathBuf) {
-        println!("Mixer: loading VSTi for track {track_id} from {}", path.display());
         let plugin = Vst3Plugin::load(path, self.sample_rate as f64, 256);
         if plugin.loaded {
-            println!("Mixer: VSTi loaded for track {track_id}, instrument={}, processing={}",
-                plugin.is_instrument, plugin.processing);
             self.vsti_instances.insert(track_id, plugin);
         } else {
             eprintln!(
@@ -184,16 +176,13 @@ impl Mixer {
 
     /// Unload a VST3 instrument plugin from a MIDI track.
     pub fn unload_vsti(&mut self, track_id: &Uuid) {
-        if self.vsti_instances.remove(track_id).is_some() {
-            println!("Mixer: VSTi unloaded for track {track_id}");
-        }
+        self.vsti_instances.remove(track_id);
     }
 
     /// Attach a parameter change receiver to a loaded VSTi plugin.
     pub fn attach_vsti_param_rx(&mut self, track_id: &Uuid, rx: crate::vst3_host::ParamChangeRx) {
         if let Some(vst) = self.vsti_instances.get_mut(track_id) {
             vst.param_change_rx = Some(rx);
-            println!("Mixer: attached param rx for VSTi on track {track_id}");
         }
     }
 

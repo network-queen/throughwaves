@@ -48,6 +48,7 @@ fn start_docker_container() -> Result<(), String> {
     }
 }
 
+#[allow(dead_code)]
 fn stop_docker_container() {
     let _ = std::process::Command::new("docker").args(["stop", CONTAINER_NAME]).output();
 }
@@ -303,7 +304,7 @@ impl StemSeparatorPanel {
     /// Process any pending background result.
     fn process_bg_result(&mut self) {
         let result = {
-            let mut guard = self.bg_result.lock().unwrap();
+            let Ok(mut guard) = self.bg_result.lock() else { return; };
             guard.take()
         };
 

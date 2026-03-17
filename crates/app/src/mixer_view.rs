@@ -956,6 +956,28 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                                 egui::Color32::from_rgb(140, 140, 150)
                                             }),
                                     );
+
+                                    // True Peak (intersample) display
+                                    let (tp_l, tp_r) = levels.get_true_peak();
+                                    let tp_max = tp_l.max(tp_r);
+                                    let tp_db = to_db(tp_max);
+                                    let tp_color = if tp_db > -1.0 {
+                                        egui::Color32::from_rgb(255, 60, 60) // red: exceeds EBU R128 limit
+                                    } else if tp_db > -3.0 {
+                                        egui::Color32::from_rgb(220, 180, 50) // yellow: caution
+                                    } else {
+                                        egui::Color32::from_rgb(110, 110, 120) // normal
+                                    };
+                                    let tp_text = if tp_db > -96.0 {
+                                        format!("TP: {:.1} dBTP", tp_db)
+                                    } else {
+                                        "TP: -inf".to_string()
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(tp_text)
+                                            .size(8.0)
+                                            .color(tp_color),
+                                    );
                                 });
                             }
                         });

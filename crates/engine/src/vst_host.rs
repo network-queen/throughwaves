@@ -40,10 +40,6 @@ impl VstScanner {
         }
 
         plugins.sort_by(|a, b| a.name.cmp(&b.name));
-        for p in &plugins {
-            println!("  plugin: {} [{}] vendor='{}' ({})", p.name, p.format, p.vendor, p.path.display());
-        }
-        println!("VST scan: found {} plugins", plugins.len());
         plugins
     }
 
@@ -255,6 +251,9 @@ impl VstScanner {
             return None;
         }
 
+        // SAFETY: Loading the dynamic library and calling GetPluginFactory is standard
+        // VST3 host procedure. The library path was verified to exist above. The factory
+        // pointer is null-checked immediately after the call.
         let lib = unsafe { libloading::Library::new(&bin) }.ok()?;
         let get_factory: libloading::Symbol<unsafe extern "system" fn() -> *mut c_void> =
             unsafe { lib.get(b"GetPluginFactory") }.ok()?;

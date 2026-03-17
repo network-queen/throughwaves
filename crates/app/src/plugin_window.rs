@@ -227,7 +227,7 @@ mod macos {
                 window.makeKeyAndOrderFront(None);
                 window.center();
 
-                println!("VST3 editor: window opened ({width}x{height})");
+                let _ = (width, height); // editor window opened
 
                 Some(Self {
                     window,
@@ -257,7 +257,6 @@ mod macos {
             // via orderOut() before drop, and the OS will clean up on exit.
             // This is the standard workaround for JUCE-based VST3 plugins.
             self.window.orderOut(None);
-            println!("VST3 editor: window hidden (kept alive)");
         }
     }
 }

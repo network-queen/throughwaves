@@ -1232,6 +1232,148 @@ pub fn draw_chord_overlay(
 // Main UI — Analysis Tools Window
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// 6. LUFS History Graph
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Draw a scrolling LUFS loudness history graph.
+fn show_lufs_history(app: &mut DawApp, ui: &mut egui::Ui) {
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new("Loudness History")
+            .size(12.0)
+            .strong()
+            .color(egui::Color32::from_rgb(200, 198, 194)),
+    );
+
+    let history = if let Some(ref engine) = app.engine {
+        engine.lufs.get_history()
+    } else {
+        Vec::new()
+    };
+
+    let graph_height = 140.0;
+    let (rect, _response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), graph_height),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter_at(rect);
+
+    // Background
+    painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(16, 16, 20));
+
+    // Y-axis range: -60 LUFS to 0 LUFS
+    let y_min_lufs = -60.0f32;
+    let y_max_lufs = 0.0f32;
+    let y_range = y_max_lufs - y_min_lufs;
+
+    // Map a LUFS value to a Y pixel position (higher LUFS = higher on screen)
+    let lufs_to_y = |lufs: f32| -> f32 {
+        let clamped = lufs.clamp(y_min_lufs, y_max_lufs);
+        let normalized = (clamped - y_min_lufs) / y_range; // 0..1
+        rect.max.y - normalized * rect.height()
+    };
+
+    // Reference lines at -14, -9, -6 LUFS
+    let ref_lines: &[(f32, &str, egui::Color32)] = &[
+        (-14.0, "-14 LUFS", egui::Color32::from_rgb(60, 160, 60)),
+        (-9.0, "-9 LUFS", egui::Color32::from_rgb(200, 180, 40)),
+        (-6.0, "-6 LUFS", egui::Color32::from_rgb(220, 60, 60)),
+    ];
+    let small_font = egui::FontId::proportional(8.5);
+    for &(lufs, label, color) in ref_lines {
+        let y = lufs_to_y(lufs);
+        painter.line_segment(
+            [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
+            egui::Stroke::new(0.5, color.gamma_multiply(0.4)),
+        );
+        painter.text(
+            egui::pos2(rect.max.x - 4.0, y - 1.0),
+            egui::Align2::RIGHT_BOTTOM,
+            label,
+            small_font.clone(),
+            color.gamma_multiply(0.7),
+        );
+    }
+
+    // Visible window: last 60 seconds (scrollable later; for now, show tail)
+    let visible_seconds = 60usize;
+    if !history.is_empty() {
+        let start = if history.len() > visible_seconds {
+            history.len() - visible_seconds
+        } else {
+            0
+        };
+        let visible = &history[start..];
+        let n = visible.len();
+        let x_step = rect.width() / visible_seconds as f32;
+
+        // Draw line segments with color coding
+        for i in 0..n {
+            let x = rect.min.x + (i as f32) * x_step;
+            let lufs = visible[i];
+            let y = lufs_to_y(lufs);
+
+            let color = if lufs < -14.0 {
+                egui::Color32::from_rgb(60, 200, 120) // green: below streaming target
+            } else if lufs < -9.0 {
+                egui::Color32::from_rgb(220, 200, 50) // yellow: -14 to -9
+            } else {
+                egui::Color32::from_rgb(240, 60, 60) // red: above -9
+            };
+
+            // Draw vertical bar from bottom to the point for area fill effect
+            let bar_bottom = lufs_to_y(y_min_lufs);
+            painter.line_segment(
+                [egui::pos2(x, bar_bottom), egui::pos2(x, y)],
+                egui::Stroke::new(x_step.max(1.0), color.gamma_multiply(0.15)),
+            );
+
+            // Connect points with lines
+            if i > 0 {
+                let prev_lufs = visible[i - 1];
+                let prev_y = lufs_to_y(prev_lufs);
+                let prev_x = rect.min.x + ((i - 1) as f32) * x_step;
+                painter.line_segment(
+                    [egui::pos2(prev_x, prev_y), egui::pos2(x, y)],
+                    egui::Stroke::new(1.5, color),
+                );
+            }
+        }
+
+        // Bright dot at current (rightmost) value
+        if let Some(&last_lufs) = visible.last() {
+            let x = rect.min.x + ((n - 1) as f32) * x_step;
+            let y = lufs_to_y(last_lufs);
+            let dot_color = if last_lufs < -14.0 {
+                egui::Color32::from_rgb(100, 255, 160)
+            } else if last_lufs < -9.0 {
+                egui::Color32::from_rgb(255, 240, 80)
+            } else {
+                egui::Color32::from_rgb(255, 80, 80)
+            };
+            painter.circle_filled(egui::pos2(x, y), 3.5, dot_color);
+        }
+    } else {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "Play to see loudness history",
+            egui::FontId::proportional(11.0),
+            egui::Color32::from_rgb(80, 78, 74),
+        );
+    }
+
+    // X-axis label
+    painter.text(
+        egui::pos2(rect.min.x + 4.0, rect.max.y - 2.0),
+        egui::Align2::LEFT_BOTTOM,
+        "Time (last 60s)",
+        egui::FontId::proportional(8.0),
+        egui::Color32::from_rgb(80, 78, 74),
+    );
+}
+
 /// Draw the combined analysis tools window.
 pub fn show(app: &mut DawApp, ctx: &egui::Context) {
     if !app.show_analysis {
@@ -1240,17 +1382,19 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
 
     show_reference_track(app, ctx);
 
-    // Correlation meter and loudness matching go in a secondary panel
+    // Correlation meter, loudness matching, and LUFS history in a secondary panel
     let mut open = app.show_analysis;
     egui::Window::new("Analysis Tools")
         .id(egui::Id::new("analysis_tools_panel"))
         .open(&mut open)
-        .default_width(350.0)
-        .default_height(240.0)
+        .default_width(400.0)
+        .default_height(400.0)
         .show(ctx, |ui| {
             show_correlation_meter(app, ui);
             ui.separator();
             show_loudness_matching(app, ui);
+            ui.separator();
+            show_lufs_history(app, ui);
         });
     app.show_analysis = open;
 }

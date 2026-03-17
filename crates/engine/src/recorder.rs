@@ -38,13 +38,7 @@ impl Recorder {
 
         self.input_sample_rate = supported.sample_rate().0;
 
-        println!(
-            "Recording input: {:?}, {} channels, {}Hz, {:?}",
-            device.name().unwrap_or_default(),
-            supported.channels(),
-            supported.sample_rate().0,
-            supported.sample_format(),
-        );
+        let _ = device.name(); // available for debug; not logged in production
 
         let config: cpal::StreamConfig = supported.into();
         let channels = config.channels as usize;
@@ -79,7 +73,6 @@ impl Recorder {
 
         self.stream = Some(stream);
         self.is_recording = true;
-        println!("Recording started");
         Ok(())
     }
 
@@ -88,12 +81,6 @@ impl Recorder {
         self.is_recording = false;
         let mut buf = self.recording_buffer.lock();
         let samples = std::mem::take(&mut *buf);
-        println!(
-            "Recording stopped: {} samples ({:.2}s at {}Hz)",
-            samples.len(),
-            samples.len() as f64 / self.input_sample_rate as f64,
-            self.input_sample_rate,
-        );
         RecordingResult {
             samples,
             sample_rate: self.input_sample_rate,

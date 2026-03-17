@@ -77,8 +77,7 @@ impl MidiRecorder {
             .get(port_index)
             .ok_or("Invalid MIDI port index")?;
 
-        let port_name = midi_in.port_name(port).unwrap_or_default();
-        println!("MIDI: connecting to '{port_name}'");
+        let _port_name = midi_in.port_name(port).unwrap_or_default();
 
         let buffer = self.buffer.clone();
         buffer.lock().clear();
@@ -104,7 +103,6 @@ impl MidiRecorder {
 
         self.connection = Some(conn);
         self.is_recording = true;
-        println!("MIDI recording started on '{port_name}'");
         Ok(())
     }
 
@@ -114,7 +112,6 @@ impl MidiRecorder {
         self.is_recording = false;
         let mut buf = self.buffer.lock();
         let events = std::mem::take(&mut *buf);
-        println!("MIDI recording stopped: {} events", events.len());
         events
     }
 

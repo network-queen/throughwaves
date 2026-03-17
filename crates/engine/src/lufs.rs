@@ -13,10 +13,13 @@ use parking_lot::RwLock;
 /// - Short-term loudness (3s sliding window)
 /// - Integrated loudness (gated, full session)
 
+/// Maximum number of LUFS history entries (10 minutes at 1 reading/second).
+const MAX_LUFS_HISTORY: usize = 600;
+
 /// Shared LUFS readings accessible from both the engine thread and the UI.
 #[derive(Clone)]
 pub struct LufsMeter {
-    inner: Arc<RwLock<LufsReadings>>,
+    inner: Arc<RwLock<LufsState>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -39,25 +42,58 @@ impl Default for LufsReadings {
     }
 }
 
+/// Internal shared state holding both current readings and the history ring buffer.
+struct LufsState {
+    readings: LufsReadings,
+    /// Ring buffer of momentary LUFS values, one per second, for the history graph.
+    /// Bounded to [`MAX_LUFS_HISTORY`] entries (10 minutes).
+    history: VecDeque<f32>,
+}
+
+impl Default for LufsState {
+    fn default() -> Self {
+        Self {
+            readings: LufsReadings::default(),
+            history: VecDeque::with_capacity(MAX_LUFS_HISTORY),
+        }
+    }
+}
+
 impl LufsMeter {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(LufsReadings::default())),
+            inner: Arc::new(RwLock::new(LufsState::default())),
         }
     }
 
     pub fn read(&self) -> LufsReadings {
-        *self.inner.read()
+        self.inner.read().readings
     }
 
     pub fn write(&self, readings: LufsReadings) {
-        *self.inner.write() = readings;
+        self.inner.write().readings = readings;
+    }
+
+    /// Push a momentary LUFS value to the history ring buffer (called once per second).
+    pub fn push_history(&self, momentary_lufs: f32) {
+        let mut state = self.inner.write();
+        if state.history.len() >= MAX_LUFS_HISTORY {
+            state.history.pop_front();
+        }
+        state.history.push_back(momentary_lufs);
+    }
+
+    /// Read a snapshot of the LUFS history (oldest to newest).
+    pub fn get_history(&self) -> Vec<f32> {
+        let state = self.inner.read();
+        state.history.iter().copied().collect()
     }
 
     pub fn reset_integrated(&self) {
-        let mut w = self.inner.write();
-        w.integrated = -f64::INFINITY;
-        w.clipping = false;
+        let mut state = self.inner.write();
+        state.readings.integrated = -f64::INFINITY;
+        state.readings.clipping = false;
+        state.history.clear();
     }
 }
 
@@ -196,7 +232,6 @@ fn k_weight_filters(sample_rate: u32) -> (Biquad, Biquad) {
 
 /// LUFS calculator running on the engine thread.
 pub struct LufsCalculator {
-    #[allow(dead_code)]
     sample_rate: u32,
     channels: usize,
     stage1: Biquad,
@@ -214,6 +249,12 @@ pub struct LufsCalculator {
     integrated_blocks: Vec<f64>,
     /// Whether clipping has been detected.
     clipping: bool,
+    /// Sample counter for 1-second history updates.
+    history_sample_counter: usize,
+    /// Whether a new history entry should be pushed this cycle.
+    history_ready: bool,
+    /// The momentary value to push to history when the 1-second window completes.
+    history_momentary: f32,
 }
 
 impl LufsCalculator {
@@ -232,6 +273,9 @@ impl LufsCalculator {
             block_size_100ms,
             integrated_blocks: Vec::new(),
             clipping: false,
+            history_sample_counter: 0,
+            history_ready: false,
+            history_momentary: f32::NEG_INFINITY,
         }
     }
 
@@ -284,6 +328,15 @@ impl LufsCalculator {
             }
         }
 
+        // Track 1-second intervals for history graph
+        let frames_in_block = samples.len() / ch.max(1);
+        self.history_sample_counter += frames_in_block;
+        let one_second = self.sample_rate as usize;
+        if self.history_sample_counter >= one_second {
+            self.history_sample_counter -= one_second;
+            self.history_ready = true;
+        }
+
         // Compute momentary (400ms = 4 blocks)
         let momentary = self.window_lufs(4);
         // Compute short-term (3s = 30 blocks)
@@ -291,11 +344,31 @@ impl LufsCalculator {
         // Compute integrated (gated)
         let integrated = self.integrated_lufs();
 
+        // Latch the momentary value for history push
+        if self.history_ready {
+            self.history_momentary = if momentary.is_finite() {
+                momentary as f32
+            } else {
+                -100.0
+            };
+        }
+
         LufsReadings {
             momentary,
             short_term,
             integrated,
             clipping: self.clipping,
+        }
+    }
+
+    /// Returns `true` if a new 1-second history entry is ready.
+    /// Calling this consumes the ready flag.
+    pub fn take_history_entry(&mut self) -> Option<f32> {
+        if self.history_ready {
+            self.history_ready = false;
+            Some(self.history_momentary)
+        } else {
+            None
         }
     }
 
@@ -375,5 +448,8 @@ impl LufsCalculator {
         self.block_ring.clear();
         self.block_accum = 0.0;
         self.block_count = 0;
+        self.history_sample_counter = 0;
+        self.history_ready = false;
+        self.history_momentary = f32::NEG_INFINITY;
     }
 }

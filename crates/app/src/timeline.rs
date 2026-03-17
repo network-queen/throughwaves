@@ -1684,7 +1684,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         let handle_area_center = (handle_area_top + handle_area_bot) * 0.5;
                         let handle_y = handle_area_center - (clip_gain / gain_range) * (handle_area_bot - handle_area_top) * 0.5;
                         let handle_y = handle_y.clamp(handle_area_top, handle_area_bot);
-                        let handle_x = cr.right() - 12.0;
+                        let handle_x = cr.right() - 22.0;
                         let dx = pos.x - handle_x;
                         let dy = pos.y - handle_y;
                         if (dx * dx + dy * dy).sqrt() < 10.0 {
@@ -3252,7 +3252,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     let handle_area_center = (handle_area_top + handle_area_bot) * 0.5;
                     let handle_y = handle_area_center - (clip_gain / gain_range) * (handle_area_bot - handle_area_top) * 0.5;
                     let handle_y = handle_y.clamp(handle_area_top, handle_area_bot);
-                    let handle_x = cr.right() - 12.0;
+                    let handle_x = cr.right() - 22.0;
                     let handle_radius = 4.5;
 
                     let hovering_gain = if let Some(hover_pos) = ui.input(|inp| inp.pointer.hover_pos()) {

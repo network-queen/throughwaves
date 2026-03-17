@@ -107,7 +107,6 @@ impl FxBrowser {
     /// Scan for plugins and load all of them at startup.
     pub fn scan_and_load_all(&mut self, sample_rate: u32) {
         self.scan_if_needed();
-        println!("FX Browser: loading {} plugins...", self.plugins.len());
         for p in &mut self.plugins {
             // Skip if already loaded
             if self.loaded_plugins.iter().any(|l| l.path == p.path) {
@@ -133,8 +132,7 @@ impl FxBrowser {
                 },
             );
         }
-        let loaded_count = self.loaded_plugins.iter().filter(|p| p.loaded).count();
-        println!("FX Browser: {loaded_count}/{} plugins loaded", self.plugins.len());
+        let _loaded_count = self.loaded_plugins.iter().filter(|p| p.loaded).count();
     }
 
     /// Return a list of instrument plugins (loaded + detected as instrument).

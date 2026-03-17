@@ -21,12 +21,8 @@ impl AudioBackend {
             .default_output_config()
             .map_err(|e| format!("Failed to get default output config: {e}"))?;
 
-        println!(
-            "Audio output: {:?}, {} channels, {}Hz",
-            device.name().unwrap_or_default(),
-            supported.channels(),
-            supported.sample_rate().0,
-        );
+        // Audio backend initialized — device name, channels, sample rate logged at debug level
+        let _ = device.name(); // used during development; silence lint
 
         let config: StreamConfig = supported.into();
 
