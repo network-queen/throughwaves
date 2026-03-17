@@ -246,11 +246,122 @@ fn apply_theme(ctx: &egui::Context, theme: ThemeChoice) {
     ctx.set_style(style);
 }
 
+/// Generate the ThroughWaves waveform icon as RGBA pixel data.
+fn generate_app_icon() -> egui::IconData {
+    let size = 256u32;
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+
+    let center = size as f32 / 2.0;
+    let radius = size as f32 * 0.42;
+
+    // Background: rounded rectangle (amber gradient)
+    let corner_r = size as f32 * 0.22;
+    for y in 0..size {
+        for x in 0..size {
+            let fx = x as f32;
+            let fy = y as f32;
+
+            // Rounded rect SDF
+            let dx = (fx - center).abs() - (center - corner_r);
+            let dy = (fy - center).abs() - (center - corner_r);
+            let d = dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - corner_r;
+
+            if d < 1.0 {
+                let alpha = if d < -1.0 { 255 } else { ((1.0 - d) * 255.0) as u8 };
+                // Gradient from top-left (brighter) to bottom-right (darker)
+                let t = (fy / size as f32 * 0.5 + fx / size as f32 * 0.3).min(1.0);
+                let r = (235.0 - t * 30.0) as u8;
+                let g = (180.0 - t * 40.0) as u8;
+                let b = (60.0 - t * 20.0) as u8;
+
+                let idx = ((y * size + x) * 4) as usize;
+                rgba[idx] = r;
+                rgba[idx + 1] = g;
+                rgba[idx + 2] = b;
+                rgba[idx + 3] = alpha;
+            }
+        }
+    }
+
+    // Waveform bars (5 bars, dark color)
+    let bar_heights: [f32; 5] = [0.30, 0.65, 0.50, 0.80, 0.22];
+    let bar_width = size as f32 * 0.075;
+    let spacing = size as f32 * 0.155;
+    let total_w = 4.0 * spacing;
+    let start_x = center - total_w / 2.0;
+
+    for (i, &h_frac) in bar_heights.iter().enumerate() {
+        let cx = start_x + i as f32 * spacing;
+        let bar_h = radius * h_frac * 1.8;
+        let top = center - bar_h / 2.0;
+        let bot = center + bar_h / 2.0;
+
+        for y in 0..size {
+            for x in 0..size {
+                let fx = x as f32;
+                let fy = y as f32;
+                let dx = (fx - cx).abs();
+                let half_w = bar_width / 2.0;
+
+                if dx < half_w + 1.0 && fy >= top - 1.0 && fy <= bot + 1.0 {
+                    // Round caps
+                    let cap_d = if fy < top + half_w {
+                        (fx - cx).hypot(fy - (top + half_w)) - half_w
+                    } else if fy > bot - half_w {
+                        (fx - cx).hypot(fy - (bot - half_w)) - half_w
+                    } else {
+                        dx - half_w
+                    };
+
+                    if cap_d < 1.0 {
+                        let a = if cap_d < -1.0 { 255.0 } else { (1.0 - cap_d) * 255.0 };
+                        let idx = ((y * size + x) * 4) as usize;
+                        // Blend dark bar over existing background
+                        let bg_a = rgba[idx + 3] as f32 / 255.0;
+                        let bar_a = a / 255.0;
+                        let out_a = bar_a + bg_a * (1.0 - bar_a);
+                        if out_a > 0.001 {
+                            let br = 25.0; let bg = 20.0; let bb = 15.0;
+                            rgba[idx] = ((br * bar_a + rgba[idx] as f32 * bg_a * (1.0 - bar_a)) / out_a) as u8;
+                            rgba[idx + 1] = ((bg * bar_a + rgba[idx + 1] as f32 * bg_a * (1.0 - bar_a)) / out_a) as u8;
+                            rgba[idx + 2] = ((bb * bar_a + rgba[idx + 2] as f32 * bg_a * (1.0 - bar_a)) / out_a) as u8;
+                            rgba[idx + 3] = (out_a * 255.0) as u8;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    egui::IconData {
+        rgba,
+        width: size,
+        height: size,
+    }
+}
+
 fn main() -> eframe::Result<()> {
+    // Single instance check: try to create a lock file
+    let lock_path = config_dir().join(".lock");
+    let lock_file = std::fs::File::create(&lock_path);
+    let _lock = lock_file.ok().and_then(|f| {
+        use std::os::unix::io::AsRawFd;
+        let fd = f.as_raw_fd();
+        let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if ret == 0 {
+            Some(f) // hold the lock for app lifetime
+        } else {
+            eprintln!("ThroughWaves is already running.");
+            std::process::exit(0);
+        }
+    });
+
+    let icon = generate_app_icon();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
-            .with_title("ThroughWaves — Collaborative DAW"),
+            .with_title("ThroughWaves — Collaborative DAW")
+            .with_icon(std::sync::Arc::new(icon)),
         ..Default::default()
     };
 
