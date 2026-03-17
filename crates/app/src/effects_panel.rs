@@ -497,6 +497,7 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
     let open_ids: Vec<uuid::Uuid> = app.builtin_fx_open.iter().copied().collect();
     let mut needs_sync = false;
 
+    let mut close_ids: Vec<uuid::Uuid> = Vec::new();
     for slot_id in open_ids {
         let slot_idx = app.project.tracks[track_idx]
             .effects
@@ -505,7 +506,7 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
         let slot_idx = match slot_idx {
             Some(i) => i,
             None => {
-                app.builtin_fx_open.remove(&slot_id);
+                close_ids.push(slot_id);
                 continue;
             }
         };
@@ -562,7 +563,8 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
             }
 
             let plugin_name_for_presets = name.clone();
-            egui::Window::new(format!("{name}##{slot_id}"))
+            egui::Window::new(format!("{name}"))
+                .id(egui::Id::new("fx_popup").with(slot_id))
                 .title_bar(true)
                 .open(&mut is_open)
                 .default_width(300.0)
@@ -708,7 +710,8 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
                 TrackEffect::ParametricEq { .. }
             );
             let default_w = if is_peq { 520.0 } else { 250.0 };
-            egui::Window::new(format!("{name}##{slot_id}"))
+            egui::Window::new(format!("{name}"))
+                .id(egui::Id::new("fx_builtin").with(slot_id))
                 .title_bar(true)
                 .open(&mut is_open)
                 .default_width(default_w)
@@ -720,9 +723,12 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
         }
 
         if !is_open {
-            app.builtin_fx_open.remove(&slot_id);
-            with_param_caches(|caches| { caches.remove(&slot_id); });
+            close_ids.push(slot_id);
         }
+    }
+    for id in close_ids {
+        app.builtin_fx_open.remove(&id);
+        with_param_caches(|caches| { caches.remove(&id); });
     }
 
     if needs_sync {
