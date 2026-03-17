@@ -780,24 +780,31 @@ fn render_track_clips_impl(
 
         for (aci, &ci) in active_clips.iter().enumerate() {
             let clip = &track.clips[ci];
-            // Speed and pitch are now independent:
+            // Speed and pitch are independent:
             // - playback_rate controls speed (duration changes)
-            // - transpose_semitones controls pitch (duration stays the same)
-            // When transpose != 0, we use OLA pitch-shifting regardless of preserve_pitch
+            // - transpose_semitones controls pitch only (duration unchanged)
             let speed_rate = clip.playback_rate.max(0.01);
             let transpose_factor = if clip.transpose_semitones != 0 {
                 2.0_f32.powf(clip.transpose_semitones as f32 / 12.0)
             } else {
                 1.0
             };
-            // The effective resample rate combines speed and pitch
-            let rate = speed_rate * transpose_factor;
-            // But visual duration is based only on speed (not pitch)
+            let needs_pitch_shift = clip.transpose_semitones != 0;
+            let needs_speed_preserve = clip.preserve_pitch && (speed_rate - 1.0).abs() > 0.001;
+
+            // For standard resampling (no OLA): just use speed_rate
+            // For OLA: source_rate = how fast to read source, ola_ratio = pitch correction
+            let rate = if needs_pitch_shift || needs_speed_preserve {
+                // OLA will handle pitch/speed separation
+                speed_rate * transpose_factor
+            } else {
+                // Simple resampling: speed changes pitch (no preserve_pitch)
+                speed_rate
+            };
+
             let visual_duration = clip.visual_duration_samples();
             let clip_visual_end = clip.start_sample + visual_duration;
             let block_end = position_samples + block_size as u64;
-            // Whether we need OLA to preserve duration despite pitch change
-            let needs_pitch_shift = clip.transpose_semitones != 0;
 
             if position_samples >= clip_visual_end || block_end <= clip.start_sample {
                 continue;
@@ -827,12 +834,11 @@ fn render_track_clips_impl(
 
             if let jamhub_model::ClipSource::AudioBuffer { buffer_id } = &clip.source {
                 if let Some(buf) = audio_buffers.get(buffer_id) {
-                    // Use OLA when:
-                    // - preserve_pitch is on and speed != 1.0 (time-stretch without pitch change)
-                    // - transpose is set (pitch-shift without speed change)
-                    let use_ola = (clip.preserve_pitch && (speed_rate - 1.0).abs() > 0.001)
-                        || needs_pitch_shift;
-                    if use_ola && (rate - 1.0).abs() > 0.001 {
+                    // Use OLA when pitch and speed need to be independent
+                    let use_ola = needs_pitch_shift || needs_speed_preserve;
+                    if use_ola {
+                        // OLA source rate: read source at this rate
+                        // OLA will overlap-add to produce output at the correct duration
                         render_clip_ola_impl(
                             clip, buf, rate, visual_duration, clip_visual_end,
                             position_samples, block_size,
@@ -933,8 +939,12 @@ fn render_track_clips_impl(
     track_mono
 }
 
-/// Render a clip using Overlap-Add (OLA) time-stretching to preserve pitch.
-/// Free function (no &self) so it can be called from parallel contexts.
+/// Render a clip using Overlap-Add (OLA) for independent pitch/speed control.
+///
+/// `rate` = source read rate = speed_rate * transpose_factor
+/// The function maps output position to source position considering the clip's
+/// playback_rate (speed) and uses OLA windowing to allow pitch shifting via
+/// the transpose_factor without changing the output duration.
 #[allow(clippy::too_many_arguments)]
 fn render_clip_ola_impl(
     clip: &jamhub_model::Clip,
@@ -951,9 +961,18 @@ fn render_clip_ola_impl(
         output: &mut [f32],
     ) {
         // OLA parameters
+        // rate = speed_rate * transpose_factor
+        // We want the output to have duration = source_len / speed_rate
+        // and pitch shifted by transpose_factor
+        //
+        // hop_output = spacing between OLA windows in the output (determines output speed)
+        // hop_input = spacing between OLA windows in the source (determines which source samples we read)
+        // The ratio hop_input/hop_output = rate, which means:
+        //   - source advances at `rate` samples per output sample
+        //   - OLA overlap maintains smooth output at the visual duration
         let window_size: usize = 1024;
-        let hop_input = (window_size as f32 * 0.5) as usize; // 50% overlap in source
-        let hop_output = (hop_input as f64 / rate as f64) as usize; // output hop scaled by rate
+        let hop_output = (window_size as f32 * 0.5) as usize; // fixed output hop = 50% overlap
+        let hop_input = (hop_output as f32 * rate).max(1.0) as usize; // source hop = output hop * rate
 
         if hop_output == 0 || hop_input == 0 {
             return;
@@ -968,9 +987,7 @@ fn render_clip_ola_impl(
             let visual_offset = (global_sample - clip.start_sample) as usize;
 
             // Determine which OLA window(s) this output sample falls in
-            // Output window n starts at n * hop_output, corresponds to source at n * hop_input
             let window_idx = visual_offset / hop_output;
-            let _pos_in_window = visual_offset % hop_output;
 
             let mut sample_val = 0.0f32;
             let mut weight_sum = 0.0f32;
@@ -986,6 +1003,8 @@ fn render_clip_ola_impl(
                 }
 
                 let pos_in_win = visual_offset - win_output_start;
+                // Source position: window w starts at w * hop_input in source
+                // Within the window, we read at the same offset (pos_in_win)
                 let source_start = w * hop_input;
                 let mut source_idx = source_start + pos_in_win + clip.content_offset as usize;
 
