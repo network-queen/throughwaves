@@ -821,13 +821,13 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     let vol_id = ui.id().with("vol_knob").with(i);
                                     let (vol_rect, vol_resp) = ui.allocate_exact_size(knob_size, egui::Sense::click_and_drag());
                                     if vol_resp.dragged() {
-                                        vol = (vol - vol_resp.drag_delta().y * 0.006).clamp(0.0, 1.5);
+                                        vol = (vol - vol_resp.drag_delta().y * 0.008).clamp(0.0, 2.0);
                                     }
                                     if vol_resp.double_clicked() { vol = 1.0; }
                                     if vol != track.volume { track_actions.push(TrackAction::SetVolume(i, vol)); }
                                     // Draw volume knob
                                     draw_rotary_knob(ui.painter(), vol_rect.center(), knob_r,
-                                        vol / 1.5, // normalize 0..1.5 to 0..1
+                                        vol / 2.0, // normalize 0..2.0 to 0..1
                                         egui::Color32::from_rgb(80, 210, 140),
                                         vol_resp.hovered(),
                                     );

@@ -4495,7 +4495,27 @@ impl eframe::App for DawApp {
                 if i.key_pressed(egui::Key::F) && i.modifiers.shift && !i.modifiers.command { actions.push("flatten_comp".into()); }
                 if i.key_pressed(egui::Key::Tab) && !i.modifiers.command { actions.push("cycle_view".into()); }
                 if i.key_pressed(egui::Key::Slash) && i.modifiers.shift { actions.push("show_shortcuts".into()); }
-                if i.key_pressed(egui::Key::Escape) { actions.push("clear_selection".into()); actions.push("deselect_clips".into()); }
+                if i.key_pressed(egui::Key::Escape) {
+                    // Close open windows first, then clear selection
+                    let mut closed_something = false;
+                    if self.show_piano_roll { self.show_piano_roll = false; closed_something = true; }
+                    else if self.show_effects { self.show_effects = false; closed_something = true; }
+                    else if self.show_about { self.show_about = false; closed_something = true; }
+                    else if self.show_shortcuts { self.show_shortcuts = false; closed_something = true; }
+                    else if self.show_analysis { self.show_analysis = false; closed_something = true; }
+                    else if self.show_project_info { self.show_project_info = false; closed_something = true; }
+                    else if self.show_audio_pool { self.show_audio_pool = false; closed_something = true; }
+                    else if self.show_midi_mappings { self.show_midi_mappings = false; closed_something = true; }
+                    else if self.editing_clip.is_some() { self.editing_clip = None; closed_something = true; }
+                    else if self.confirm_delete_track.is_some() { self.confirm_delete_track = None; closed_something = true; }
+                    else if self.show_preferences { self.show_preferences = false; closed_something = true; }
+                    else if self.show_template_picker { self.show_template_picker = false; closed_something = true; }
+                    else if self.show_welcome { self.show_welcome = false; closed_something = true; }
+                    if !closed_something {
+                        actions.push("clear_selection".into());
+                        actions.push("deselect_clips".into());
+                    }
+                }
                 if i.key_pressed(egui::Key::F) && !i.modifiers.command { actions.push("focus_playhead".into()); }
                 if i.key_pressed(egui::Key::H) && !i.modifiers.command { actions.push("toggle_follow".into()); }
                 if i.key_pressed(egui::Key::OpenBracket) && !i.modifiers.command { actions.push("prev_marker".into()); }
