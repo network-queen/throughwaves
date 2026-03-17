@@ -5,6 +5,7 @@ Supports file uploads and URL downloads via yt-dlp.
 """
 
 import os
+import sys
 import uuid
 import shutil
 import subprocess
@@ -132,7 +133,7 @@ def _run_demucs(job_id: str, input_path: Path) -> bool:
         # Run demucs with htdemucs model (best quality)
         result = subprocess.run(
             [
-                "python", "-m", "demucs",
+                sys.executable, "-m", "demucs",
                 "--two-stems=None",  # all 4 stems
                 "-n", "htdemucs",
                 "--out", str(output_dir),
