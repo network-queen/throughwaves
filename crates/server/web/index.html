@@ -100,9 +100,16 @@ select { cursor: pointer; }
   flex-shrink: 0;
 }
 .logo-icon {
-  width: 30px; height: 28px; background: var(--accent); border-radius: 7px;
+  width: 30px; height: 28px; border-radius: 7px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 0.7rem; color: #000; font-weight: 800; letter-spacing: -0.5px;
+  background: linear-gradient(135deg, #EBB43C 0%, #E8963A 100%);
+  position: relative; overflow: hidden;
+}
+.logo-icon svg { width: 20px; height: 20px; }
+.logo-icon::after {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.2) 0%, transparent 50%);
+  border-radius: 7px;
 }
 .nav-links { display: flex; gap: 0.25rem; }
 .nav-links a {
@@ -589,8 +596,8 @@ select { cursor: pointer; }
   <nav class="topnav">
     <div class="topnav-inner">
       <a href="#/home" class="logo">
-        <div class="logo-icon">TW</div>
-        ThroughWaves
+        <div class="logo-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round"><line x1="4" y1="8" x2="4" y2="16"/><line x1="8" y1="4" x2="8" y2="20"/><line x1="12" y1="6" x2="12" y2="18"/><line x1="16" y1="3" x2="16" y2="21"/><line x1="20" y1="9" x2="20" y2="15"/></svg></div>
+        <span style="letter-spacing:-0.02em;">Through<span style="color:var(--accent);">Waves</span></span>
       </a>
       <div class="nav-links" id="navLinks">
         <a href="#/home" data-route="home">Home</a>
@@ -1583,40 +1590,38 @@ function proposeTrackPrompt(projectId) {
 
 // --- Upload ---
 function renderDownload(el) {
-  // Detect user's OS
   const ua = navigator.userAgent.toLowerCase();
   let detectedOS = 'macos';
   if (ua.includes('win')) detectedOS = 'windows';
   else if (ua.includes('linux')) detectedOS = 'linux';
 
   const version = '1.0.0';
+  const waveIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:40px;height:40px;"><line x1="4" y1="8" x2="4" y2="16"/><line x1="8" y1="4" x2="8" y2="20"/><line x1="12" y1="6" x2="12" y2="18"/><line x1="16" y1="3" x2="16" y2="21"/><line x1="20" y1="9" x2="20" y2="15"/></svg>`;
+
   const downloads = {
     macos: {
       name: 'macOS',
-      icon: '\uD83C\uDF4E',
+      icon: waveIcon,
       file: `ThroughWaves-v${version}-macOS-universal.dmg`,
-      size: '~45 MB',
+      size: '~7 MB',
       desc: 'Universal binary (Apple Silicon + Intel)',
       req: 'macOS 13.0 or later',
-      instructions: 'Open DMG, drag ThroughWaves to Applications folder'
     },
     windows: {
       name: 'Windows',
-      icon: '\uD83E\uDE9F',
+      icon: waveIcon,
       file: `ThroughWaves-v${version}-Windows-x64.zip`,
       size: '~40 MB',
       desc: '64-bit Windows executable',
       req: 'Windows 10 or later (64-bit)',
-      instructions: 'Extract ZIP, run ThroughWaves.exe'
     },
     linux: {
       name: 'Linux',
-      icon: '\uD83D\uDC27',
+      icon: waveIcon,
       file: `ThroughWaves-v${version}-linux-x86_64.tar.gz`,
       size: '~35 MB',
       desc: 'x86_64 binary',
       req: 'Ubuntu 22.04+, Fedora 38+, or Arch Linux',
-      instructions: 'Extract, chmod +x jamhub, run ./jamhub'
     }
   };
 
@@ -1624,52 +1629,82 @@ function renderDownload(el) {
 
   el.innerHTML = `
     <div style="max-width:900px; margin:0 auto;">
+      <!-- Hero -->
       <div style="text-align:center; margin-bottom:3rem;">
-        <h1 class="page-title" style="font-size:2.4rem; margin-bottom:0.5rem;">
-          Download ThroughWaves
+        <div style="margin-bottom:1.2rem;">
+          <div style="
+            width:72px; height:72px; margin:0 auto;
+            background: linear-gradient(135deg, #EBB43C 0%, #E8963A 100%);
+            border-radius:18px; display:flex; align-items:center; justify-content:center;
+            box-shadow: 0 8px 32px rgba(235,180,60,0.3);
+            position:relative; overflow:hidden;
+          ">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round" style="width:36px;height:36px; position:relative; z-index:1;">
+              <line x1="4" y1="8" x2="4" y2="16"/><line x1="8" y1="4" x2="8" y2="20"/>
+              <line x1="12" y1="6" x2="12" y2="18"/><line x1="16" y1="3" x2="16" y2="21"/>
+              <line x1="20" y1="9" x2="20" y2="15"/>
+            </svg>
+            <div style="position:absolute;top:0;left:0;right:0;bottom:0;background:linear-gradient(180deg,rgba(255,255,255,0.25) 0%,transparent 50%);border-radius:18px;"></div>
+          </div>
+        </div>
+        <h1 style="font-size:2.4rem; margin-bottom:0.3rem; font-weight:700; letter-spacing:-0.02em;">
+          Through<span style="color:var(--accent);">Waves</span>
         </h1>
-        <p style="color:var(--text-secondary); font-size:1.1rem; max-width:600px; margin:0 auto;">
-          Professional Digital Audio Workstation with VST3 hosting, AI stem separation,
-          MIDI sequencing, built-in effects, and real-time collaboration.
+        <p style="color:var(--text-secondary); font-size:1.15rem; max-width:560px; margin:0 auto 0.5rem;">
+          Professional DAW with VST3 hosting, AI stem separation,
+          MIDI sequencing, 15 built-in effects, and real-time collaboration.
         </p>
-        <p style="color:var(--text-muted); margin-top:0.5rem;">
+        <p style="color:var(--text-muted); font-size:0.9rem;">
           Version ${version} &mdash; Free &amp; Open Source (GPL-3.0)
         </p>
       </div>
 
-      <!-- Primary download (detected OS) -->
+      <!-- Primary download -->
       <div style="
-        background: linear-gradient(135deg, rgba(235,180,60,0.12) 0%, rgba(235,180,60,0.04) 100%);
-        border: 1px solid rgba(235,180,60,0.3);
+        background: linear-gradient(135deg, rgba(235,180,60,0.12) 0%, rgba(235,180,60,0.03) 100%);
+        border: 1px solid rgba(235,180,60,0.25);
         border-radius: var(--radius-lg);
         padding: 2.5rem;
         text-align: center;
         margin-bottom: 2rem;
       ">
-        <div style="font-size:3rem; margin-bottom:0.5rem;">${primary.icon}</div>
-        <h2 style="font-size:1.5rem; margin-bottom:0.5rem;">ThroughWaves for ${primary.name}</h2>
+        <h2 style="font-size:1.4rem; margin-bottom:0.4rem;">ThroughWaves for ${primary.name}</h2>
         <p style="color:var(--text-secondary); margin-bottom:1.5rem;">${primary.desc}</p>
         <a href="/downloads/${primary.file}" download
            class="btn btn-primary" style="
-            font-size:1.15rem;
-            padding:0.9rem 2.5rem;
-            border-radius:12px;
-            display:inline-block;
-            text-decoration:none;
+            font-size:1.1rem; padding:0.85rem 2.5rem; border-radius:12px;
+            display:inline-block; text-decoration:none;
           ">
           Download for ${primary.name} (${primary.size})
         </a>
-        <p style="color:var(--text-muted); font-size:0.85rem; margin-top:1rem;">
-          ${primary.instructions}
-        </p>
       </div>
 
+      <!-- macOS Gatekeeper notice -->
+      ${detectedOS === 'macos' ? `
+      <div class="card" style="padding:1.2rem 1.5rem; margin-bottom:2rem; border-color:rgba(235,180,60,0.3);">
+        <h4 style="margin-bottom:0.6rem; color:var(--accent);">&#9888; macOS: First Launch Instructions</h4>
+        <p style="color:var(--text-secondary); font-size:0.9rem; margin-bottom:0.6rem;">
+          Since ThroughWaves is not signed with an Apple Developer certificate, macOS Gatekeeper will
+          show a warning. To open the app:
+        </p>
+        <ol style="color:var(--text-secondary); font-size:0.9rem; padding-left:1.5rem; margin-bottom:0.8rem; line-height:1.8;">
+          <li>Open the DMG and drag <strong>ThroughWaves</strong> to <strong>Applications</strong></li>
+          <li>Open <strong>Terminal</strong> (Spotlight &rarr; type "Terminal")</li>
+          <li>Run: <code style="background:var(--bg-base); padding:2px 8px; border-radius:4px; color:var(--green);">xattr -cr /Applications/ThroughWaves.app</code></li>
+          <li>Double-click ThroughWaves in Applications &mdash; it will open normally from now on</li>
+        </ol>
+        <p style="color:var(--text-muted); font-size:0.82rem;">
+          Alternatively: <strong>Control + click</strong> (or two-finger tap) the app &rarr; Open &rarr; Open again.
+          This only needs to be done once.
+        </p>
+      </div>
+      ` : ''}
+
       <!-- All platforms grid -->
-      <h3 style="margin-bottom:1rem; color:var(--text-secondary);">All Platforms</h3>
+      <h3 style="margin-bottom:1rem; color:var(--text-secondary); font-weight:600;">All Platforms</h3>
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap:1rem; margin-bottom:2rem;">
         ${Object.entries(downloads).map(([key, dl]) => `
           <div class="card" style="padding:1.5rem; ${key === detectedOS ? 'border-color:var(--accent);' : ''}">
-            <div style="font-size:2rem; margin-bottom:0.5rem;">${dl.icon}</div>
             <h4 style="margin-bottom:0.3rem;">${dl.name}</h4>
             <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:0.3rem;">${dl.desc}</p>
             <p style="color:var(--text-muted); font-size:0.8rem; margin-bottom:1rem;">${dl.req}</p>
@@ -1682,69 +1717,77 @@ function renderDownload(el) {
         `).join('')}
       </div>
 
-      <!-- Linux extra: .deb -->
-      <div class="card" style="padding:1.2rem; margin-bottom:2rem;">
-        <h4 style="margin-bottom:0.5rem;">\uD83D\uDCE6 Linux .deb Package (Debian/Ubuntu)</h4>
-        <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:0.8rem;">
-          Install with: <code style="background:var(--bg-base); padding:2px 6px; border-radius:4px;">sudo dpkg -i jamhub-v${version}-linux-amd64.deb</code>
-        </p>
-        <a href="/downloads/jamhub-v${version}-linux-amd64.deb" download
-           class="btn btn-secondary" style="text-decoration:none;">
-          Download .deb
-        </a>
+      <!-- Installation instructions per OS -->
+      <div class="card" style="padding:1.5rem; margin-bottom:2rem;">
+        <h4 style="margin-bottom:1rem;">Installation</h4>
+        <div style="display:grid; gap:1.2rem;">
+          <div>
+            <h5 style="color:var(--text-primary); margin-bottom:0.3rem;">macOS</h5>
+            <p style="color:var(--text-secondary); font-size:0.9rem;">
+              Open the <code>.dmg</code>, drag ThroughWaves to Applications, then run
+              <code style="background:var(--bg-base); padding:1px 6px; border-radius:4px; color:var(--green);">xattr -cr /Applications/ThroughWaves.app</code>
+              in Terminal before first launch.
+            </p>
+          </div>
+          <div>
+            <h5 style="color:var(--text-primary); margin-bottom:0.3rem;">Windows</h5>
+            <p style="color:var(--text-secondary); font-size:0.9rem;">
+              Extract the ZIP and run <code>ThroughWaves.exe</code>. Place VST3 plugins in
+              <code>C:\\Program Files\\Common Files\\VST3\\</code>.
+            </p>
+          </div>
+          <div>
+            <h5 style="color:var(--text-primary); margin-bottom:0.3rem;">Linux</h5>
+            <p style="color:var(--text-secondary); font-size:0.9rem;">
+              Extract the archive, <code>chmod +x throughwaves</code>, and run <code>./throughwaves</code>.
+              Or install the .deb:
+              <code style="background:var(--bg-base); padding:1px 6px; border-radius:4px; color:var(--green);">sudo dpkg -i throughwaves-v${version}-linux-amd64.deb</code>
+            </p>
+          </div>
+        </div>
       </div>
 
       <!-- Build from source -->
       <div class="card" style="padding:1.5rem; margin-bottom:2rem;">
-        <h4 style="margin-bottom:0.8rem;">\uD83D\uDEE0 Build from Source</h4>
-        <p style="color:var(--text-secondary); margin-bottom:1rem;">
+        <h4 style="margin-bottom:0.8rem;">Build from Source</h4>
+        <p style="color:var(--text-secondary); margin-bottom:1rem; font-size:0.9rem;">
           ThroughWaves is open-source. Build it yourself with Rust:
         </p>
         <pre style="
-          background:var(--bg-base);
-          padding:1rem;
-          border-radius:var(--radius);
-          overflow-x:auto;
-          font-size:0.9rem;
-          color:var(--green);
-          line-height:1.5;
-        "><code>git clone https://github.com/jamhub/jamhub.git
-cd jamhub
+          background:var(--bg-base); padding:1rem; border-radius:var(--radius);
+          overflow-x:auto; font-size:0.85rem; color:var(--green); line-height:1.6;
+        "><code>git clone https://github.com/throughwaves/throughwaves.git
+cd throughwaves
 cargo build --release --bin jamhub-app
-
-# macOS: create .app bundle
-make bundle
-
-# Run directly
 cargo run --release --bin jamhub-app</code></pre>
       </div>
 
-      <!-- Features list -->
+      <!-- Features -->
       <div class="card" style="padding:1.5rem; margin-bottom:2rem;">
         <h4 style="margin-bottom:1rem;">What's Included</h4>
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:0.5rem;">
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:0.4rem;">
           ${[
-            'Multi-track recording',
+            'Multi-track recording & editing',
             'VST3 plugin hosting',
             'MIDI sequencing & piano roll',
-            'Built-in synthesizer',
-            '15 built-in effects',
-            'Parametric EQ visualizer',
+            'Built-in polyphonic synthesizer',
+            '15 built-in effects (EQ, Compressor, Limiter, Gate, Delay, Reverb, Phaser, Flanger, Tremolo...)',
+            '8-band parametric EQ with visualizer',
             'AI stem separation (Demucs)',
             'Real-time spectrum analyzer',
-            'LUFS loudness metering',
-            'Reference track A/B',
-            'Audio-to-MIDI conversion',
-            'Chord detection',
-            'Live jam sessions',
-            'Version branching (git-like)',
-            'WAV/FLAC/AIFF export',
-            'Stem export',
-            'MIDI learn & mapping',
-            'Tap tempo',
-            'Session/clip launcher',
-            'Collaborative projects',
-          ].map(f => `<div style="color:var(--text-secondary); font-size:0.9rem; padding:0.3rem 0;">
+            'EBU R128 LUFS metering',
+            'Reference track A/B comparison',
+            'Audio-to-MIDI & chord detection',
+            'Live jam sessions (WebSocket)',
+            'Git-like version branching',
+            'WAV / FLAC / AIFF export + stem export',
+            'MIDI learn, CC mapping & macros',
+            'Session / clip launcher view',
+            'Collaborative projects platform',
+            '5 crossfade curve types',
+            'Tap tempo & beat flash',
+            'Waveform vertical zoom',
+          ].map(f => `<div style="color:var(--text-secondary); font-size:0.88rem; padding:0.25rem 0;">
             <span style="color:var(--green); margin-right:0.4rem;">&#10003;</span>${f}
           </div>`).join('')}
         </div>
@@ -1753,9 +1796,9 @@ cargo run --release --bin jamhub-app</code></pre>
       <!-- System requirements -->
       <div class="card" style="padding:1.5rem;">
         <h4 style="margin-bottom:1rem;">System Requirements</h4>
-        <table style="width:100%; border-collapse:collapse;">
+        <table style="width:100%; border-collapse:collapse; font-size:0.92rem;">
           <tr style="border-bottom:1px solid var(--border);">
-            <td style="padding:0.5rem; color:var(--text-muted);">CPU</td>
+            <td style="padding:0.5rem; color:var(--text-muted); width:80px;">CPU</td>
             <td style="padding:0.5rem;">64-bit processor (multi-core recommended)</td>
           </tr>
           <tr style="border-bottom:1px solid var(--border);">
