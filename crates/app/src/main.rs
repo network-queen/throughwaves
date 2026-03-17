@@ -1,4 +1,5 @@
 mod about;
+mod analysis_tools;
 mod audio_settings;
 mod effects_panel;
 mod fx_browser;
@@ -483,6 +484,22 @@ pub struct DawApp {
     pub clip_edge_snap_sample: Option<u64>,
     /// AI Stem Separation panel state
     pub stem_sep: stem_separator::StemSeparatorPanel,
+    /// Show the Analysis Tools window (Reference Track, Correlation Meter, etc.)
+    pub show_analysis: bool,
+    /// Reference track for A/B comparison
+    pub reference_track: Option<analysis_tools::ReferenceTrack>,
+    /// A/B mode: when true, the engine plays the reference track instead of the project mix
+    pub ab_mode: bool,
+    /// Loudness matching: auto-compensate volume when toggling effects
+    pub loudness_match_enabled: bool,
+    /// Current loudness compensation amount in dB
+    pub loudness_compensation_db: f32,
+    /// Pending loudness match measurement state
+    pub loudness_match_state: Option<analysis_tools::LoudnessMatchState>,
+    /// Chord detection running flag
+    pub chord_detection_running: bool,
+    /// Detected chords per clip ID (for overlay rendering on timeline)
+    pub detected_chords: HashMap<Uuid, Vec<analysis_tools::DetectedChord>>,
 }
 
 /// State for slip-editing: shifting audio content within clip boundaries.
@@ -1165,6 +1182,14 @@ impl DawApp {
             pre_bypass_states: HashMap::new(),
             clip_edge_snap_sample: None,
             stem_sep: stem_separator::StemSeparatorPanel::default(),
+            show_analysis: false,
+            reference_track: None,
+            ab_mode: false,
+            loudness_match_enabled: false,
+            loudness_compensation_db: 0.0,
+            loudness_match_state: None,
+            chord_detection_running: false,
+            detected_chords: HashMap::new(),
         };
 
         // Apply persisted layout
@@ -5110,6 +5135,38 @@ impl eframe::App for DawApp {
                         }
                     }
                 });
+                ui.menu_button("Tools", |ui| {
+                    if ui.button("Reference Track...").clicked() {
+                        self.show_analysis = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("Correlation Meter").clicked() {
+                        self.show_analysis = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Audio to MIDI").on_hover_text("Right-click an audio clip to convert it to MIDI").clicked() {
+                        self.set_status("Right-click an audio clip and choose 'Convert to MIDI'");
+                        ui.close_menu();
+                    }
+                    if ui.button("Detect Chords").on_hover_text("Right-click an audio clip to detect chords").clicked() {
+                        self.set_status("Right-click an audio clip and choose 'Detect Chords'");
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    let lm_label = if self.loudness_match_enabled {
+                        "Loudness Match ON"
+                    } else {
+                        "Loudness Match OFF"
+                    };
+                    if ui.button(lm_label).on_hover_text("Auto-compensate volume when bypassing effects").clicked() {
+                        self.loudness_match_enabled = !self.loudness_match_enabled;
+                        if !self.loudness_match_enabled {
+                            self.loudness_compensation_db = 0.0;
+                        }
+                        ui.close_menu();
+                    }
+                });
                 ui.menu_button("AI", |ui| {
                     if ui.button("Stem Separation...").clicked() {
                         self.stem_sep.show = true;
@@ -5342,6 +5399,7 @@ impl eframe::App for DawApp {
         self.show_audio_pool_window(ctx);
         midi_mapping::show_mapping_manager(self, ctx);
         stem_separator::show(self, ctx);
+        analysis_tools::show(self, ctx);
 
         // Template & preset dialogs
         templates::show_template_name_dialog(self, ctx);

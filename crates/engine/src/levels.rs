@@ -14,6 +14,8 @@ pub struct LevelMeters {
 struct LevelState {
     track_levels: HashMap<Uuid, (f32, f32)>, // (left_peak, right_peak)
     master_level: (f32, f32),
+    /// Stereo correlation: -1.0 (out of phase) to +1.0 (mono/correlated).
+    correlation: f32,
 }
 
 impl LevelMeters {
@@ -29,6 +31,16 @@ impl LevelMeters {
 
     pub fn set_master_level(&self, left: f32, right: f32) {
         self.inner.write().master_level = (left, right);
+    }
+
+    /// Update the stereo phase correlation value.
+    pub fn set_correlation(&self, value: f32) {
+        self.inner.write().correlation = value;
+    }
+
+    /// Read the current stereo phase correlation.
+    pub fn get_correlation(&self) -> f32 {
+        self.inner.read().correlation
     }
 
     pub fn get_track_level(&self, track_id: &Uuid) -> (f32, f32) {

@@ -47,6 +47,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
             let mut open_editor: Option<(uuid::Uuid, String)> = None;
             let mut close_editor: Option<uuid::Uuid> = None;
             let mut toggle_builtin_popup: Option<usize> = None;
+            let mut bypass_toggled_slot: Option<usize> = None;
             let effects_len = app.project.tracks[track_idx].effects.len();
 
             // Read crashed plugin IDs from engine state
@@ -169,6 +170,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                 if dot_resp.on_hover_text("Toggle bypass").clicked() {
                                     slot.enabled = !slot.enabled;
                                     needs_sync = true;
+                                    bypass_toggled_slot = Some(i);
                                 }
 
                                 // Clickable name — slightly larger for premium feel
@@ -411,6 +413,11 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                     },
                 );
             });
+
+            // Trigger loudness match measurement if a bypass was toggled
+            if let Some(slot_i) = bypass_toggled_slot {
+                crate::analysis_tools::on_effect_bypass_toggled(app, track_idx, slot_i);
+            }
 
             if needs_sync {
                 app.sync_project();

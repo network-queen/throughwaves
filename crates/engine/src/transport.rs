@@ -43,6 +43,10 @@ pub enum EngineCommand {
     /// (pitch, velocity, track_id for synth params). velocity=0 means note-off.
     PreviewNoteOn { pitch: u8, velocity: u8, track_id: Uuid },
     PreviewNoteOff { pitch: u8 },
+    /// Load reference track samples for A/B comparison playback.
+    PlayReference { samples: Vec<f32>, sample_rate: u32 },
+    /// Stop reference track playback.
+    StopReference,
 }
 
 pub struct EngineHandle {
@@ -61,6 +65,8 @@ pub struct EngineState {
     pub sample_rate: u32,
     /// Set of VST3 effect slot IDs whose plugins have crashed during processing.
     pub crashed_plugins: HashSet<Uuid>,
+    /// Stereo phase correlation: -1.0 (out of phase) to +1.0 (mono/correlated).
+    pub correlation: f32,
 }
 
 impl EngineHandle {
@@ -79,6 +85,7 @@ impl EngineHandle {
             position_samples: 0,
             sample_rate,
             crashed_plugins: HashSet::new(),
+            correlation: 0.0,
         }));
 
         let levels = LevelMeters::new();
@@ -144,6 +151,11 @@ fn engine_loop(
     let mut lufs_calc = LufsCalculator::new(sample_rate, channels as usize);
     let mut preview_synth = crate::synth::Synth::new();
     let mut preview_position: u64 = 0;
+
+    // Reference track A/B state
+    let mut reference_samples: Option<Vec<f32>> = None;
+    let mut _reference_sample_rate: u32 = 0;
+    let mut reference_active = false;
 
     loop {
         while let Ok(cmd) = cmd_rx.try_recv() {
@@ -219,6 +231,14 @@ fn engine_loop(
                     // With start_tick=0, duration_ticks=0: note_off at clip_start_sample = preview_position
                     preview_synth.render_block(&notes, preview_position, preview_position, 1, sample_rate, &project.tempo);
                 }
+                EngineCommand::PlayReference { samples, sample_rate: sr } => {
+                    reference_samples = Some(samples);
+                    _reference_sample_rate = sr;
+                    reference_active = true;
+                }
+                EngineCommand::StopReference => {
+                    reference_active = false;
+                }
             }
         }
 
@@ -273,6 +293,51 @@ fn engine_loop(
             if master_volume != 1.0 {
                 for s in block.iter_mut() {
                     *s *= master_volume;
+                }
+            }
+
+            // Calculate stereo phase correlation before any further processing
+            {
+                let ch = channels as usize;
+                if ch >= 2 {
+                    let mut sum_lr: f64 = 0.0;
+                    let mut sum_ll: f64 = 0.0;
+                    let mut sum_rr: f64 = 0.0;
+                    for frame in block.chunks(ch) {
+                        if frame.len() >= 2 {
+                            let l = frame[0] as f64;
+                            let r = frame[1] as f64;
+                            sum_lr += l * r;
+                            sum_ll += l * l;
+                            sum_rr += r * r;
+                        }
+                    }
+                    let denom = (sum_ll * sum_rr).sqrt();
+                    let corr = if denom < 1e-12 { 0.0 } else { (sum_lr / denom).clamp(-1.0, 1.0) };
+                    // Smooth with previous value for stable display
+                    let prev = state.read().correlation as f64;
+                    let smoothed = prev * 0.85 + corr * 0.15;
+                    state.write().correlation = smoothed as f32;
+                    levels.set_correlation(smoothed as f32);
+                }
+            }
+
+            // Reference track A/B: if active, replace the mix output with reference samples
+            if reference_active {
+                if let Some(ref ref_samples) = reference_samples {
+                    let ch = channels as usize;
+                    // Map transport position to reference buffer position
+                    // (simple: use position directly, modulo reference length)
+                    let ref_len = ref_samples.len();
+                    if ref_len > 0 {
+                        for i in 0..block_size {
+                            let ref_pos = ((position as usize + i) % ref_len) as usize;
+                            let sample = ref_samples[ref_pos];
+                            for c in 0..ch {
+                                block[i * ch + c] = sample;
+                            }
+                        }
+                    }
                 }
             }
 

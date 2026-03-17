@@ -1396,6 +1396,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             }
                             ui.close_menu();
                         }
+                        if ui.button("Convert to MIDI").on_hover_text("Detect pitch and create a MIDI track (monophonic)").clicked() {
+                            crate::analysis_tools::convert_clip_to_midi(app, ti, ci, true);
+                            ui.close_menu();
+                        }
+                        if ui.button("Detect Chords").on_hover_text("Analyze audio and show chord progression overlay").clicked() {
+                            crate::analysis_tools::detect_clip_chords(app, ti, ci);
+                            ui.close_menu();
+                        }
                     }
                     ui.separator();
                     if ui.button("Properties...").on_hover_text("Open clip properties panel").clicked() {
@@ -3031,6 +3039,18 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     egui::Stroke::new(border_w, border_c),
                     egui::StrokeKind::Outside,
                 );
+
+                // Chord detection overlay
+                if let Some(chords) = app.detected_chords.get(&clip.id) {
+                    crate::analysis_tools::draw_chord_overlay(
+                        painter,
+                        cr,
+                        clip.id,
+                        clip.duration_samples,
+                        app.sample_rate(),
+                        chords,
+                    );
+                }
 
                 // Loop markers — white dashed lines at each loop boundary
                 if clip.loop_count > 1 && !is_clip_muted {
