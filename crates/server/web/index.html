@@ -1409,13 +1409,147 @@ async function renderHome(el) {
   const featured = tracks.slice(0, 3);
   const recent = tracks.slice(3);
 
+  const waveIconLg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:48px;height:48px;">
+    <line x1="4" y1="8" x2="4" y2="16"/><line x1="8" y1="4" x2="8" y2="20"/>
+    <line x1="12" y1="6" x2="12" y2="18"/><line x1="16" y1="3" x2="16" y2="21"/>
+    <line x1="20" y1="9" x2="20" y2="15"/>
+  </svg>`;
+
   el.innerHTML = `
-    <h1 class="page-title">Home</h1>
+    <!-- ===== HERO ===== -->
+    <div style="
+      text-align:center; padding:4rem 1rem 3rem;
+      background: radial-gradient(ellipse at 50% 0%, rgba(235,180,60,0.08) 0%, transparent 60%);
+      margin:-1.5rem -1.5rem 0; padding-left:1.5rem; padding-right:1.5rem;
+    ">
+      <div style="
+        width:88px; height:88px; margin:0 auto 1.5rem;
+        background: linear-gradient(135deg, #EBB43C 0%, #E8963A 100%);
+        border-radius:22px; display:flex; align-items:center; justify-content:center;
+        box-shadow: 0 12px 48px rgba(235,180,60,0.35);
+        position:relative; overflow:hidden;
+      ">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round" style="width:44px;height:44px; position:relative; z-index:1;">
+          <line x1="4" y1="8" x2="4" y2="16"/><line x1="8" y1="4" x2="8" y2="20"/>
+          <line x1="12" y1="6" x2="12" y2="18"/><line x1="16" y1="3" x2="16" y2="21"/>
+          <line x1="20" y1="9" x2="20" y2="15"/>
+        </svg>
+        <div style="position:absolute;top:0;left:0;right:0;bottom:0;background:linear-gradient(180deg,rgba(255,255,255,0.25) 0%,transparent 50%);border-radius:22px;"></div>
+      </div>
+
+      <h1 style="font-size:3rem; font-weight:800; letter-spacing:-0.03em; margin-bottom:0.5rem; line-height:1.1;">
+        Through<span style="color:var(--accent);">Waves</span>
+      </h1>
+      <p style="font-size:1.3rem; color:var(--text-secondary); max-width:600px; margin:0 auto 0.5rem; line-height:1.5;">
+        Professional DAW meets collaborative platform.<br>
+        Create, mix, separate, jam &mdash; all in one.
+      </p>
+      <p style="color:var(--text-muted); margin-bottom:2rem; font-size:0.95rem;">
+        Open source &middot; Cross-platform &middot; Built in Rust
+      </p>
+
+      <div style="display:flex; gap:0.8rem; justify-content:center; flex-wrap:wrap;">
+        <a href="#/download" class="btn btn-primary" style="
+          font-size:1.1rem; padding:0.85rem 2rem; border-radius:12px;
+          text-decoration:none; display:inline-flex; align-items:center; gap:0.5rem;
+        ">
+          ${waveIconLg.replace('width:48px;height:48px;','width:18px;height:18px;').replace('currentColor','#000')}
+          Download Free
+        </a>
+        <a href="#/explore" class="btn btn-secondary" style="
+          font-size:1.1rem; padding:0.85rem 2rem; border-radius:12px;
+          text-decoration:none;
+        ">
+          Explore Music
+        </a>
+      </div>
+    </div>
+
+    <!-- ===== FEATURE HIGHLIGHTS ===== -->
+    <div style="padding:3rem 0 2rem;">
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:1.2rem; margin-bottom:3rem;">
+
+        <div class="card" style="padding:1.5rem; border-top:2px solid var(--accent);">
+          <div style="font-size:1.5rem; margin-bottom:0.5rem;">&#127911;</div>
+          <h3 style="font-size:1.05rem; margin-bottom:0.4rem;">Professional DAW</h3>
+          <p style="color:var(--text-secondary); font-size:0.88rem; line-height:1.5;">
+            Multi-track recording, VST3 plugin hosting, MIDI sequencing,
+            15 built-in effects, parametric EQ, and real-time spectrum analyzer.
+          </p>
+        </div>
+
+        <div class="card" style="padding:1.5rem; border-top:2px solid var(--green);">
+          <div style="font-size:1.5rem; margin-bottom:0.5rem;">&#129302;</div>
+          <h3 style="font-size:1.05rem; margin-bottom:0.4rem;">AI Stem Separation</h3>
+          <p style="color:var(--text-secondary); font-size:0.88rem; line-height:1.5;">
+            Powered by Meta's Demucs. Split any track into vocals, drums, bass,
+            and instruments. Import stems directly into your project.
+          </p>
+        </div>
+
+        <div class="card" style="padding:1.5rem; border-top:2px solid var(--blue);">
+          <div style="font-size:1.5rem; margin-bottom:0.5rem;">&#127918;</div>
+          <h3 style="font-size:1.05rem; margin-bottom:0.4rem;">Live Jam Sessions</h3>
+          <p style="color:var(--text-secondary); font-size:0.88rem; line-height:1.5;">
+            Real-time multi-user jam rooms over WebSocket.
+            Stream audio, sync BPM, chat, and record together &mdash; up to 8 participants.
+          </p>
+        </div>
+
+        <div class="card" style="padding:1.5rem; border-top:2px solid #c084fc;">
+          <div style="font-size:1.5rem; margin-bottom:0.5rem;">&#128202;</div>
+          <h3 style="font-size:1.05rem; margin-bottom:0.4rem;">Pro Metering & Analysis</h3>
+          <p style="color:var(--text-secondary); font-size:0.88rem; line-height:1.5;">
+            EBU R128 LUFS loudness, true peak metering, phase correlation,
+            reference track A/B, chord detection, and audio-to-MIDI conversion.
+          </p>
+        </div>
+
+        <div class="card" style="padding:1.5rem; border-top:2px solid #f97316;">
+          <div style="font-size:1.5rem; margin-bottom:0.5rem;">&#128279;</div>
+          <h3 style="font-size:1.05rem; margin-bottom:0.4rem;">Version Branching</h3>
+          <p style="color:var(--text-secondary); font-size:0.88rem; line-height:1.5;">
+            Git-like version control for your projects. Create branches for
+            alternative arrangements, commit snapshots, and restore any version.
+          </p>
+        </div>
+
+        <div class="card" style="padding:1.5rem; border-top:2px solid #ec4899;">
+          <div style="font-size:1.5rem; margin-bottom:0.5rem;">&#127760;</div>
+          <h3 style="font-size:1.05rem; margin-bottom:0.4rem;">Music Platform</h3>
+          <p style="color:var(--text-secondary); font-size:0.88rem; line-height:1.5;">
+            Upload tracks, share with the community, follow artists,
+            collaborate on projects, and import music directly into the DAW.
+          </p>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ===== TECH STACK PILLS ===== -->
+    <div style="text-align:center; margin-bottom:3rem;">
+      <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:0.8rem; text-transform:uppercase; letter-spacing:0.08em;">Built With</p>
+      <div style="display:flex; gap:0.5rem; justify-content:center; flex-wrap:wrap;">
+        ${['Rust', 'egui', 'cpal', 'VST3', 'Demucs', 'WebSocket', 'Axum', 'PostgreSQL'].map(t =>
+          `<span style="
+            background:var(--bg-elevated); color:var(--text-secondary);
+            padding:0.3rem 0.8rem; border-radius:20px; font-size:0.82rem;
+            border:1px solid var(--border);
+          ">${t}</span>`
+        ).join('')}
+      </div>
+    </div>
+
+    <!-- ===== COMMUNITY TRACKS ===== -->
     ${state.user && state.token !== 'demo_token' ? `<a href="#/feed" class="btn btn-secondary btn-sm mb-2" style="display:inline-flex;">Your Feed</a>` : ''}
+
+    ${featured.length ? `
     <div class="section-header">
       <h2 class="section-title">Featured Tracks</h2>
     </div>
     <div class="track-grid mb-3">${featured.map(trackCardHTML).join('')}</div>
+    ` : ''}
+
     ${recent.length ? `
     <div class="section-header">
       <h2 class="section-title">Recent Uploads</h2>
