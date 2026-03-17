@@ -114,6 +114,8 @@ pub struct StemSeparatorPanel {
     last_poll: Instant,
     /// Background thread result channel.
     bg_result: Arc<Mutex<Option<BgResult>>>,
+    /// Pending stem download to import (stem_name, file_path)
+    pub _pending_stem: Option<(String, PathBuf)>,
 }
 
 impl Default for StemSeparatorPanel {
@@ -130,6 +132,7 @@ impl Default for StemSeparatorPanel {
             last_health_check: Instant::now() - Duration::from_secs(60),
             last_poll: Instant::now(),
             bg_result: Arc::new(Mutex::new(None)),
+            _pending_stem: None,
         }
     }
 }
@@ -350,8 +353,9 @@ impl StemSeparatorPanel {
                         };
                     }
                 }
-                BgResult::StemDownloaded { .. } => {
-                    // Handled via track import; nothing extra to do here.
+                BgResult::StemDownloaded { stem, path } => {
+                    // Store for the show() function to handle with DawApp access
+                    self._pending_stem = Some((stem, path));
                 }
                 BgResult::Error(err) => {
                     if !matches!(self.job_state, JobState::Idle) {
@@ -400,6 +404,49 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
 
     // Process any pending background results
     app.stem_sep.process_bg_result();
+
+    // Handle pending stem imports (needs DawApp access)
+    if let Some((stem, path)) = app.stem_sep._pending_stem.take() {
+        if let Ok(audio) = jamhub_engine::load_audio(&path) {
+            let buffer_id = uuid::Uuid::new_v4();
+            let engine_sr = app.sample_rate();
+            let samples = if audio.sample_rate != engine_sr {
+                jamhub_engine::resample(&audio.samples, audio.sample_rate, engine_sr)
+            } else {
+                audio.samples
+            };
+            let duration = samples.len() as u64;
+
+            app.waveform_cache.insert(buffer_id, &samples);
+            app.send_command(jamhub_engine::EngineCommand::LoadAudioBuffer {
+                id: buffer_id,
+                samples: samples.clone(),
+            });
+            app.audio_buffers.insert(buffer_id, samples);
+
+            let stem_label = capitalize(&stem);
+            let track_name = format!("Stem: {stem_label}");
+            if let Some(ti) = app.project.tracks.iter().rposition(|t| t.name == track_name) {
+                let clip = jamhub_model::Clip {
+                    id: uuid::Uuid::new_v4(),
+                    name: stem_label.clone(),
+                    start_sample: 0,
+                    duration_samples: duration,
+                    source: jamhub_model::ClipSource::AudioBuffer { buffer_id },
+                    muted: false, content_offset: 0,
+                    fade_in_samples: 0, fade_out_samples: 0,
+                    color: None, playback_rate: 1.0, preserve_pitch: false,
+                    loop_count: 1, gain_db: 0.0, take_index: 0,
+                    transpose_semitones: 0, reversed: false,
+                };
+                app.project.tracks[ti].clips.push(clip);
+                app.sync_project();
+                app.set_status(&format!("{stem_label} stem imported!"));
+            }
+        } else {
+            app.set_status(&format!("Failed to load {} stem audio", stem));
+        }
+    }
 
     // Periodic health check
     if app.stem_sep.last_health_check.elapsed() > Duration::from_secs(10) {
