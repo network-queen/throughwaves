@@ -353,9 +353,8 @@ impl StemSeparatorPanel {
                         };
                     }
                 }
-                BgResult::StemDownloaded { stem, path } => {
-                    // Store for the show() function to handle with DawApp access
-                    self._pending_stem = Some((stem, path));
+                BgResult::StemDownloaded { .. } => {
+                    // No longer used — imports are now synchronous
                 }
                 BgResult::Error(err) => {
                     if !matches!(self.job_state, JobState::Idle) {
@@ -855,44 +854,94 @@ fn show_error_ui(app: &mut DawApp, ui: &mut egui::Ui, error: &str) {
 }
 
 /// Download a stem WAV file and import it as a new track in the DAW.
+/// Does everything synchronously — blocks briefly but is reliable.
 fn import_stem_to_track(app: &mut DawApp, job_id: &str, stem: &str) {
     let stem_label = capitalize(stem);
+    let track_name = format!("Stem: {stem_label}");
 
-    // Create a new audio track immediately
-    use jamhub_model::TrackKind;
-    app.project
-        .add_track(&format!("Stem: {stem_label}"), TrackKind::Audio);
+    // Check if this stem was already imported (prevent duplicates)
+    if app.project.tracks.iter().any(|t| t.name == track_name && !t.clips.is_empty()) {
+        app.set_status(&format!("{stem_label} stem already imported"));
+        return;
+    }
 
-    // Download stem file in background and load it as a clip
+    app.set_status(&format!("Downloading {stem_label} stem..."));
+
+    // Download the stem file
     let url = format!("{SERVICE_URL}/stems/{job_id}/{stem}");
-    let stem_copy = stem.to_string();
-    let result = Arc::clone(&app.stem_sep.bg_result);
-
-    std::thread::spawn(move || {
-        let agent = ureq::Agent::new_with_defaults();
-        match agent.get(&url).call() {
-            Ok(resp) => {
-                let tmp_dir = std::env::temp_dir().join("jamhub_stems");
-                let _ = std::fs::create_dir_all(&tmp_dir);
-                let dest = tmp_dir.join(format!("{stem_copy}.wav"));
-                if let Ok(bytes) = resp.into_body().read_to_vec() {
-                    let _ = std::fs::write(&dest, &bytes);
-                    if let Ok(mut r) = result.lock() {
-                        *r = Some(BgResult::StemDownloaded {
-                            stem: stem_copy,
-                            path: dest,
-                        });
-                    }
-                }
+    let agent = ureq::Agent::new_with_defaults();
+    let bytes = match agent.get(&url).call() {
+        Ok(resp) => match resp.into_body().read_to_vec() {
+            Ok(b) => b,
+            Err(e) => {
+                app.set_status(&format!("Failed to read {stem_label}: {e}"));
+                return;
             }
-            Err(_) => {}
+        },
+        Err(e) => {
+            app.set_status(&format!("Failed to download {stem_label}: {e}"));
+            return;
         }
-    });
+    };
 
-    app.status_message = Some((
-        format!("Importing {stem_label} stem as new track..."),
-        Instant::now(),
-    ));
+    // Save to temp file
+    let tmp_dir = std::env::temp_dir().join("jamhub_stems");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let dest = tmp_dir.join(format!("{stem}.wav"));
+    if let Err(e) = std::fs::write(&dest, &bytes) {
+        app.set_status(&format!("Failed to save {stem_label}: {e}"));
+        return;
+    }
+
+    // Load the audio
+    let audio = match jamhub_engine::load_audio(&dest) {
+        Ok(a) => a,
+        Err(e) => {
+            app.set_status(&format!("Failed to load {stem_label} audio: {e}"));
+            return;
+        }
+    };
+
+    let engine_sr = app.sample_rate();
+    let samples = if audio.sample_rate != engine_sr {
+        jamhub_engine::resample(&audio.samples, audio.sample_rate, engine_sr)
+    } else {
+        audio.samples
+    };
+    let duration = samples.len() as u64;
+
+    let buffer_id = uuid::Uuid::new_v4();
+    app.waveform_cache.insert(buffer_id, &samples);
+    app.send_command(jamhub_engine::EngineCommand::LoadAudioBuffer {
+        id: buffer_id,
+        samples: samples.clone(),
+    });
+    app.audio_buffers.insert(buffer_id, samples);
+
+    // Create track if it doesn't exist yet
+    let ti = if let Some(idx) = app.project.tracks.iter().position(|t| t.name == track_name) {
+        idx
+    } else {
+        app.project.add_track(&track_name, jamhub_model::TrackKind::Audio);
+        app.project.tracks.len() - 1
+    };
+
+    // Create clip
+    let clip = jamhub_model::Clip {
+        id: uuid::Uuid::new_v4(),
+        name: stem_label.clone(),
+        start_sample: 0,
+        duration_samples: duration,
+        source: jamhub_model::ClipSource::AudioBuffer { buffer_id },
+        muted: false, content_offset: 0,
+        fade_in_samples: 0, fade_out_samples: 0,
+        color: None, playback_rate: 1.0, preserve_pitch: false,
+        loop_count: 1, gain_db: 0.0, take_index: 0,
+        transpose_semitones: 0, reversed: false,
+    };
+    app.project.tracks[ti].clips.push(clip);
+    app.sync_project();
+    app.set_status(&format!("{stem_label} stem imported — {} samples", duration));
 }
 
 fn capitalize(s: &str) -> String {
