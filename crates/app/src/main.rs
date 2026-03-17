@@ -531,6 +531,8 @@ pub struct DawApp {
     pub master_volume: f32,
     pub renaming_track: Option<(usize, String)>,
     pub show_piano_roll: bool,
+    /// Set by piano roll when it handles Delete key, so main app skips delete
+    pub piano_roll_consumed_delete: bool,
     pub show_about: bool,
     input_monitor: InputMonitor,
     pub resizing_track: Option<usize>,
@@ -1311,6 +1313,7 @@ impl DawApp {
             master_volume: 1.0,
             renaming_track: None,
             show_piano_roll: false,
+            piano_roll_consumed_delete: false,
             show_about: false,
             input_monitor: InputMonitor::new(),
             resizing_track: None,
@@ -4293,6 +4296,8 @@ pub fn find_nearest_zero_crossing(samples: &[f32], position: usize, search_range
 
 impl eframe::App for DawApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Reset per-frame flags
+        self.piano_roll_consumed_delete = false;
 
         // Update window title with project name, branch, and dirty indicator
         let dirty_mark = if self.dirty { " *" } else { "" };
@@ -4568,7 +4573,12 @@ impl eframe::App for DawApp {
                 "redo" => self.redo(),
                 "save" => self.save_project(),
                 "delete" => {
-                    if self.has_selected_clips() {
+                    // If piano roll is open with selected notes, delete notes instead
+                    if self.show_piano_roll && !self.piano_roll_state.selected_notes.is_empty() {
+                        if let Some(ti) = self.selected_track {
+                            piano_roll::delete_selected_public(self, ti);
+                        }
+                    } else if self.has_selected_clips() {
                         self.delete_selected_clips();
                     } else {
                         self.delete_selected_track();

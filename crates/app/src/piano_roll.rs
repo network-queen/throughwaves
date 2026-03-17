@@ -462,16 +462,13 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
 
             ui.separator();
 
-            // ── Keyboard shortcuts ──────────────────────────────────
-            let has_focus = ui.memory(|m| m.focused().is_none());
-            if has_focus {
+            // ── Keyboard shortcuts ─────────────────────────────────
+            {
                 let cmd = ui.input(|i| i.modifiers.command);
-                if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
-                    delete_selected(app, track_idx);
-                }
                 if cmd && ui.input(|i| i.key_pressed(egui::Key::A)) {
                     select_all_notes(app, track_idx);
                 }
+                // Delete is handled in main.rs — it checks if piano roll has selected notes
             }
 
             // ── Decide which view to show ──────────────────────────
@@ -529,16 +526,17 @@ fn show_note_grid(app: &mut DawApp, ui: &mut egui::Ui, track_idx: usize) {
     );
     let rect = response.rect;
 
-    // Vertical scroll with mouse wheel
+    // Vertical scroll with mouse wheel — consume the event so main window doesn't scroll
     if response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
             app.piano_roll_state.scroll_y += scroll * 0.15;
-            // Clamp: can scroll down to note 0, up to note 127-range
             app.piano_roll_state.scroll_y = app.piano_roll_state.scroll_y.clamp(
                 -(127.0 - base_range as f32 - 36.0),
                 36.0,
             );
+            // Consume scroll so it doesn't propagate to the main window
+            ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
         }
     }
 
@@ -1018,6 +1016,43 @@ fn show_note_grid(app: &mut DawApp, ui: &mut egui::Ui, track_idx: usize) {
                 }
                 if !hit && !cmd {
                     // Clicked empty space — note was already created by drag_started
+                }
+            }
+        }
+    }
+
+    // --- Right-click to delete note (FL Studio style) ---
+    if response.secondary_clicked() {
+        if let Some(pos) = pointer_pos {
+            let grid_x = pos.x - rect.min.x - KEY_WIDTH;
+            if grid_x > 0.0 {
+                for nr in note_rects.iter().rev() {
+                    if nr.rect.contains(pos) {
+                        // Delete this note
+                        if let Some(ci) = midi_clip_idx {
+                            app.push_undo("Delete MIDI note");
+                            if let ClipSource::Midi { ref mut notes, .. } =
+                                app.project.tracks[track_idx].clips[ci].source
+                            {
+                                if nr.idx < notes.len() {
+                                    notes.remove(nr.idx);
+                                    // Fix up selected indices
+                                    let old_selected: Vec<usize> = app.piano_roll_state.selected_notes.iter().copied().collect();
+                                    app.piano_roll_state.selected_notes.clear();
+                                    for s in old_selected {
+                                        if s < nr.idx {
+                                            app.piano_roll_state.selected_notes.insert(s);
+                                        } else if s > nr.idx {
+                                            app.piano_roll_state.selected_notes.insert(s - 1);
+                                        }
+                                    }
+                                    update_clip_duration(app, track_idx);
+                                    app.sync_project();
+                                }
+                            }
+                        }
+                        break;
+                    }
                 }
             }
         }
@@ -1601,6 +1636,11 @@ fn select_all_notes(app: &mut DawApp, track_idx: usize) {
     if let ClipSource::Midi { ref notes, .. } = app.project.tracks[track_idx].clips[ci].source {
         app.piano_roll_state.selected_notes = (0..notes.len()).collect();
     }
+}
+
+/// Public entry point for deleting selected notes from main.rs
+pub fn delete_selected_public(app: &mut DawApp, track_idx: usize) {
+    delete_selected(app, track_idx);
 }
 
 fn delete_selected(app: &mut DawApp, track_idx: usize) {
