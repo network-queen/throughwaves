@@ -2901,7 +2901,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             } else {
                                 egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2])
                             };
-                            draw_waveform(painter, &peaks, cr, clip.duration_samples, wc, clip.content_offset, app.zoom, Some((rect.min.x, rect.max.x)));
+                            draw_waveform(painter, &peaks, cr, clip.duration_samples, wc, clip.content_offset, app.zoom, Some((rect.min.x, rect.max.x)), clip.gain_db);
                         }
                     }
                     ClipSource::Midi { notes, .. } => {
@@ -4188,6 +4188,7 @@ fn draw_waveform(
     content_offset: u64,
     zoom: f32,
     visible_x_range: Option<(f32, f32)>,
+    gain_db: f32,
 ) {
     let width = clip_rect.width();
     if width < 2.0 {
@@ -4250,6 +4251,18 @@ fn draw_waveform(
             if pi < rms_data.len() {
                 rms_max = rms_max.max(rms_data[pi]);
             }
+        }
+
+        // Apply clip gain to waveform display
+        if gain_db != 0.0 {
+            let gain_linear = 10.0_f32.powf(gain_db / 20.0);
+            min *= gain_linear;
+            max *= gain_linear;
+            rms_max *= gain_linear;
+            // Clamp to prevent overdraw
+            min = min.max(-1.0);
+            max = max.min(1.0);
+            rms_max = rms_max.min(1.0);
         }
 
         let x = clip_rect.min.x + px as f32;
