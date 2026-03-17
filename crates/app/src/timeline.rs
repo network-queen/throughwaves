@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::DawApp;
 
-const BASE_LANE_HEIGHT: f32 = 72.0;
-const TAKE_LANE_HEIGHT: f32 = 42.0;
+const BASE_LANE_HEIGHT: f32 = 56.0;
+const TAKE_LANE_HEIGHT: f32 = 36.0;
 const HEADER_WIDTH: f32 = 200.0;
 const RULER_HEIGHT: f32 = 34.0;
 const PIXELS_PER_SECOND_BASE: f32 = 100.0;
