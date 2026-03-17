@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::DawApp;
 
-const BASE_LANE_HEIGHT: f32 = 56.0;
-const TAKE_LANE_HEIGHT: f32 = 36.0;
+const BASE_LANE_HEIGHT: f32 = 48.0;
+const TAKE_LANE_HEIGHT: f32 = 48.0;
 const HEADER_WIDTH: f32 = 200.0;
 const RULER_HEIGHT: f32 = 34.0;
 const PIXELS_PER_SECOND_BASE: f32 = 100.0;
@@ -265,8 +265,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 41, 48)),
             );
 
-            // Zero vertical spacing so headers align exactly with timeline tracks
+            // Zero all spacing so headers align exactly with timeline tracks
             ui.spacing_mut().item_spacing.y = 0.0;
+            ui.spacing_mut().item_spacing.x = 0.0;
 
             let mut track_actions: Vec<TrackAction> = Vec::new();
 
@@ -378,8 +379,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     };
                     let is_selected = app.selected_track == Some(i);
 
-                    ui.allocate_ui(egui::vec2(HEADER_WIDTH, h), |ui| {
-                        let header_rect = ui.max_rect();
+                    let (header_rect, _) = ui.allocate_exact_size(egui::vec2(HEADER_WIDTH, h), egui::Sense::hover());
+                    ui.allocate_ui_at_rect(header_rect, |ui| {
+                        let header_rect = header_rect;
 
                         // Click area for entire header — only handles selection & context menu
                         let bg_response = ui.interact(header_rect, ui.id().with("tbg").with(i), egui::Sense::click());
