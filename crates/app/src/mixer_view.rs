@@ -79,28 +79,33 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     let is_selected = selected_track == Some(i);
 
                     let stroke_color = if is_selected {
-                        egui::Color32::from_rgb(235, 180, 60)
+                        egui::Color32::from_rgb(240, 192, 64)
                     } else {
                         egui::Color32::from_rgb(40, 41, 48)
                     };
 
-                    // Channel strip with subtle gradient background
-                    let strip_bg = egui::Color32::from_rgb(24, 25, 30);
+                    // Channel strip — premium vertical gradient, refined corners
+                    let strip_bg = egui::Color32::from_rgb(22, 23, 30);
                     egui::Frame::default()
-                        .inner_margin(egui::Margin::symmetric(5, 6))
+                        .inner_margin(egui::Margin::symmetric(6, 7))
                         .stroke(egui::Stroke::new(
                             if is_selected { 1.5 } else { 0.5 },
                             stroke_color,
                         ))
-                        .corner_radius(6.0)
+                        .corner_radius(10.0)
                         .fill(strip_bg)
                         .show(ui, |ui| {
-                            // Subtle gradient overlay: lighter at top, darker at bottom
+                            // Premium gradient overlay: glass reflection at top, darker at bottom
                             let strip_rect = ui.max_rect();
-                            let top_grad = egui::Rect::from_min_max(strip_rect.min, egui::pos2(strip_rect.max.x, strip_rect.center().y));
-                            let bot_grad = egui::Rect::from_min_max(egui::pos2(strip_rect.min.x, strip_rect.center().y), strip_rect.max);
-                            ui.painter().rect_filled(top_grad, egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, egui::Color32::from_rgba_premultiplied(255, 255, 255, 3));
-                            ui.painter().rect_filled(bot_grad, egui::CornerRadius { nw: 0, ne: 0, sw: 6, se: 6 }, egui::Color32::from_rgba_premultiplied(0, 0, 0, 8));
+                            let top_grad = egui::Rect::from_min_max(strip_rect.min, egui::pos2(strip_rect.max.x, strip_rect.min.y + strip_rect.height() * 0.3));
+                            let bot_grad = egui::Rect::from_min_max(egui::pos2(strip_rect.min.x, strip_rect.max.y - strip_rect.height() * 0.3), strip_rect.max);
+                            ui.painter().rect_filled(top_grad, egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 }, egui::Color32::from_rgba_premultiplied(255, 255, 255, 5));
+                            ui.painter().rect_filled(bot_grad, egui::CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, egui::Color32::from_rgba_premultiplied(0, 0, 0, 10));
+                            // Top reflection line for glass effect
+                            ui.painter().line_segment(
+                                [egui::pos2(strip_rect.left() + 4.0, strip_rect.top()), egui::pos2(strip_rect.right() - 4.0, strip_rect.top())],
+                                egui::Stroke::new(0.5, egui::Color32::from_rgba_premultiplied(255, 255, 255, 10)),
+                            );
                             ui.set_width(CHANNEL_WIDTH);
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 2.0;
@@ -443,24 +448,24 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     let center = knob_rect.center();
                                     let radius = knob_size * 0.42;
 
-                                    // Background arc (full range) — thicker, more visible
+                                    // Background arc (full range) — 4px thick for premium feel
                                     let arc_segments = 40;
                                     let start_angle = std::f32::consts::PI * 0.75;
                                     let end_angle = std::f32::consts::PI * 2.25;
-                                    let bg_color = egui::Color32::from_rgb(42, 43, 50);
+                                    let bg_color = egui::Color32::from_rgb(38, 40, 52);
                                     for seg in 0..arc_segments {
                                         let a1 = start_angle + (end_angle - start_angle) * seg as f32 / arc_segments as f32;
                                         let a2 = start_angle + (end_angle - start_angle) * (seg + 1) as f32 / arc_segments as f32;
                                         let p1 = egui::pos2(center.x + radius * a1.cos(), center.y + radius * a1.sin());
                                         let p2 = egui::pos2(center.x + radius * a2.cos(), center.y + radius * a2.sin());
-                                        ui.painter().line_segment([p1, p2], egui::Stroke::new(3.5, bg_color));
+                                        ui.painter().line_segment([p1, p2], egui::Stroke::new(4.0, bg_color));
                                     }
 
-                                    // Active arc (from center to pan position) — more prominent
+                                    // Active arc (from center to pan position) — 4px, vibrant
                                     let pan_val = track.pan;
                                     let center_angle = (start_angle + end_angle) / 2.0;
                                     let pan_angle = center_angle + pan_val * (end_angle - start_angle) / 2.0;
-                                    let arc_color = egui::Color32::from_rgb(80, 200, 190);
+                                    let arc_color = egui::Color32::from_rgb(80, 210, 200);
                                     let (arc_start, arc_end) = if pan_val >= 0.0 {
                                         (center_angle, pan_angle)
                                     } else {
@@ -472,17 +477,18 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         let a2 = arc_start + (arc_end - arc_start) * (seg + 1) as f32 / active_segs.max(1) as f32;
                                         let p1 = egui::pos2(center.x + radius * a1.cos(), center.y + radius * a1.sin());
                                         let p2 = egui::pos2(center.x + radius * a2.cos(), center.y + radius * a2.sin());
-                                        ui.painter().line_segment([p1, p2], egui::Stroke::new(3.5, arc_color));
+                                        ui.painter().line_segment([p1, p2], egui::Stroke::new(4.0, arc_color));
                                     }
 
-                                    // Position dot at the pan angle on the arc
+                                    // Bright position dot at the pan angle on the arc
                                     let dot_radius_outer = radius + 1.0;
                                     let dot_x = center.x + dot_radius_outer * pan_angle.cos();
                                     let dot_y = center.y + dot_radius_outer * pan_angle.sin();
-                                    ui.painter().circle_filled(egui::pos2(dot_x, dot_y), 3.0, egui::Color32::WHITE);
+                                    ui.painter().circle_filled(egui::pos2(dot_x, dot_y), 4.0, egui::Color32::WHITE);
+                                    ui.painter().circle_filled(egui::pos2(dot_x, dot_y), 2.0, arc_color);
 
-                                    // Center dot — smaller, subtle
-                                    ui.painter().circle_filled(center, 2.0, egui::Color32::from_rgb(140, 138, 132));
+                                    // Center dot — subtle
+                                    ui.painter().circle_filled(center, 2.0, egui::Color32::from_rgb(120, 118, 130));
 
                                     // DragValue next to the knob
                                     let pan_resp = ui
@@ -507,20 +513,20 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                                 ui.add_space(2.0);
 
-                                // Mute / Solo — circular toggles
+                                // Mute / Solo — premium circular toggles
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 3.0;
-                                    let btn_size = egui::vec2(22.0, 22.0);
+                                    let btn_size = egui::vec2(24.0, 24.0);
 
                                     let mute_bg = if track.muted {
-                                        egui::Color32::from_rgb(200, 160, 30)
+                                        egui::Color32::from_rgb(230, 175, 50)
                                     } else {
-                                        egui::Color32::from_rgb(36, 37, 44)
+                                        egui::Color32::from_rgb(34, 35, 44)
                                     };
                                     let mute_tc = if track.muted {
                                         egui::Color32::WHITE
                                     } else {
-                                        egui::Color32::from_rgb(145, 142, 138)
+                                        egui::Color32::from_rgb(128, 126, 135)
                                     };
                                     if ui
                                         .add_sized(
@@ -540,14 +546,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     }
 
                                     let solo_bg = if track.solo {
-                                        egui::Color32::from_rgb(50, 160, 60)
+                                        egui::Color32::from_rgb(50, 190, 90)
                                     } else {
-                                        egui::Color32::from_rgb(36, 37, 44)
+                                        egui::Color32::from_rgb(34, 35, 44)
                                     };
                                     let solo_tc = if track.solo {
                                         egui::Color32::WHITE
                                     } else {
-                                        egui::Color32::from_rgb(145, 142, 138)
+                                        egui::Color32::from_rgb(128, 126, 135)
                                     };
                                     if ui
                                         .add_sized(
@@ -788,32 +794,37 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             // ============================================================
             // Master channel — wider strip with LUFS metering & FX chain
             // ============================================================
-            let master_width = CHANNEL_WIDTH + 46.0; // wider than normal tracks
+            let master_width = CHANNEL_WIDTH + 50.0; // wider than normal tracks
             egui::Frame::default()
-                .inner_margin(egui::Margin::symmetric(7, 6))
+                .inner_margin(egui::Margin::symmetric(8, 7))
                 .stroke(egui::Stroke::new(
                     2.0,
-                    egui::Color32::from_rgb(160, 130, 50),
+                    egui::Color32::from_rgb(240, 192, 64),
                 ))
-                .corner_radius(8.0)
-                .fill(egui::Color32::from_rgb(24, 24, 30))
+                .corner_radius(10.0)
+                .fill(egui::Color32::from_rgb(22, 22, 28))
                 .show(ui, |ui| {
+                    // Glass reflection at top
+                    let master_rect = ui.max_rect();
+                    let top_refl = egui::Rect::from_min_max(master_rect.min, egui::pos2(master_rect.max.x, master_rect.min.y + master_rect.height() * 0.25));
+                    ui.painter().rect_filled(top_refl, egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 }, egui::Color32::from_rgba_premultiplied(255, 255, 255, 6));
+
                     ui.set_width(master_width);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
 
-                        // Header
+                        // Header — gold "MASTER" label
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new("MASTER")
-                                    .size(11.0)
+                                    .size(12.0)
                                     .strong()
-                                    .color(egui::Color32::from_rgb(235, 180, 60)),
+                                    .color(egui::Color32::from_rgb(240, 192, 64)),
                             );
                             ui.label(
                                 egui::RichText::new("Output")
                                     .size(8.0)
-                                    .color(egui::Color32::from_rgb(100, 100, 110)),
+                                    .color(egui::Color32::from_rgb(90, 90, 105)),
                             );
                         });
 
@@ -1263,8 +1274,8 @@ fn draw_stereo_meter(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(total_w, height), egui::Sense::hover());
     let painter = ui.painter();
 
-    // Background
-    painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(20, 20, 24));
+    // Background — darker with rounded corners
+    painter.rect_filled(rect, 3.0, egui::Color32::from_rgb(16, 16, 22));
 
     let half_w = (total_w - 2.0) / 2.0;
 
@@ -1341,15 +1352,15 @@ fn draw_stereo_meter(
     }
 }
 
-/// Draw a single meter bar with gradient coloring (green -> yellow -> red).
+/// Draw a single meter bar with smooth gradient (green -> yellow -> orange -> red), rounded top.
 fn draw_meter_bar(painter: &egui::Painter, x: f32, y: f32, w: f32, height: f32, level: f32) {
     let bar_height = level.clamp(0.0, 1.0) * height;
     if bar_height < 1.0 {
         return;
     }
 
-    // Draw the meter in segments for gradient effect
-    let segments = 24;
+    // Draw the meter in segments for smooth gradient effect
+    let segments = 32;
     let seg_h = bar_height / segments as f32;
     for s in 0..segments {
         let seg_bottom = y + height - s as f32 * seg_h;
@@ -1358,30 +1369,36 @@ fn draw_meter_bar(painter: &egui::Painter, x: f32, y: f32, w: f32, height: f32, 
         let actual_level = norm * level.clamp(0.0, 1.0);
 
         let color = if actual_level > 0.9 {
-            egui::Color32::from_rgb(255, 50, 50)
-        } else if actual_level > 0.7 {
-            let t = (actual_level - 0.7) / 0.2;
+            // Red zone
+            egui::Color32::from_rgb(240, 45, 45)
+        } else if actual_level > 0.75 {
+            // Orange zone
+            let t = (actual_level - 0.75) / 0.15;
             egui::Color32::from_rgb(
-                255,
-                (200.0 - t * 150.0).max(50.0) as u8,
-                50,
+                (255.0 - t * 15.0) as u8,
+                (160.0 - t * 115.0) as u8,
+                (40.0 - t * 0.0) as u8,
             )
-        } else if actual_level > 0.4 {
-            let t = (actual_level - 0.4) / 0.3;
+        } else if actual_level > 0.5 {
+            // Yellow zone
+            let t = (actual_level - 0.5) / 0.25;
             egui::Color32::from_rgb(
-                (80.0 + t * 175.0) as u8,
-                200,
-                (80.0 - t * 30.0) as u8,
+                (120.0 + t * 135.0) as u8,
+                (210.0 - t * 50.0) as u8,
+                (50.0 - t * 10.0) as u8,
             )
         } else {
-            egui::Color32::from_rgb(60, 180, 60)
+            // Green zone
+            egui::Color32::from_rgb(50, 200, 65)
         };
 
+        // Top segment gets rounded corners
+        let rounding = if s == segments - 1 { 2.0 } else { 0.0 };
         let seg_rect = egui::Rect::from_min_max(
             egui::pos2(x, seg_top.max(y)),
             egui::pos2(x + w, seg_bottom.min(y + height)),
         );
-        painter.rect_filled(seg_rect, 0.0, color);
+        painter.rect_filled(seg_rect, rounding, color);
     }
 }
 

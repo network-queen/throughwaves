@@ -95,33 +95,42 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                     };
 
                     let row_bg = if is_crashed {
-                        egui::Color32::from_rgb(60, 25, 25)
+                        egui::Color32::from_rgb(55, 22, 22)
                     } else if is_open {
-                        egui::Color32::from_rgb(32, 38, 48)
+                        egui::Color32::from_rgb(30, 36, 48)
                     } else {
-                        egui::Color32::from_rgb(30, 30, 38)
+                        egui::Color32::from_rgb(26, 27, 36)
                     };
 
+                    // Card design — 10px rounded with subtle gradient
                     egui::Frame::default()
-                        .inner_margin(egui::Margin::symmetric(6, 5))
+                        .inner_margin(egui::Margin::symmetric(8, 6))
                         .fill(row_bg)
-                        .corner_radius(6.0)
-                        .stroke(egui::Stroke::new(0.5, egui::Color32::from_rgb(46, 46, 56)))
+                        .corner_radius(10.0)
+                        .stroke(egui::Stroke::new(0.5, egui::Color32::from_rgb(42, 44, 56)))
                         .show(ui, |ui| {
+                            // Subtle gradient overlay on card
+                            let card_rect = ui.max_rect();
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_max(card_rect.min, egui::pos2(card_rect.max.x, card_rect.min.y + card_rect.height() * 0.4)),
+                                egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 },
+                                egui::Color32::from_rgba_premultiplied(255, 255, 255, 3),
+                            );
+
                             ui.horizontal(|ui| {
-                                // Left color accent bar for active effects
+                                // Left accent stripe — 3px, bright track color for active
                                 if is_enabled && !is_crashed {
                                     let (accent_rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(3.0, 18.0),
+                                        egui::vec2(3.0, 20.0),
                                         egui::Sense::hover(),
                                     );
                                     ui.painter().rect_filled(accent_rect, 1.5, track_color);
                                 } else {
                                     let (accent_rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(3.0, 18.0),
+                                        egui::vec2(3.0, 20.0),
                                         egui::Sense::hover(),
                                     );
-                                    ui.painter().rect_filled(accent_rect, 1.5, egui::Color32::from_rgb(45, 45, 52));
+                                    ui.painter().rect_filled(accent_rect, 1.5, egui::Color32::from_rgb(40, 40, 50));
                                 }
 
                                 // Move up/down arrows
@@ -152,20 +161,22 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                 }
                                 ui.spacing_mut().item_spacing.x = 4.0;
 
-                                // Bypass dot — animated pulse when active
+                                // Bypass toggle — smooth animated circle with green glow
                                 let (dot_rect, dot_resp) = ui.allocate_exact_size(
-                                    egui::vec2(12.0, 18.0),
+                                    egui::vec2(14.0, 20.0),
                                     egui::Sense::click(),
                                 );
                                 if is_enabled {
-                                    // Pulsing glow for active effects
-                                    let pulse = (ui.input(|i| i.time) * 1.8).sin() as f32 * 0.15 + 0.85;
-                                    let glow_alpha = (40.0 * pulse) as u8;
-                                    ui.painter().circle_filled(dot_rect.center(), 5.5, egui::Color32::from_rgba_premultiplied(80, 200, 80, glow_alpha));
-                                    ui.painter().circle_filled(dot_rect.center(), 3.5, egui::Color32::from_rgb(80, 200, 80));
+                                    // Smooth animated glow for active
+                                    let pulse = (ui.input(|i| i.time) * 1.6).sin() as f32 * 0.12 + 0.88;
+                                    let glow_alpha = (35.0 * pulse) as u8;
+                                    ui.painter().circle_filled(dot_rect.center(), 7.0, egui::Color32::from_rgba_premultiplied(60, 200, 80, glow_alpha));
+                                    ui.painter().circle_filled(dot_rect.center(), 4.5, egui::Color32::from_rgb(60, 210, 80));
+                                    ui.painter().circle_filled(dot_rect.center(), 2.5, egui::Color32::from_rgb(120, 240, 140));
                                     ui.ctx().request_repaint();
                                 } else {
-                                    ui.painter().circle_filled(dot_rect.center(), 3.5, egui::Color32::from_rgb(80, 80, 90));
+                                    ui.painter().circle_filled(dot_rect.center(), 4.5, egui::Color32::from_rgb(60, 60, 72));
+                                    ui.painter().circle_stroke(dot_rect.center(), 4.5, egui::Stroke::new(0.5, egui::Color32::from_rgb(80, 80, 95)));
                                 }
                                 if dot_resp.on_hover_text("Toggle bypass").clicked() {
                                     slot.enabled = !slot.enabled;
@@ -173,17 +184,17 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                     bypass_toggled_slot = Some(i);
                                 }
 
-                                // Clickable name — slightly larger for premium feel
+                                // Clickable name — larger for premium feel (13px)
                                 let name_color = if !is_enabled {
-                                    egui::Color32::from_rgb(100, 100, 110)
+                                    egui::Color32::from_rgb(90, 90, 105)
                                 } else if is_open {
-                                    egui::Color32::from_rgb(130, 190, 255)
+                                    egui::Color32::from_rgb(120, 185, 255)
                                 } else {
-                                    egui::Color32::from_rgb(215, 215, 220)
+                                    egui::Color32::from_rgb(220, 220, 228)
                                 };
                                 let resp = ui.add(
                                     egui::Button::new(
-                                        egui::RichText::new(&name).size(12.5).color(name_color),
+                                        egui::RichText::new(&name).size(13.0).color(name_color),
                                     )
                                     .frame(false),
                                 );
@@ -311,21 +322,22 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                 }
             }
 
-            // --- Add FX --- prominent centered button
-            ui.add_space(6.0);
+            // --- Add FX --- prominent centered button with + icon
+            ui.add_space(8.0);
             ui.separator();
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             ui.vertical_centered(|ui| {
                 if ui.add_sized(
-                    [ui.available_width() - 16.0, 28.0],
+                    [ui.available_width() - 12.0, 32.0],
                     egui::Button::new(
-                        egui::RichText::new("\u{2795}  Add FX")
-                            .size(12.5)
-                            .color(egui::Color32::from_rgb(180, 180, 200)),
+                        egui::RichText::new("+   Add FX")
+                            .size(13.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(190, 190, 210)),
                     )
-                    .fill(egui::Color32::from_rgb(36, 38, 48))
-                    .corner_radius(8.0)
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(55, 55, 68))),
+                    .fill(egui::Color32::from_rgb(32, 34, 46))
+                    .corner_radius(10.0)
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(52, 54, 68))),
                 ).clicked() {
                     app.fx_browser.show = true;
                 }

@@ -34,76 +34,84 @@ use uuid::Uuid;
 use session_panel::SessionPanel;
 use undo::UndoManager;
 
-/// Draw a compact rounded info pill in the status bar.
+/// Draw a compact rounded info pill in the status bar with a colored indicator dot.
 fn status_pill(ui: &mut egui::Ui, text: &str, color: egui::Color32, highlight: bool) {
     let pill_bg = if highlight {
         egui::Color32::from_rgba_premultiplied(color.r() / 4, color.g() / 4, color.b() / 4, 80)
     } else {
-        egui::Color32::from_rgb(28, 28, 34)
+        egui::Color32::from_rgb(22, 22, 28)
     };
     egui::Frame::default()
         .fill(pill_bg)
-        .inner_margin(egui::Margin::symmetric(6, 1))
-        .corner_radius(8.0)
-        .stroke(egui::Stroke::new(0.5, egui::Color32::from_rgb(44, 44, 52)))
+        .inner_margin(egui::Margin::symmetric(7, 2))
+        .corner_radius(10.0)
+        .stroke(egui::Stroke::new(0.5, egui::Color32::from_rgb(40, 40, 50)))
         .show(ui, |ui| {
-            ui.label(egui::RichText::new(text).size(9.5).color(color));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                // Colored indicator dot
+                let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
+                ui.painter().circle_filled(dot_rect.center(), 3.0, color);
+                ui.label(egui::RichText::new(text).size(10.0).color(color));
+            });
         });
 }
 
 fn setup_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
 
-    // Modern creative DAW theme — warm darks, vibrant accents, colorful and alive
-    let bg = egui::Color32::from_rgb(18, 18, 22);          // deepest background
-    let panel_bg = egui::Color32::from_rgb(24, 25, 30);    // panel surfaces
-    let widget_bg = egui::Color32::from_rgb(34, 35, 42);   // widget backgrounds
-    let widget_hover = egui::Color32::from_rgb(46, 48, 58); // hover state — visible lift
-    let widget_active = egui::Color32::from_rgb(56, 58, 70); // active/pressed
-    let accent = egui::Color32::from_rgb(235, 180, 60);    // warm amber/gold — primary accent
+    // Ultra-modern dark theme — deep rich backgrounds with warm blue/purple undertones
+    let bg = egui::Color32::from_rgb(17, 17, 20);          // #111114 — deepest background
+    let panel_bg = egui::Color32::from_rgb(24, 25, 30);    // #18191E — panel surfaces
+    let _surface = egui::Color32::from_rgb(31, 32, 40);    // #1F2028 — elevated surfaces
+    let widget_bg = egui::Color32::from_rgb(38, 39, 48);   // warm charcoal with blue undertone
+    let widget_hover = egui::Color32::from_rgb(50, 52, 64); // hover state — visible lift
+    let widget_active = egui::Color32::from_rgb(62, 64, 78); // active/pressed
+    let accent = egui::Color32::from_rgb(240, 192, 64);    // #F0C040 — warm gold primary accent
     let selection = egui::Color32::from_rgb(80, 200, 190);  // soft teal — selection/highlights
-    let text = egui::Color32::from_rgb(232, 230, 226);     // warm white
-    let text_dim = egui::Color32::from_rgb(140, 138, 132); // secondary text
+    let text = egui::Color32::from_rgb(238, 236, 232);     // warm white — high contrast
+    let text_dim = egui::Color32::from_rgb(128, 126, 135); // secondary text with purple undertone
 
     visuals.panel_fill = panel_bg;
     visuals.window_fill = egui::Color32::from_rgb(22, 23, 28);
     visuals.extreme_bg_color = bg;
-    visuals.faint_bg_color = egui::Color32::from_rgb(28, 29, 34);
+    visuals.faint_bg_color = egui::Color32::from_rgb(26, 27, 33);
 
-    // Widget styles — pill-shaped corners, smooth hover transitions
+    // Widget styles — refined corners, smooth hover transitions
     visuals.widgets.noninteractive.bg_fill = panel_bg;
     visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_dim);
-    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(10);
 
     visuals.widgets.inactive.bg_fill = widget_bg;
     visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text);
-    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
     visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
 
     visuals.widgets.hovered.bg_fill = widget_hover;
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.45));
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.50));
     visuals.widgets.hovered.expansion = 1.0; // subtle grow on hover
 
     visuals.widgets.active.bg_fill = widget_active;
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.active.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(6);
 
     visuals.widgets.open.bg_fill = widget_hover;
     visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.open.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.open.corner_radius = egui::CornerRadius::same(6);
 
     visuals.selection.bg_fill = selection.gamma_multiply(0.22);
     visuals.selection.stroke = egui::Stroke::new(1.5, selection);
 
     visuals.window_shadow = egui::epaint::Shadow {
-        offset: [0, 8],
-        blur: 20,
-        spread: 2,
-        color: egui::Color32::from_black_alpha(110),
+        offset: [0, 6],
+        blur: 24,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(60),
     };
-    visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(42, 43, 50));
+    visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 39, 48));
+    visuals.window_corner_radius = egui::CornerRadius::same(10);
 
     ctx.set_visuals(visuals);
 
@@ -113,22 +121,22 @@ fn setup_theme(ctx: &egui::Context) {
     style.spacing.button_padding = egui::vec2(12.0, 6.0);
     style.spacing.window_margin = egui::Margin::same(14);
     style.spacing.scroll = egui::style::ScrollStyle {
-        bar_width: 6.0,
-        handle_min_length: 20.0,
-        bar_inner_margin: 2.0,
+        bar_width: 3.0,
+        handle_min_length: 24.0,
+        bar_inner_margin: 1.0,
         bar_outer_margin: 1.0,
         floating: true,
         ..style.spacing.scroll
     };
 
-    // Larger default font sizes
+    // Premium font sizes — larger body, spacious headings
     use egui::FontId;
     use egui::TextStyle;
-    style.text_styles.insert(TextStyle::Body, FontId::proportional(13.5));
-    style.text_styles.insert(TextStyle::Heading, FontId::proportional(19.0));
-    style.text_styles.insert(TextStyle::Button, FontId::proportional(13.5));
+    style.text_styles.insert(TextStyle::Body, FontId::proportional(14.0));
+    style.text_styles.insert(TextStyle::Heading, FontId::proportional(20.0));
+    style.text_styles.insert(TextStyle::Button, FontId::proportional(14.0));
     style.text_styles.insert(TextStyle::Small, FontId::proportional(11.0));
-    style.text_styles.insert(TextStyle::Monospace, FontId::monospace(13.0));
+    style.text_styles.insert(TextStyle::Monospace, FontId::monospace(13.5));
 
     ctx.set_style(style);
 }
@@ -136,42 +144,43 @@ fn setup_theme(ctx: &egui::Context) {
 fn apply_theme(ctx: &egui::Context, theme: ThemeChoice) {
     let mut visuals = egui::Visuals::dark();
 
+    // Ultra-modern palette — warm charcoal with blue/purple undertones, no flat grays
     let (bg, panel_bg, widget_bg, widget_hover, widget_active, accent, text, text_dim, win_fill, win_stroke_col) = match theme {
         ThemeChoice::Dark => (
-            egui::Color32::from_rgb(18, 18, 22),
-            egui::Color32::from_rgb(24, 25, 30),
-            egui::Color32::from_rgb(34, 35, 42),
-            egui::Color32::from_rgb(46, 48, 58),
-            egui::Color32::from_rgb(56, 58, 70),
-            egui::Color32::from_rgb(235, 180, 60),
-            egui::Color32::from_rgb(232, 230, 226),
-            egui::Color32::from_rgb(140, 138, 132),
+            egui::Color32::from_rgb(17, 17, 20),      // #111114
+            egui::Color32::from_rgb(24, 25, 30),      // #18191E
+            egui::Color32::from_rgb(38, 39, 48),      // warm charcoal + blue
+            egui::Color32::from_rgb(50, 52, 64),      // hover lift
+            egui::Color32::from_rgb(62, 64, 78),      // active/pressed
+            egui::Color32::from_rgb(240, 192, 64),    // #F0C040 warm gold
+            egui::Color32::from_rgb(238, 236, 232),   // warm white
+            egui::Color32::from_rgb(128, 126, 135),   // purple-tinted dim
             egui::Color32::from_rgb(22, 23, 28),
-            egui::Color32::from_rgb(42, 43, 50),
+            egui::Color32::from_rgb(38, 39, 48),
         ),
         ThemeChoice::Darker => (
-            egui::Color32::from_rgb(14, 14, 18),
-            egui::Color32::from_rgb(20, 21, 26),
-            egui::Color32::from_rgb(30, 31, 38),
-            egui::Color32::from_rgb(40, 42, 52),
-            egui::Color32::from_rgb(50, 52, 64),
-            egui::Color32::from_rgb(220, 165, 50),
-            egui::Color32::from_rgb(220, 218, 214),
-            egui::Color32::from_rgb(130, 128, 122),
-            egui::Color32::from_rgb(18, 18, 24),
-            egui::Color32::from_rgb(36, 37, 44),
+            egui::Color32::from_rgb(13, 13, 17),
+            egui::Color32::from_rgb(19, 20, 26),
+            egui::Color32::from_rgb(32, 33, 42),
+            egui::Color32::from_rgb(44, 46, 58),
+            egui::Color32::from_rgb(54, 56, 70),
+            egui::Color32::from_rgb(230, 180, 55),
+            egui::Color32::from_rgb(228, 226, 222),
+            egui::Color32::from_rgb(118, 116, 125),
+            egui::Color32::from_rgb(17, 17, 23),
+            egui::Color32::from_rgb(34, 35, 44),
         ),
         ThemeChoice::Midnight => (
             egui::Color32::from_rgb(8, 8, 14),
             egui::Color32::from_rgb(12, 13, 20),
-            egui::Color32::from_rgb(22, 23, 34),
-            egui::Color32::from_rgb(34, 36, 48),
-            egui::Color32::from_rgb(44, 46, 60),
-            egui::Color32::from_rgb(210, 160, 50),
-            egui::Color32::from_rgb(200, 198, 195),
-            egui::Color32::from_rgb(115, 112, 108),
+            egui::Color32::from_rgb(24, 25, 36),
+            egui::Color32::from_rgb(36, 38, 52),
+            egui::Color32::from_rgb(46, 48, 64),
+            egui::Color32::from_rgb(220, 170, 50),
+            egui::Color32::from_rgb(210, 208, 205),
+            egui::Color32::from_rgb(108, 106, 118),
             egui::Color32::from_rgb(14, 14, 24),
-            egui::Color32::from_rgb(28, 30, 40),
+            egui::Color32::from_rgb(28, 30, 42),
         ),
     };
 
@@ -186,47 +195,48 @@ fn apply_theme(ctx: &egui::Context, theme: ThemeChoice) {
 
     visuals.widgets.noninteractive.bg_fill = panel_bg;
     visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_dim);
-    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(10);
 
     visuals.widgets.inactive.bg_fill = widget_bg;
     visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text);
-    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
     visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
 
     visuals.widgets.hovered.bg_fill = widget_hover;
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.45));
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent.gamma_multiply(0.50));
     visuals.widgets.hovered.expansion = 1.0;
 
     visuals.widgets.active.bg_fill = widget_active;
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.active.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(6);
 
     visuals.widgets.open.bg_fill = widget_hover;
     visuals.widgets.open.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    visuals.widgets.open.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.open.corner_radius = egui::CornerRadius::same(6);
 
     let teal = egui::Color32::from_rgb(80, 200, 190);
     visuals.selection.bg_fill = teal.gamma_multiply(0.22);
     visuals.selection.stroke = egui::Stroke::new(1.5, teal);
 
     visuals.window_shadow = egui::epaint::Shadow {
-        offset: [0, 8],
-        blur: 20,
-        spread: 2,
-        color: egui::Color32::from_black_alpha(110),
+        offset: [0, 6],
+        blur: 24,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(60),
     };
     visuals.window_stroke = egui::Stroke::new(1.0, win_stroke_col);
+    visuals.window_corner_radius = egui::CornerRadius::same(10);
 
     ctx.set_visuals(visuals);
 
-    // Scrollbar styling — thin, floating, rounded
+    // Scrollbar styling — ultra-thin floating, invisible until hover
     let mut style = (*ctx.style()).clone();
     style.spacing.scroll = egui::style::ScrollStyle {
-        bar_width: 6.0,
-        handle_min_length: 20.0,
-        bar_inner_margin: 2.0,
+        bar_width: 3.0,
+        handle_min_length: 24.0,
+        bar_inner_margin: 1.0,
         bar_outer_margin: 1.0,
         floating: true,
         ..style.spacing.scroll
@@ -5193,16 +5203,30 @@ impl eframe::App for DawApp {
         // Macro controls panel (below transport)
         midi_mapping::show_macro_panel(self, ctx);
 
-        // Status bar — premium, spacious, with info pills
+        // Status bar — premium, spacious, glass-effect with info pills
         egui::TopBottomPanel::bottom("status_bar")
             .frame(egui::Frame::default()
-                .fill(egui::Color32::from_rgb(20, 20, 25))
-                .inner_margin(egui::Margin::symmetric(10, 4))
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(36, 36, 44)))
+                .fill(egui::Color32::from_rgb(17, 17, 21))
+                .inner_margin(egui::Margin::symmetric(12, 5))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(32, 33, 42)))
             )
-            .exact_height(24.0)
+            .exact_height(28.0)
             .show(ctx, |ui| {
             ui.horizontal(|ui| {
+                // JamHub wordmark at far left
+                ui.label(
+                    egui::RichText::new("JamHub")
+                        .size(10.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(240, 192, 64)),
+                );
+                ui.add_space(6.0);
+
+                // Thin separator
+                let (sep_rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 14.0), egui::Sense::hover());
+                ui.painter().rect_filled(sep_rect, 0.0, egui::Color32::from_rgb(40, 40, 50));
+                ui.add_space(6.0);
+
                 // Bounce progress indicator
                 if let Some(progress) = self.bounce_progress {
                     let pct = (progress * 100.0) as u32;
@@ -5210,7 +5234,7 @@ impl eframe::App for DawApp {
                         .size(10.5).color(egui::Color32::from_rgb(100, 180, 255)));
                     let bar_width = 80.0;
                     let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(bar_width, 4.0), egui::Sense::hover());
-                    ui.painter().rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(40, 40, 50));
+                    ui.painter().rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(36, 36, 46));
                     let filled = egui::Rect::from_min_size(bar_rect.min, egui::vec2(bar_width * progress, 4.0));
                     ui.painter().rect_filled(filled, 2.0, egui::Color32::from_rgb(80, 160, 255));
                 }
@@ -5225,7 +5249,7 @@ impl eframe::App for DawApp {
                             1.0 - ((elapsed - 4.0) / 3.0).min(1.0)
                         };
                         let a = (190.0 * alpha) as u8;
-                        ui.label(egui::RichText::new(msg).size(10.5).color(egui::Color32::from_rgba_premultiplied(180, 180, 190, a)));
+                        ui.label(egui::RichText::new(msg).size(10.5).color(egui::Color32::from_rgba_premultiplied(180, 180, 195, a)));
                         if elapsed >= 4.0 && elapsed < 7.0 {
                             ui.ctx().request_repaint(); // animate fade
                         }
@@ -5244,21 +5268,21 @@ impl eframe::App for DawApp {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.spacing_mut().item_spacing.x = 5.0;
 
-                    // Memory pill
+                    // Memory pill — purple dot
                     let total_samples: usize = self.audio_buffers.values().map(|b| b.len()).sum();
                     let mem_mb = (total_samples * 4) as f64 / (1024.0 * 1024.0);
-                    status_pill(ui, &format!("{mem_mb:.1}MB"), egui::Color32::from_rgb(120, 118, 112), false);
+                    status_pill(ui, &format!("{mem_mb:.1}MB"), egui::Color32::from_rgb(160, 130, 200), false);
 
-                    // CPU pill
+                    // CPU pill — color-coded dot (green/yellow/red)
                     let cpu_pct = self.cpu_usage * 100.0;
                     let cpu_color = if cpu_pct > 80.0 {
                         egui::Color32::from_rgb(255, 80, 80)
                     } else if cpu_pct > 50.0 {
-                        egui::Color32::from_rgb(220, 180, 60)
+                        egui::Color32::from_rgb(240, 192, 64)
                     } else {
-                        egui::Color32::from_rgb(80, 180, 100)
+                        egui::Color32::from_rgb(80, 200, 100)
                     };
                     status_pill(ui, &format!("CPU {cpu_pct:.0}%"), cpu_color, false);
 
@@ -5267,19 +5291,19 @@ impl eframe::App for DawApp {
                     let snap_color = if self.snap_mode != SnapMode::Off {
                         egui::Color32::from_rgb(100, 170, 255)
                     } else {
-                        egui::Color32::from_rgb(100, 98, 94)
+                        egui::Color32::from_rgb(90, 88, 98)
                     };
                     status_pill(ui, &snap_label, snap_color, self.snap_mode != SnapMode::Off);
 
-                    // Tracks pill
-                    status_pill(ui, &format!("{} tracks", self.project.tracks.len()), egui::Color32::from_rgb(120, 118, 112), false);
+                    // Tracks pill — green dot
+                    status_pill(ui, &format!("{} tracks", self.project.tracks.len()), egui::Color32::from_rgb(80, 200, 130), false);
 
-                    // Sample rate pill
+                    // Sample rate pill — blue dot
                     let sr = self.sample_rate();
-                    status_pill(ui, &format!("{:.1}kHz", sr as f64 / 1000.0), egui::Color32::from_rgb(120, 118, 112), false);
+                    status_pill(ui, &format!("{:.1}kHz", sr as f64 / 1000.0), egui::Color32::from_rgb(100, 160, 240), false);
 
                     // Grid pill
-                    status_pill(ui, &format!("Grid: {}", self.grid_division.label()), egui::Color32::from_rgb(120, 118, 112), false);
+                    status_pill(ui, &format!("Grid: {}", self.grid_division.label()), egui::Color32::from_rgb(140, 130, 160), false);
                 });
             });
         });

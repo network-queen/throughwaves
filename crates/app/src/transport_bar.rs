@@ -10,25 +10,34 @@ const TIME_SIG_PRESETS: &[(u8, u8)] = &[
 ];
 
 pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
+    // Frosted glass transport bar background
+    let transport_rect = ui.max_rect();
+    ui.painter().rect_filled(transport_rect, 0.0, egui::Color32::from_rgba_premultiplied(28, 29, 36, 220));
+    // Subtle top highlight line for glass effect
+    ui.painter().line_segment(
+        [transport_rect.left_top(), transport_rect.right_top()],
+        egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(255, 255, 255, 8)),
+    );
+
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 5.0;
         let state = app.transport_state();
 
-        // === TRANSPORT BUTTONS — circular, larger, prominent ===
-        let small_btn = egui::vec2(32.0, 32.0);
-        let big_btn = egui::vec2(40.0, 40.0);
-        let small_r = 15.0;
-        let big_r = 19.0;
+        // === TRANSPORT BUTTONS — cinematic, 48px circles ===
+        let small_btn = egui::vec2(36.0, 36.0);
+        let big_btn = egui::vec2(48.0, 48.0);
+        let small_r = 17.0;
+        let big_r = 23.0;
 
         // RTZ — return to zero
         let rtz_rect = ui.allocate_space(small_btn).1;
         let rtz_resp = ui.interact(rtz_rect, ui.id().with("rtz"), egui::Sense::click());
-        ui.painter().circle_filled(rtz_rect.center(), small_r, egui::Color32::from_rgb(36, 37, 44));
+        ui.painter().circle_filled(rtz_rect.center(), small_r, egui::Color32::from_rgb(32, 33, 42));
         if rtz_resp.hovered() {
-            ui.painter().circle_filled(rtz_rect.center(), small_r, egui::Color32::from_rgb(44, 45, 54));
-            ui.painter().circle_stroke(rtz_rect.center(), small_r, egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 180, 60)));
+            ui.painter().circle_filled(rtz_rect.center(), small_r, egui::Color32::from_rgb(42, 44, 56));
+            ui.painter().circle_stroke(rtz_rect.center(), small_r, egui::Stroke::new(1.5, egui::Color32::from_rgb(240, 192, 64)));
         }
-        ui.painter().text(rtz_rect.center(), egui::Align2::CENTER_CENTER, "RTZ", egui::FontId::proportional(10.0), egui::Color32::from_rgb(200, 198, 194));
+        ui.painter().text(rtz_rect.center(), egui::Align2::CENTER_CENTER, "RTZ", egui::FontId::proportional(10.0), egui::Color32::from_rgb(190, 188, 195));
         if rtz_resp.on_hover_text("Return to zero [Home]").clicked() {
             app.send_command(EngineCommand::SetPosition(0));
             app.scroll_x = 0.0;
@@ -37,72 +46,97 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         // Rewind
         let rewind_rect = ui.allocate_space(small_btn).1;
         let rewind_resp = ui.interact(rewind_rect, ui.id().with("rewind"), egui::Sense::click());
-        ui.painter().circle_filled(rewind_rect.center(), small_r, egui::Color32::from_rgb(36, 37, 44));
+        ui.painter().circle_filled(rewind_rect.center(), small_r, egui::Color32::from_rgb(32, 33, 42));
         if rewind_resp.hovered() {
-            ui.painter().circle_filled(rewind_rect.center(), small_r, egui::Color32::from_rgb(44, 45, 54));
-            ui.painter().circle_stroke(rewind_rect.center(), small_r, egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 180, 60)));
+            ui.painter().circle_filled(rewind_rect.center(), small_r, egui::Color32::from_rgb(42, 44, 56));
+            ui.painter().circle_stroke(rewind_rect.center(), small_r, egui::Stroke::new(1.5, egui::Color32::from_rgb(240, 192, 64)));
         }
-        ui.painter().text(rewind_rect.center(), egui::Align2::CENTER_CENTER, "\u{23EE}", egui::FontId::proportional(16.0), egui::Color32::from_rgb(230, 228, 224));
+        ui.painter().text(rewind_rect.center(), egui::Align2::CENTER_CENTER, "\u{23EE}", egui::FontId::proportional(18.0), egui::Color32::from_rgb(230, 228, 224));
         if rewind_resp.on_hover_text("Rewind to start [Home]").clicked() {
             app.send_command(EngineCommand::SetPosition(0));
         }
 
-        // Stop
+        // Subtle divider between nav and playback
+        let (div_rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 32.0), egui::Sense::hover());
+        ui.painter().rect_filled(div_rect, 0.0, egui::Color32::from_rgb(38, 39, 48));
+
+        // Stop — white square icon on dark circle
         let stop_active = state == TransportState::Stopped;
-        let stop_rect = ui.allocate_space(small_btn).1;
+        let stop_rect = ui.allocate_space(big_btn).1;
         let stop_resp = ui.interact(stop_rect, ui.id().with("stop"), egui::Sense::click());
-        let stop_bg = if stop_active { egui::Color32::from_rgb(62, 64, 78) } else { egui::Color32::from_rgb(36, 37, 44) };
-        ui.painter().circle_filled(stop_rect.center(), small_r, stop_bg);
+        let stop_bg = if stop_active { egui::Color32::from_rgb(52, 54, 68) } else { egui::Color32::from_rgb(32, 33, 42) };
+        ui.painter().circle_filled(stop_rect.center(), big_r, stop_bg);
         if stop_resp.hovered() {
-            ui.painter().circle_filled(stop_rect.center(), small_r, egui::Color32::from_rgb(48, 50, 60));
-            ui.painter().circle_stroke(stop_rect.center(), small_r, egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 180, 60)));
+            ui.painter().circle_filled(stop_rect.center(), big_r, egui::Color32::from_rgb(46, 48, 62));
+            ui.painter().circle_stroke(stop_rect.center(), big_r, egui::Stroke::new(1.5, egui::Color32::from_rgb(240, 192, 64)));
         }
-        ui.painter().text(stop_rect.center(), egui::Align2::CENTER_CENTER, "\u{23F9}", egui::FontId::proportional(16.0), egui::Color32::WHITE);
+        // Draw a proper white square icon
+        let sq_size = 10.0;
+        let sq_rect = egui::Rect::from_center_size(stop_rect.center(), egui::vec2(sq_size, sq_size));
+        ui.painter().rect_filled(sq_rect, 2.0, egui::Color32::WHITE);
         if stop_resp.on_hover_text("Stop playback").clicked() {
             app.send_command(EngineCommand::Stop);
         }
 
-        // Play — large green/amber circle
+        // Play — large bright green gradient circle with white triangle
         let playing = state == TransportState::Playing;
         let play_rect = ui.allocate_space(big_btn).1;
         let play_resp = ui.interact(play_rect, ui.id().with("play"), egui::Sense::click());
-        let play_bg = if playing { egui::Color32::from_rgb(235, 180, 60) } else { egui::Color32::from_rgb(80, 200, 80) };
-        // Subtle glow when playing
+        let play_bg = if playing {
+            egui::Color32::from_rgb(60, 210, 90)  // bright green when active
+        } else {
+            egui::Color32::from_rgb(50, 170, 70)  // medium green idle
+        };
+        // Glow when playing
         if playing {
-            ui.painter().circle_filled(play_rect.center(), big_r + 3.0, egui::Color32::from_rgba_premultiplied(235, 180, 60, 35));
+            ui.painter().circle_filled(play_rect.center(), big_r + 5.0, egui::Color32::from_rgba_premultiplied(60, 210, 90, 30));
+            ui.painter().circle_filled(play_rect.center(), big_r + 3.0, egui::Color32::from_rgba_premultiplied(60, 210, 90, 20));
         }
         ui.painter().circle_filled(play_rect.center(), big_r, play_bg);
         if play_resp.hovered() {
             ui.painter().circle_stroke(play_rect.center(), big_r, egui::Stroke::new(2.0, egui::Color32::WHITE));
         }
-        ui.painter().text(play_rect.center(), egui::Align2::CENTER_CENTER, "\u{25B6}", egui::FontId::proportional(18.0), egui::Color32::WHITE);
+        // White triangle icon
+        let tri_size = 11.0;
+        let cx = play_rect.center().x + 1.5; // slight offset for optical centering
+        let cy = play_rect.center().y;
+        let p1 = egui::pos2(cx - tri_size * 0.5, cy - tri_size * 0.6);
+        let p2 = egui::pos2(cx - tri_size * 0.5, cy + tri_size * 0.6);
+        let p3 = egui::pos2(cx + tri_size * 0.6, cy);
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![p1, p2, p3],
+            egui::Color32::WHITE,
+            egui::Stroke::NONE,
+        ));
         if play_resp.on_hover_text("Play [Space]").clicked() {
             app.send_command(EngineCommand::Play);
         }
 
-        // Record — large red circle, pulsing glow when recording
+        // Record — deep red with pulse glow animation
         let rec_rect = ui.allocate_space(big_btn).1;
         let rec_resp = ui.interact(rec_rect, ui.id().with("record"), egui::Sense::click());
         let rec_bg = if app.is_recording {
-            // Pulsing red — animate brightness
-            let pulse = (ui.input(|i| i.time) * 2.5).sin() as f32 * 0.18 + 0.82;
-            let r = (232.0 * pulse) as u8;
-            egui::Color32::from_rgb(r, 30, 30)
+            // Pulsing deep red
+            let pulse = (ui.input(|i| i.time) * 2.5).sin() as f32 * 0.15 + 0.85;
+            let r = (200.0 * pulse) as u8;
+            egui::Color32::from_rgb(r, 25, 30)
         } else {
-            egui::Color32::from_rgb(36, 37, 44)
+            egui::Color32::from_rgb(32, 33, 42)
         };
-        // Pulsing outer glow when recording
+        // Pulsing outer glow when recording — multi-layer
         if app.is_recording {
             let glow_pulse = (ui.input(|i| i.time) * 2.5).sin() as f32 * 0.3 + 0.7;
-            let glow_alpha = (50.0 * glow_pulse) as u8;
-            ui.painter().circle_filled(rec_rect.center(), big_r + 4.0, egui::Color32::from_rgba_premultiplied(232, 50, 50, glow_alpha));
+            let glow_alpha1 = (40.0 * glow_pulse) as u8;
+            let glow_alpha2 = (25.0 * glow_pulse) as u8;
+            ui.painter().circle_filled(rec_rect.center(), big_r + 6.0, egui::Color32::from_rgba_premultiplied(220, 40, 40, glow_alpha2));
+            ui.painter().circle_filled(rec_rect.center(), big_r + 4.0, egui::Color32::from_rgba_premultiplied(220, 40, 40, glow_alpha1));
         }
         ui.painter().circle_filled(rec_rect.center(), big_r, rec_bg);
         if rec_resp.hovered() {
             ui.painter().circle_stroke(rec_rect.center(), big_r, egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 80, 80)));
         }
-        let rec_dot_color = if app.is_recording { egui::Color32::WHITE } else { egui::Color32::from_rgb(232, 80, 80) };
-        ui.painter().circle_filled(rec_rect.center(), 7.0, rec_dot_color);
+        let rec_dot_color = if app.is_recording { egui::Color32::WHITE } else { egui::Color32::from_rgb(220, 70, 70) };
+        ui.painter().circle_filled(rec_rect.center(), 8.0, rec_dot_color);
         if rec_resp.on_hover_text("Record [R]\nRecords onto the selected track").clicked() {
             app.toggle_recording();
         }
@@ -110,10 +144,14 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             ui.ctx().request_repaint(); // keep pulsing
         }
 
-        ui.add_space(8.0);
+        // Divider between transport and toggles
+        let (div_rect2, _) = ui.allocate_exact_size(egui::vec2(1.0, 32.0), egui::Sense::hover());
+        ui.painter().rect_filled(div_rect2, 0.0, egui::Color32::from_rgb(38, 39, 48));
 
-        // === TOGGLE STRIP — rounded pill buttons ===
-        let ts = egui::vec2(28.0, 22.0);
+        ui.add_space(4.0);
+
+        // === TOGGLE STRIP — rounded pill buttons (20px radius) ===
+        let ts = egui::vec2(30.0, 24.0);
 
         // Metronome toggle with right-click settings popup
         {
@@ -233,7 +271,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
-        // === TIME DISPLAY — recessed panel with monospace font ===
+        // === TIME DISPLAY — glass-effect container with monospace font ===
         let pos = app.position_samples();
         let sr = app.sample_rate();
         let seconds = pos as f64 / sr as f64;
@@ -247,35 +285,45 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         let tick_frac = beat - beat.floor();
         let ticks = (tick_frac * ticks_per_beat as f64) as u32;
 
+        // Glass-effect time display container
         egui::Frame::default()
-            .fill(egui::Color32::from_rgb(12, 12, 16))
-            .inner_margin(egui::Margin::symmetric(14, 5))
-            .corner_radius(8.0)
-            .stroke(egui::Stroke::new(1.5, egui::Color32::from_rgb(40, 40, 50)))
+            .fill(egui::Color32::from_rgba_premultiplied(10, 10, 14, 200))
+            .inner_margin(egui::Margin::symmetric(16, 6))
+            .corner_radius(10.0)
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(60, 62, 78, 120)))
             .show(ui, |ui| {
+                // Subtle inner top highlight for glass feel
+                let frame_rect = ui.max_rect();
+                ui.painter().line_segment(
+                    [egui::pos2(frame_rect.left() + 4.0, frame_rect.top()), egui::pos2(frame_rect.right() - 4.0, frame_rect.top())],
+                    egui::Stroke::new(0.5, egui::Color32::from_rgba_premultiplied(255, 255, 255, 12)),
+                );
+
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 14.0;
+                    ui.spacing_mut().item_spacing.x = 16.0;
 
                     // Count-in countdown overlay
                     if let Some(beats_left) = app.count_in_beats_remaining {
                         ui.monospace(
                             egui::RichText::new(format!("{beats_left}..."))
-                                .size(18.0)
+                                .size(20.0)
                                 .strong()
                                 .color(egui::Color32::from_rgb(255, 100, 80)),
                         );
                     } else {
-                        // MM:SS.ms format
+                        // MM:SS.ms format — proper monospace with letter-spacing
                         ui.monospace(
                             egui::RichText::new(format!("{minutes:02}:{:02}.{millis:03}", secs as u32))
-                                .size(16.0)
-                                .color(egui::Color32::from_rgb(100, 220, 140)),
+                                .size(18.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(80, 220, 140)),
                         );
                         // Bars.Beats.Ticks format
                         ui.monospace(
                             egui::RichText::new(format!("{bar}.{beat_in_bar}.{ticks:03}"))
-                                .size(16.0)
-                                .color(egui::Color32::from_rgb(235, 200, 100)),
+                                .size(18.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(240, 200, 90)),
                         );
                     }
 
@@ -307,12 +355,12 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
 
-                // BPM in a recessed pill container
+                // BPM in a glass-effect container — larger, bolder
                 egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(18, 18, 24))
-                    .inner_margin(egui::Margin::symmetric(10, 3))
-                    .corner_radius(12.0)
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(42, 42, 52)))
+                    .fill(egui::Color32::from_rgba_premultiplied(14, 14, 20, 200))
+                    .inner_margin(egui::Margin::symmetric(12, 5))
+                    .corner_radius(10.0)
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(55, 56, 68, 140)))
                     .show(ui, |ui| {
                         let mut bpm = app.project.tempo.bpm;
                         if ui.add(egui::DragValue::new(&mut bpm).range(20.0..=300.0).speed(0.5).suffix(" bpm"))
@@ -435,9 +483,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
             ui.label(
                 egui::RichText::new("JamHub")
-                    .size(17.0)
+                    .size(18.0)
                     .strong()
-                    .color(egui::Color32::from_rgb(235, 180, 60)),
+                    .color(egui::Color32::from_rgb(240, 192, 64)),
             );
         });
     });
@@ -452,12 +500,18 @@ fn toggle_pill(
     tooltip: &str,
     mut on_click: impl FnMut(),
 ) {
-    let bg = if active { active_color } else { egui::Color32::from_rgb(32, 33, 40) };
-    let text_color = if active { egui::Color32::WHITE } else { egui::Color32::from_rgb(145, 142, 138) };
+    let bg = if active { active_color } else { egui::Color32::from_rgb(30, 31, 40) };
+    let text_color = if active { egui::Color32::WHITE } else { egui::Color32::from_rgb(140, 138, 148) };
+    let stroke = if active {
+        egui::Stroke::NONE
+    } else {
+        egui::Stroke::new(0.5, egui::Color32::from_rgb(48, 50, 62))
+    };
     if ui.add_sized(size, egui::Button::new(
-        egui::RichText::new(label).size(11.0).color(text_color))
+        egui::RichText::new(label).size(11.0).strong().color(text_color))
         .fill(bg)
-        .corner_radius(11.0))
+        .corner_radius(20.0)
+        .stroke(stroke))
         .on_hover_text(tooltip).clicked() {
         on_click();
     }

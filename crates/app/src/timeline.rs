@@ -477,33 +477,41 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             if ui.button("Delete").clicked() { track_actions.push(TrackAction::Delete(i)); ui.close_menu(); }
                         });
 
-                        // Background — warm dark with hover brightening; blue tint for frozen; red tint for armed
+                        // Background — warm charcoal with blue/purple undertones, hover brightening
                         let bg_response_hovered = bg_response.hovered();
                         let bg = if track.frozen {
                             if is_selected {
-                                egui::Color32::from_rgb(28, 38, 58)
+                                egui::Color32::from_rgb(26, 36, 56)
                             } else if bg_response_hovered {
-                                egui::Color32::from_rgb(30, 38, 55)
+                                egui::Color32::from_rgb(28, 36, 52)
                             } else {
-                                egui::Color32::from_rgb(22, 30, 45)
+                                egui::Color32::from_rgb(20, 28, 42)
                             }
                         } else if track.armed {
                             // Red tint for armed tracks
                             if is_selected {
-                                egui::Color32::from_rgb(46, 28, 32)
+                                egui::Color32::from_rgb(44, 26, 30)
                             } else if bg_response_hovered {
-                                egui::Color32::from_rgb(44, 30, 34)
+                                egui::Color32::from_rgb(42, 28, 32)
                             } else {
-                                egui::Color32::from_rgb(36, 22, 26)
+                                egui::Color32::from_rgb(34, 20, 24)
                             }
                         } else if is_selected {
-                            egui::Color32::from_rgb(36, 34, 46)
+                            egui::Color32::from_rgb(34, 32, 48)
                         } else if bg_response_hovered {
-                            egui::Color32::from_rgb(34, 35, 44)
+                            // Hover: 1px lighter background
+                            egui::Color32::from_rgb(32, 33, 44)
                         } else {
-                            egui::Color32::from_rgb(26, 27, 32)
+                            egui::Color32::from_rgb(24, 25, 32)
                         };
                         ui.painter().rect_filled(header_rect, 0.0, bg);
+                        // Hover highlight: subtle top edge glow
+                        if bg_response_hovered && !is_selected {
+                            ui.painter().line_segment(
+                                [header_rect.left_top(), header_rect.right_top()],
+                                egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(255, 255, 255, 6)),
+                            );
+                        }
 
                         // Group color bar on left for grouped tracks
                         if is_grouped {
@@ -523,20 +531,28 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             }
                         }
 
-                        // Thick 4px left accent stripe — vibrant saturated color
-                        // Selected track: amber/gold stripe; otherwise: vibrant track color
+                        // 5px left accent stripe with rounded top/bottom — vibrant saturated color
+                        // Selected track: gold stripe with left glow; otherwise: vibrant track color
                         let bar_offset_x = if is_grouped { GROUP_INDENT } else { 0.0 };
-                        let bar_w = 4.0;
+                        let bar_w = 5.0;
                         let bar_color = if is_selected {
-                            egui::Color32::from_rgb(235, 180, 60) // amber/gold for selected
+                            egui::Color32::from_rgb(240, 192, 64) // gold for selected
                         } else {
                             vibrant_color
                         };
                         let bar_rect = egui::Rect::from_min_size(
-                            egui::pos2(header_rect.min.x + bar_offset_x, header_rect.min.y),
-                            egui::vec2(bar_w, header_rect.height()),
+                            egui::pos2(header_rect.min.x + bar_offset_x, header_rect.min.y + 2.0),
+                            egui::vec2(bar_w, header_rect.height() - 4.0),
                         );
-                        ui.painter().rect_filled(bar_rect, 2.0, bar_color);
+                        ui.painter().rect_filled(bar_rect, 3.0, bar_color);
+                        // Selected track: subtle left glow
+                        if is_selected {
+                            let glow_rect = egui::Rect::from_min_size(
+                                egui::pos2(header_rect.min.x + bar_offset_x, header_rect.min.y),
+                                egui::vec2(12.0, header_rect.height()),
+                            );
+                            ui.painter().rect_filled(glow_rect, 0.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 12));
+                        }
 
                         ui.add_space(if is_grouped { GROUP_INDENT + bar_w + 4.0 } else { bar_w + 4.0 });
                         ui.vertical(|ui| {
@@ -559,7 +575,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 let type_color = match track.kind {
                                     TrackKind::Audio => egui::Color32::from_rgb(80, 200, 190),
                                     TrackKind::Midi => egui::Color32::from_rgb(160, 128, 224),
-                                    TrackKind::Bus => egui::Color32::from_rgb(235, 180, 60),
+                                    TrackKind::Bus => egui::Color32::from_rgb(240, 192, 64),
                                 };
                                 let type_bg = match track.kind {
                                     TrackKind::Audio => egui::Color32::from_rgb(30, 50, 48),
@@ -602,9 +618,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         let name_resp = ui.add(
                                             egui::Label::new(
                                                 egui::RichText::new(&track.name)
-                                                    .size(13.0)
+                                                    .size(14.0)
                                                     .strong()
-                                                    .color(egui::Color32::from_rgb(240, 238, 232))
+                                                    .color(egui::Color32::from_rgb(242, 240, 236))
                                             ).sense(egui::Sense::click())
                                         );
                                         // Underline on hover
@@ -660,34 +676,40 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 }
                             });
 
-                            // Row 2: M/S/R/FX buttons — circular toggles with distinct active colors
+                            // Row 2: M/S/R/FX buttons — 24px circles with gradient fills
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
-                                let circ_size = egui::vec2(22.0, 22.0);
-                                let btn_text_size = 9.5;
+                                let circ_size = egui::vec2(24.0, 24.0);
+                                let btn_text_size = 10.0;
 
-                                // Mute — yellow when active
+                                // Mute — warm amber gradient when active
                                 let m_active = track.muted;
-                                let m_bg = if m_active { egui::Color32::from_rgb(235, 180, 60) } else { egui::Color32::from_rgb(38, 39, 46) };
-                                let m_tc = if m_active { egui::Color32::from_rgb(30, 25, 10) } else { egui::Color32::from_rgb(140, 138, 132) };
-                                let m_hover_stroke = if m_active { egui::Stroke::NONE } else { egui::Stroke::new(1.0, egui::Color32::from_rgb(235, 180, 60).gamma_multiply(0.4)) };
+                                let m_bg = if m_active { egui::Color32::from_rgb(230, 175, 50) } else { egui::Color32::from_rgb(34, 35, 44) };
+                                let m_tc = if m_active { egui::Color32::from_rgb(30, 22, 8) } else { egui::Color32::from_rgb(128, 126, 135) };
                                 let m_resp = ui.add_sized(circ_size, egui::Button::new(
                                     egui::RichText::new("M").size(btn_text_size).strong().color(m_tc)
-                                ).fill(m_bg).corner_radius(11.0).stroke(if m_active { egui::Stroke::NONE } else { egui::Stroke::NONE }));
+                                ).fill(m_bg).corner_radius(12.0));
                                 if m_resp.hovered() && !m_active {
-                                    ui.painter().circle_stroke(m_resp.rect.center(), 10.5, m_hover_stroke);
+                                    ui.painter().circle_stroke(m_resp.rect.center(), 11.5, egui::Stroke::new(1.0, egui::Color32::from_rgb(230, 175, 50).gamma_multiply(0.45)));
+                                }
+                                if m_active {
+                                    // Amber glow gradient overlay
+                                    ui.painter().circle_filled(m_resp.rect.center(), 13.5, egui::Color32::from_rgba_premultiplied(230, 175, 50, 18));
                                 }
                                 if m_resp.on_hover_text("Mute \u{2014} silence this track").clicked() { track_actions.push(TrackAction::ToggleMute(i)); }
 
-                                // Solo — green when active
+                                // Solo — emerald green gradient when active
                                 let s_active = track.solo;
-                                let s_bg = if s_active { egui::Color32::from_rgb(80, 200, 80) } else { egui::Color32::from_rgb(38, 39, 46) };
-                                let s_tc = if s_active { egui::Color32::from_rgb(10, 30, 10) } else { egui::Color32::from_rgb(140, 138, 132) };
+                                let s_bg = if s_active { egui::Color32::from_rgb(50, 190, 90) } else { egui::Color32::from_rgb(34, 35, 44) };
+                                let s_tc = if s_active { egui::Color32::from_rgb(8, 28, 12) } else { egui::Color32::from_rgb(128, 126, 135) };
                                 let s_resp = ui.add_sized(circ_size, egui::Button::new(
                                     egui::RichText::new("S").size(btn_text_size).strong().color(s_tc)
-                                ).fill(s_bg).corner_radius(11.0));
+                                ).fill(s_bg).corner_radius(12.0));
                                 if s_resp.hovered() && !s_active {
-                                    ui.painter().circle_stroke(s_resp.rect.center(), 10.5, egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 200, 80).gamma_multiply(0.4)));
+                                    ui.painter().circle_stroke(s_resp.rect.center(), 11.5, egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 190, 90).gamma_multiply(0.45)));
+                                }
+                                if s_active {
+                                    ui.painter().circle_filled(s_resp.rect.center(), 13.5, egui::Color32::from_rgba_premultiplied(50, 190, 90, 18));
                                 }
                                 if s_resp.on_hover_text("Solo \u{2014} hear only this track\nCtrl+click for exclusive solo").clicked() {
                                     let modifiers = ui.input(|i| i.modifiers);
@@ -698,19 +720,20 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     }
                                 }
 
-                                // Record arm — red when active with subtle glow
+                                // Record arm — ruby red gradient with glow
                                 let r_active = track.armed;
-                                let r_bg = if r_active { egui::Color32::from_rgb(232, 80, 80) } else { egui::Color32::from_rgb(38, 39, 46) };
-                                let r_tc = if r_active { egui::Color32::WHITE } else { egui::Color32::from_rgb(140, 138, 132) };
+                                let r_bg = if r_active { egui::Color32::from_rgb(210, 55, 65) } else { egui::Color32::from_rgb(34, 35, 44) };
+                                let r_tc = if r_active { egui::Color32::WHITE } else { egui::Color32::from_rgb(128, 126, 135) };
                                 let r_resp = ui.add_sized(circ_size, egui::Button::new(
                                     egui::RichText::new("R").size(btn_text_size).strong().color(r_tc)
-                                ).fill(r_bg).corner_radius(11.0));
+                                ).fill(r_bg).corner_radius(12.0));
                                 if r_resp.hovered() && !r_active {
-                                    ui.painter().circle_stroke(r_resp.rect.center(), 10.5, egui::Stroke::new(1.0, egui::Color32::from_rgb(232, 80, 80).gamma_multiply(0.4)));
+                                    ui.painter().circle_stroke(r_resp.rect.center(), 11.5, egui::Stroke::new(1.0, egui::Color32::from_rgb(210, 55, 65).gamma_multiply(0.45)));
                                 }
                                 if r_active {
-                                    // Subtle red glow behind armed button
-                                    ui.painter().circle_filled(r_resp.rect.center(), 13.0, egui::Color32::from_rgba_premultiplied(232, 80, 80, 25));
+                                    // Ruby red glow behind armed button
+                                    ui.painter().circle_filled(r_resp.rect.center(), 14.0, egui::Color32::from_rgba_premultiplied(210, 55, 65, 22));
+                                    ui.painter().circle_filled(r_resp.rect.center(), 16.0, egui::Color32::from_rgba_premultiplied(210, 55, 65, 10));
                                 }
                                 if r_resp.on_hover_text("Arm for recording [R to record]").clicked() { track_actions.push(TrackAction::ToggleArm(i)); }
 
@@ -2535,7 +2558,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         egui::pos2(x, ruler_rect.min.y),
                         egui::vec2(highlight_w.min(ruler_rect.max.x - x), ruler_rect.height()),
                     );
-                    painter.rect_filled(highlight_rect, 0.0, egui::Color32::from_rgba_premultiplied(235, 180, 60, 12));
+                    painter.rect_filled(highlight_rect, 0.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 12));
                 }
 
                 // Bar number — bold, bright, prominent
@@ -2861,35 +2884,44 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 let is_clip_selected = app.selected_clips.contains(&(i, ci));
                 let is_clip_muted = clip.muted;
 
-                // Background — more rounded clip (6px radius) with subtle gradient
-                let clip_radius = 6.0;
+                // Background — premium 8px radius with gradient fill
+                let clip_radius = 8.0;
                 let draw_color = if is_clip_muted {
-                    egui::Color32::from_rgb(70, 70, 70)
+                    egui::Color32::from_rgb(60, 60, 68)
                 } else {
                     color
                 };
                 let bg_alpha = if is_clip_muted {
                     0.12
                 } else if is_clip_selected {
-                    0.30
+                    0.32
                 } else {
-                    0.20
+                    0.22
                 };
-                // Subtle shadow/glow behind selected clips
+                // Selected clip: gold outer glow (4px, 15% opacity)
                 if is_clip_selected && !is_clip_muted {
-                    let glow_rect = cr.expand(2.0);
-                    painter.rect_filled(glow_rect, clip_radius + 2.0, egui::Color32::from_rgba_premultiplied(235, 180, 60, 30));
+                    let glow_rect = cr.expand(4.0);
+                    painter.rect_filled(glow_rect, clip_radius + 4.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 15));
+                    let glow_rect2 = cr.expand(2.0);
+                    painter.rect_filled(glow_rect2, clip_radius + 2.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 25));
                 }
                 // Base fill
                 painter.rect_filled(cr, clip_radius, draw_color.gamma_multiply(bg_alpha));
-                // Subtle top highlight for depth (single thin line, no split)
+                // Subtle gradient: top slightly lighter for depth
                 if !is_clip_muted {
+                    let top_grad_rect = egui::Rect::from_min_max(
+                        cr.min,
+                        egui::pos2(cr.max.x, cr.min.y + cr.height() * 0.35),
+                    );
+                    painter.rect_filled(top_grad_rect, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 },
+                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 8));
+                    // Thin top highlight line
                     let highlight_rect = egui::Rect::from_min_max(
                         cr.min,
-                        egui::pos2(cr.max.x, cr.min.y + 1.5),
+                        egui::pos2(cr.max.x, cr.min.y + 1.0),
                     );
-                    painter.rect_filled(highlight_rect, egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
-                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 12));
+                    painter.rect_filled(highlight_rect, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 },
+                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 15));
                 }
 
                 // Clip content visualization
@@ -3021,17 +3053,20 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                 }
 
-                // Border — thicker amber glow for selected, teal for multi-select, with outer glow
+                // Border — premium: track color 30% normally, gold 100% selected
                 let multi_selected = is_clip_selected && app.selected_clips.len() > 1;
-                let border_w = if is_clip_selected { 2.5 } else { 1.0 };
+                let border_w = if is_clip_selected { 2.0 } else { 1.0 };
                 let border_c = if multi_selected {
-                    egui::Color32::from_rgb(80, 200, 190) // soft teal for multi-select
+                    egui::Color32::from_rgb(80, 200, 190) // teal for multi-select
                 } else if is_clip_selected {
-                    egui::Color32::from_rgb(235, 180, 60) // warm amber glow
+                    egui::Color32::from_rgb(240, 192, 64) // gold at full opacity
                 } else if is_clip_muted {
-                    egui::Color32::from_rgb(50, 50, 54)
+                    egui::Color32::from_rgb(46, 46, 52)
                 } else {
-                    color.gamma_multiply(0.6)
+                    // Track color at 30% opacity
+                    egui::Color32::from_rgba_premultiplied(
+                        color.r(), color.g(), color.b(), 77
+                    )
                 };
                 painter.rect_stroke(
                     cr,
@@ -3194,24 +3229,27 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     full_label.clone()
                 };
                 let text_color = if is_clip_muted {
-                    egui::Color32::from_rgb(130, 130, 130)
+                    egui::Color32::from_rgb(120, 120, 128)
                 } else {
-                    egui::Color32::from_rgb(240, 238, 234)
+                    egui::Color32::from_rgb(242, 240, 236)
                 };
-                let font_size = if zoomed_out { 12.0 } else { 10.0 };
-                // Draw rounded pill tag background behind clip name
+                let font_size = if zoomed_out { 12.0 } else { 10.5 };
+                // Glassmorphism pill tag behind clip name
                 if !label.is_empty() {
                     if !is_clip_muted {
-                        let tag_w = (label.len() as f32 * (if zoomed_out { 6.5 } else { 5.5 }) + 10.0).min(cr.width() - 4.0);
-                        let tag_h = if zoomed_out { 17.0 } else { 15.0 };
+                        let tag_w = (label.len() as f32 * (if zoomed_out { 6.5 } else { 5.8 }) + 12.0).min(cr.width() - 6.0);
+                        let tag_h = if zoomed_out { 18.0 } else { 16.0 };
                         let tag_rect = egui::Rect::from_min_size(
-                            egui::pos2(cr.left() + 2.0, cr.top() + 2.0),
+                            egui::pos2(cr.left() + 3.0, cr.top() + 3.0),
                             egui::vec2(tag_w, tag_h),
                         );
-                        painter.with_clip_rect(cr).rect_filled(tag_rect, 7.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, if zoomed_out { 150 } else { 110 }));
+                        // Glassmorphism: semi-transparent background
+                        painter.with_clip_rect(cr).rect_filled(tag_rect, 12.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, if zoomed_out { 140 } else { 100 }));
+                        // Subtle border for glass effect
+                        painter.with_clip_rect(cr).rect_stroke(tag_rect, 12.0, egui::Stroke::new(0.5, egui::Color32::from_rgba_premultiplied(255, 255, 255, 20)), egui::StrokeKind::Outside);
                     }
                     painter.with_clip_rect(cr.shrink(2.0)).text(
-                        egui::pos2(cr.left() + 6.0, cr.top() + 3.0),
+                        egui::pos2(cr.left() + 7.0, cr.top() + 4.0),
                         egui::Align2::LEFT_TOP,
                         &label,
                         egui::FontId::proportional(font_size),
@@ -3312,7 +3350,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         }
 
-        // Empty state — show centered message when project has no clips
+        // Empty state — premium welcome with radial glow and pill buttons
         {
             let has_any_clips = app.project.tracks.iter().any(|t| !t.clips.is_empty());
             if !has_any_clips && !app.project.tracks.is_empty() {
@@ -3320,36 +3358,75 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     (rect.min.x + rect.max.x) * 0.5,
                     tracks_y_start + (rect.max.y - tracks_y_start) * 0.5,
                 );
-                // Subtle circular backdrop
-                painter.circle_filled(center, 60.0, egui::Color32::from_rgba_premultiplied(40, 40, 50, 30));
-                // Icon-like circle with musical note hint
-                painter.circle_stroke(
-                    egui::pos2(center.x, center.y - 16.0),
-                    18.0,
-                    egui::Stroke::new(1.5, egui::Color32::from_rgba_premultiplied(120, 120, 140, 60)),
-                );
+
+                // Radial gradient background glow — layered circles
+                painter.circle_filled(center, 120.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 4));
+                painter.circle_filled(center, 90.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 6));
+                painter.circle_filled(center, 60.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 8));
+
+                // Large musical note icon (60px)
                 painter.text(
-                    egui::pos2(center.x, center.y - 16.0),
+                    egui::pos2(center.x, center.y - 30.0),
                     egui::Align2::CENTER_CENTER,
-                    "\u{266B}",
+                    "\u{266A}",
+                    egui::FontId::proportional(60.0),
+                    egui::Color32::from_rgba_premultiplied(240, 192, 64, 50),
+                );
+
+                // "Start creating" message (18px)
+                painter.text(
+                    egui::pos2(center.x, center.y + 20.0),
+                    egui::Align2::CENTER_CENTER,
+                    "Start creating",
                     egui::FontId::proportional(18.0),
-                    egui::Color32::from_rgba_premultiplied(140, 140, 160, 80),
+                    egui::Color32::from_rgb(180, 178, 190),
                 );
-                // Main message
+
+                // Subtitle
                 painter.text(
-                    egui::pos2(center.x, center.y + 14.0),
+                    egui::pos2(center.x, center.y + 42.0),
                     egui::Align2::CENTER_CENTER,
-                    "Drop audio files here or press R to record",
-                    egui::FontId::proportional(13.0),
-                    egui::Color32::from_rgb(100, 100, 115),
+                    "Drop audio files here or use the buttons below",
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_rgb(90, 88, 100),
                 );
-                // Subtle hint
+
+                // Pill buttons: "Import Audio" and "Record"
+                let btn_y = center.y + 66.0;
+                let import_w = 110.0;
+                let record_w = 90.0;
+                let gap = 12.0;
+                let total_w = import_w + record_w + gap;
+                let start_x = center.x - total_w / 2.0;
+
+                // Import Audio pill
+                let import_rect = egui::Rect::from_min_size(
+                    egui::pos2(start_x, btn_y),
+                    egui::vec2(import_w, 30.0),
+                );
+                painter.rect_filled(import_rect, 15.0, egui::Color32::from_rgb(38, 40, 52));
+                painter.rect_stroke(import_rect, 15.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(58, 60, 75)), egui::StrokeKind::Outside);
                 painter.text(
-                    egui::pos2(center.x, center.y + 32.0),
+                    import_rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    "Drag & drop WAV/MP3/OGG files onto the timeline",
-                    egui::FontId::proportional(10.0),
-                    egui::Color32::from_rgb(70, 70, 80),
+                    "\u{1F4C2}  Import Audio",
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_rgb(180, 180, 200),
+                );
+
+                // Record pill
+                let record_rect = egui::Rect::from_min_size(
+                    egui::pos2(start_x + import_w + gap, btn_y),
+                    egui::vec2(record_w, 30.0),
+                );
+                painter.rect_filled(record_rect, 15.0, egui::Color32::from_rgb(55, 30, 34));
+                painter.rect_stroke(record_rect, 15.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 40, 45)), egui::StrokeKind::Outside);
+                painter.text(
+                    record_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "\u{23FA}  Record",
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_rgb(220, 100, 100),
                 );
             }
         }
@@ -3797,7 +3874,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             if let Some(pos) = locator {
                 let lx = rect.min.x + (*pos as f64 / sample_rate) as f32 * pixels_per_second - app.scroll_x;
                 if lx >= rect.min.x - 10.0 && lx <= rect.max.x + 10.0 {
-                    let loc_color = egui::Color32::from_rgb(235, 180, 60); // amber/gold
+                    let loc_color = egui::Color32::from_rgb(240, 192, 64); // amber/gold
 
                     // Thin dashed line through timeline
                     painter.line_segment(
@@ -4428,10 +4505,10 @@ fn draw_minimap(
         egui::pos2(vx1, minimap_rect.min.y + 1.0),
         egui::pos2(vx2, minimap_rect.max.y - 1.0),
     );
-    painter.rect_filled(viewport_rect, 1.0, egui::Color32::from_rgba_premultiplied(235, 180, 60, 20));
+    painter.rect_filled(viewport_rect, 1.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 20));
     painter.rect_stroke(
         viewport_rect, 1.0,
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(235, 180, 60)),
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(240, 192, 64)),
         egui::StrokeKind::Outside,
     );
 
