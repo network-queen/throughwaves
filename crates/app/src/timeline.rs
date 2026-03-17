@@ -1667,38 +1667,38 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 }
                 }
 
-                // Check for clip gain handle drag (Cmd/Ctrl+drag on gain line area)
+                // Check for clip gain handle drag (click the circle at top-right of clip)
                 if !action_taken {
-                    let mods = ui.input(|i| i.modifiers);
-                    if mods.command {
-                        for &(ti, ci, _, cr) in &clip_rects {
-                            if !cr.contains(pos) {
-                                continue;
-                            }
-                            let clip_muted = app.project.tracks[ti].clips[ci].muted;
-                            let clip_gain = app.project.tracks[ti].clips[ci].gain_db;
-                            if clip_muted {
-                                continue;
-                            }
-                            let gain_range = 24.0_f32;
-                            let handle_y_min = cr.top() + 16.0;
-                            let handle_y_max = cr.top() + cr.height() * 0.4;
-                            let handle_y_center = (handle_y_min + handle_y_max) * 0.5;
-                            let handle_y = handle_y_center - (clip_gain / gain_range) * (handle_y_max - handle_y_min) * 0.5;
-                            let handle_y = handle_y.clamp(handle_y_min, handle_y_max);
-                            if (pos.y - handle_y).abs() < 10.0 {
-                                app.push_undo("Adjust clip gain");
-                                app.dragging_clip_gain = Some(crate::ClipGainDragState {
-                                    track_idx: ti,
-                                    clip_idx: ci,
-                                    start_y: pos.y,
-                                    original_gain_db: clip_gain,
-                                });
-                                action_taken = true;
+                    for &(ti, ci, _, cr) in &clip_rects {
+                        if !cr.contains(pos) {
+                            continue;
+                        }
+                        let clip_muted = app.project.tracks[ti].clips[ci].muted;
+                        let clip_gain = app.project.tracks[ti].clips[ci].gain_db;
+                        if clip_muted {
+                            continue;
+                        }
+                        let gain_range = 24.0_f32;
+                        let handle_area_top = cr.top() + 6.0;
+                        let handle_area_bot = cr.top() + cr.height().min(40.0);
+                        let handle_area_center = (handle_area_top + handle_area_bot) * 0.5;
+                        let handle_y = handle_area_center - (clip_gain / gain_range) * (handle_area_bot - handle_area_top) * 0.5;
+                        let handle_y = handle_y.clamp(handle_area_top, handle_area_bot);
+                        let handle_x = cr.right() - 12.0;
+                        let dx = pos.x - handle_x;
+                        let dy = pos.y - handle_y;
+                        if (dx * dx + dy * dy).sqrt() < 10.0 {
+                            app.push_undo("Adjust clip gain");
+                            app.dragging_clip_gain = Some(crate::ClipGainDragState {
+                                track_idx: ti,
+                                clip_idx: ci,
+                                start_y: pos.y,
+                                original_gain_db: clip_gain,
+                            });
+                            action_taken = true;
                                 break;
                             }
                         }
-                    }
                 }
 
                 // Slip editing: Ctrl+drag on a clip to shift content within boundaries
@@ -3240,50 +3240,62 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     );
                 }
 
-                // --- Clip gain handle ---
+                // --- Clip gain handle (Reaper-style: always-visible circle at top-right) ---
                 if !is_clip_muted {
                     let clip_gain = clip.gain_db;
                     let gain_range = 24.0_f32;
-                    let handle_y_min = cr.top() + 16.0;
-                    let handle_y_max = cr.top() + cr.height() * 0.4;
-                    let handle_y_center = (handle_y_min + handle_y_max) * 0.5;
-                    let handle_y = handle_y_center - (clip_gain / gain_range) * (handle_y_max - handle_y_min) * 0.5;
-                    let handle_y = handle_y.clamp(handle_y_min, handle_y_max);
 
-                    let show_gain_line = clip_gain.abs() > 0.01;
+                    // Gain handle is a small circle at top-right of the clip
+                    // Y position maps gain: center = 0dB, top = +24dB, bottom = -24dB
+                    let handle_area_top = cr.top() + 6.0;
+                    let handle_area_bot = cr.top() + cr.height().min(40.0);
+                    let handle_area_center = (handle_area_top + handle_area_bot) * 0.5;
+                    let handle_y = handle_area_center - (clip_gain / gain_range) * (handle_area_bot - handle_area_top) * 0.5;
+                    let handle_y = handle_y.clamp(handle_area_top, handle_area_bot);
+                    let handle_x = cr.right() - 12.0;
+                    let handle_radius = 4.5;
+
                     let hovering_gain = if let Some(hover_pos) = ui.input(|inp| inp.pointer.hover_pos()) {
-                        cr.contains(hover_pos) && (hover_pos.y - handle_y).abs() < 8.0
-                            && hover_pos.x > cr.left() + 4.0 && hover_pos.x < cr.right() - 4.0
+                        let dx = hover_pos.x - handle_x;
+                        let dy = hover_pos.y - handle_y;
+                        (dx * dx + dy * dy).sqrt() < 10.0
                     } else {
                         false
                     };
 
-                    if show_gain_line || hovering_gain {
-                        let line_color = if clip_gain > 0.01 {
-                            egui::Color32::from_rgb(255, 180, 60)
-                        } else if clip_gain < -0.01 {
-                            egui::Color32::from_rgb(100, 180, 255)
-                        } else {
-                            egui::Color32::from_rgb(160, 160, 170)
-                        };
-                        let line_alpha = if hovering_gain { 1.0 } else { 0.6 };
+                    // Always show the gain circle
+                    let circle_color = if clip_gain > 0.01 {
+                        egui::Color32::from_rgb(255, 180, 60) // orange for boost
+                    } else if clip_gain < -0.01 {
+                        egui::Color32::from_rgb(100, 180, 255) // blue for cut
+                    } else {
+                        egui::Color32::from_rgb(140, 140, 150) // gray for 0dB
+                    };
+
+                    let alpha = if hovering_gain { 1.0 } else { 0.7 };
+                    let radius = if hovering_gain { handle_radius + 1.5 } else { handle_radius };
+
+                    // Draw gain line across clip
+                    if clip_gain.abs() > 0.01 || hovering_gain {
                         painter.with_clip_rect(cr).line_segment(
                             [egui::pos2(cr.left() + 4.0, handle_y), egui::pos2(cr.right() - 4.0, handle_y)],
-                            egui::Stroke::new(if hovering_gain { 2.0 } else { 1.5 }, line_color.gamma_multiply(line_alpha)),
+                            egui::Stroke::new(if hovering_gain { 1.5 } else { 1.0 }, circle_color.gamma_multiply(alpha * 0.5)),
                         );
-                        let diamond_x = cr.center().x;
-                        let ds = 4.0;
-                        let diamond = vec![
-                            egui::pos2(diamond_x, handle_y - ds),
-                            egui::pos2(diamond_x + ds, handle_y),
-                            egui::pos2(diamond_x, handle_y + ds),
-                            egui::pos2(diamond_x - ds, handle_y),
-                        ];
-                        painter.with_clip_rect(cr).add(egui::Shape::convex_polygon(
-                            diamond,
-                            line_color.gamma_multiply(line_alpha),
-                            egui::Stroke::NONE,
-                        ));
+                    }
+
+                    // Draw the circle handle
+                    painter.with_clip_rect(cr).circle_filled(
+                        egui::pos2(handle_x, handle_y),
+                        radius,
+                        circle_color.gamma_multiply(alpha),
+                    );
+                    if hovering_gain {
+                        painter.with_clip_rect(cr).circle_stroke(
+                            egui::pos2(handle_x, handle_y),
+                            radius + 1.0,
+                            egui::Stroke::new(1.0, egui::Color32::WHITE.gamma_multiply(0.5)),
+                        );
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
                     }
 
                     if clip_gain.abs() > 0.01 {
