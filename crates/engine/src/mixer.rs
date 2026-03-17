@@ -780,17 +780,24 @@ fn render_track_clips_impl(
 
         for (aci, &ci) in active_clips.iter().enumerate() {
             let clip = &track.clips[ci];
-            // Apply transpose to playback rate: rate * 2^(semitones/12)
+            // Speed and pitch are now independent:
+            // - playback_rate controls speed (duration changes)
+            // - transpose_semitones controls pitch (duration stays the same)
+            // When transpose != 0, we use OLA pitch-shifting regardless of preserve_pitch
+            let speed_rate = clip.playback_rate.max(0.01);
             let transpose_factor = if clip.transpose_semitones != 0 {
                 2.0_f32.powf(clip.transpose_semitones as f32 / 12.0)
             } else {
                 1.0
             };
-            let rate = (clip.playback_rate * transpose_factor).max(0.01);
-            // Visual duration accounts for playback rate
+            // The effective resample rate combines speed and pitch
+            let rate = speed_rate * transpose_factor;
+            // But visual duration is based only on speed (not pitch)
             let visual_duration = clip.visual_duration_samples();
             let clip_visual_end = clip.start_sample + visual_duration;
             let block_end = position_samples + block_size as u64;
+            // Whether we need OLA to preserve duration despite pitch change
+            let needs_pitch_shift = clip.transpose_semitones != 0;
 
             if position_samples >= clip_visual_end || block_end <= clip.start_sample {
                 continue;
@@ -820,8 +827,12 @@ fn render_track_clips_impl(
 
             if let jamhub_model::ClipSource::AudioBuffer { buffer_id } = &clip.source {
                 if let Some(buf) = audio_buffers.get(buffer_id) {
-                    // If preserve_pitch is enabled and rate != 1.0, use OLA time-stretching
-                    if clip.preserve_pitch && (rate - 1.0).abs() > 0.001 {
+                    // Use OLA when:
+                    // - preserve_pitch is on and speed != 1.0 (time-stretch without pitch change)
+                    // - transpose is set (pitch-shift without speed change)
+                    let use_ola = (clip.preserve_pitch && (speed_rate - 1.0).abs() > 0.001)
+                        || needs_pitch_shift;
+                    if use_ola && (rate - 1.0).abs() > 0.001 {
                         render_clip_ola_impl(
                             clip, buf, rate, visual_duration, clip_visual_end,
                             position_samples, block_size,
