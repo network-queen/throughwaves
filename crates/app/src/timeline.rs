@@ -617,10 +617,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 // Piano icon for MIDI tracks — click to open piano roll
                                 if track.kind == TrackKind::Midi {
                                     if ui.add_sized(
-                                        egui::vec2(18.0, 14.0),
-                                        egui::Button::new(egui::RichText::new("\u{1F3B9}").size(10.0))
-                                            .fill(egui::Color32::from_rgb(38, 30, 52))
-                                            .corner_radius(7.0),
+                                        egui::vec2(22.0, 16.0),
+                                        egui::Button::new(egui::RichText::new("\u{266B}").size(12.0).color(egui::Color32::from_rgb(200, 170, 255)))
+                                            .fill(egui::Color32::from_rgb(60, 45, 90))
+                                            .corner_radius(8.0)
+                                            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 90, 200))),
                                     ).on_hover_text("Open Piano Roll").clicked() {
                                         track_actions.push(TrackAction::Select(i));
                                         track_actions.push(TrackAction::OpenPianoRoll);
