@@ -1708,6 +1708,19 @@ impl DawApp {
     }
 
     pub fn toggle_recording(&mut self) {
+        // Block recording if no audio track is selected
+        if !self.is_recording {
+            let has_audio_track = self.selected_track
+                .and_then(|i| self.project.tracks.get(i))
+                .map_or(false, |t| t.kind == jamhub_model::TrackKind::Audio);
+            let any_audio_armed = self.project.tracks.iter()
+                .any(|t| t.armed && t.kind == jamhub_model::TrackKind::Audio);
+            if !has_audio_track && !any_audio_armed {
+                self.set_status("Select an audio track to record");
+                return;
+            }
+        }
+
         if self.is_recording {
             // === STOP RECORDING ===
             self.is_recording = false;
