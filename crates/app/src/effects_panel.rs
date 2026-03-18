@@ -141,26 +141,26 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                     ui.spacing_mut().item_spacing.y = 1.0;
                                     if i > 0 {
                                         if ui.add_sized(btn_size, egui::Button::new(
-                                            egui::RichText::new("\u{25B2}").size(8.0).color(arrow_fg))
+                                            egui::RichText::new("\u{2191}").size(8.0).color(arrow_fg))
                                             .fill(arrow_bg).corner_radius(3.0)
                                         ).on_hover_text("Move up in chain").clicked() {
                                             move_up = Some(i);
                                         }
                                     } else {
                                         ui.add_sized(btn_size, egui::Button::new(
-                                            egui::RichText::new("\u{25B2}").size(8.0).color(arrow_dim_fg))
+                                            egui::RichText::new("\u{2191}").size(8.0).color(arrow_dim_fg))
                                             .fill(arrow_bg_dim).corner_radius(3.0));
                                     }
                                     if i + 1 < effects_len {
                                         if ui.add_sized(btn_size, egui::Button::new(
-                                            egui::RichText::new("\u{25BC}").size(8.0).color(arrow_fg))
+                                            egui::RichText::new("\u{2193}").size(8.0).color(arrow_fg))
                                             .fill(arrow_bg).corner_radius(3.0)
                                         ).on_hover_text("Move down in chain").clicked() {
                                             move_down = Some(i);
                                         }
                                     } else {
                                         ui.add_sized(btn_size, egui::Button::new(
-                                            egui::RichText::new("\u{25BC}").size(8.0).color(arrow_dim_fg))
+                                            egui::RichText::new("\u{2193}").size(8.0).color(arrow_dim_fg))
                                             .fill(arrow_bg_dim).corner_radius(3.0));
                                     }
                                 });
