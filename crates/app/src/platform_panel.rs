@@ -589,7 +589,7 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                 } else {
                     ui.label(egui::RichText::new("You need a band to push projects.").size(10.0).color(egui::Color32::from_rgb(220, 160, 60)));
-                    if ui.button("Create Band on Website").clicked() {
+                    if ui.button("Create Band").clicked() {
                         let url = format!("{}/#/bands", app.platform.server_url.trim_end_matches('/'));
                         let _ = open::that(&url);
                         app.platform.bands_loaded = false; // reload on next frame
