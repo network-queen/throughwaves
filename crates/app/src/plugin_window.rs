@@ -21,8 +21,12 @@ impl PluginWindowManager {
     /// to keep the library loaded while the editor is open.
     pub fn open(&mut self, slot_id: Uuid, plugin: jamhub_engine::vst3_host::Vst3Plugin) -> bool {
         if let Some(win) = self.windows.get(&slot_id) {
-            // Already exists — just show and bring to front
-            win.bring_to_front();
+            // Already exists (possibly hidden) — show and bring to front
+            if !win.is_open() {
+                win.bring_to_front(); // unhide
+            } else {
+                win.bring_to_front();
+            }
             return true;
         }
 
@@ -68,9 +72,9 @@ impl PluginWindowManager {
         // The window stays hidden and the plugin stays loaded until app exit.
     }
 
-    /// Check if an editor is open for this slot.
+    /// Check if an editor is currently visible for this slot.
     pub fn is_open(&self, slot_id: &Uuid) -> bool {
-        self.windows.contains_key(slot_id)
+        self.windows.get(slot_id).map_or(false, |w| w.is_open())
     }
 
     /// Close all windows.
