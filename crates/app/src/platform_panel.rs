@@ -711,8 +711,17 @@ fn do_upload_cloud_project(app: &mut DawApp) {
         let stem = match jamhub_engine::bounce_track(
             &app.project, i, &app.audio_buffers, sr,
         ) {
-            Ok(samples) => samples,
-            Err(_) => continue,
+            Ok(samples) => {
+                if samples.iter().all(|s| s.abs() < 0.0001) {
+                    println!("[CLOUD] Skipping silent stem: {name}");
+                    continue;
+                }
+                samples
+            },
+            Err(e) => {
+                println!("[CLOUD] Failed to bounce track {i} ({name}): {e}");
+                continue;
+            },
         };
         all_bounced.push(stem.clone());
         let stem_bytes = encode_wav_bytes(&stem, sr);

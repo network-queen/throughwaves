@@ -558,6 +558,7 @@ async fn repost_track(
 }
 
 pub fn router() -> Router<PgPool> {
+    use axum::extract::DefaultBodyLimit;
     Router::new()
         .route("/tracks", post(create_track).get(list_tracks))
         .route("/tracks/{id}", get(get_track).delete(delete_track))
@@ -565,6 +566,7 @@ pub fn router() -> Router<PgPool> {
         .route("/tracks/{id}/play", post(play_track))
         .route("/tracks/{id}/comments", post(post_comment))
         .route("/tracks/{id}/repost", post(repost_track))
+        .layer(DefaultBodyLimit::max(200 * 1024 * 1024))
 }
 
 /// Public wrapper for waveform generation (used by cloud.rs)

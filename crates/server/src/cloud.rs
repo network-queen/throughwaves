@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -55,6 +55,11 @@ async fn upload_cloud_project(
             }
             _ => {}
         }
+    }
+
+    println!("[CLOUD] Received upload: title={title}, {} stems, mixdown={}", stems.len(), mixdown_data.is_some());
+    for (i, (name, data)) in stems.iter().enumerate() {
+        println!("[CLOUD]   stem {i}: {name} ({} bytes)", data.len());
     }
 
     if title.is_empty() {
@@ -482,4 +487,6 @@ pub fn router() -> Router<PgPool> {
         .route("/cloud", post(upload_cloud_project).get(list_cloud_projects))
         .route("/cloud/{id}", get(get_cloud_project).delete(delete_cloud_project).put(update_cloud_project))
         .route("/cloud/{id}/download", post(download_cloud_project))
+        // Allow up to 500MB for project uploads (mixdown + all stems)
+        .layer(DefaultBodyLimit::max(500 * 1024 * 1024))
 }
