@@ -637,27 +637,13 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         );
                         ui.painter().rect_filled(bar_rect, 3.0, bar_color);
 
-                        // Drag handle — detect via global pointer on the left 16px of header
-                        let handle_zone = egui::Rect::from_min_size(
-                            header_rect.min,
-                            egui::vec2(16.0, header_rect.height()),
-                        );
+                        // Drag-to-reorder: entire header is draggable
+                        // Click = select, drag 5px+ = start reorder
                         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
-                        let pointer_pressed = ui.input(|i| i.pointer.primary_pressed()); // only on initial press
-                        let is_hovering_handle = pointer_pos.map_or(false, |p| handle_zone.contains(p));
+                        let pointer_pressed = ui.input(|i| i.pointer.primary_pressed());
+                        let is_hovering_header = pointer_pos.map_or(false, |p| header_rect.contains(p));
 
-                        if is_hovering_handle && app.dragging_track_reorder.is_none() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                            // Draw grip dots
-                            let cx = header_rect.min.x + bar_offset_x + 9.0;
-                            let cy = header_rect.center().y;
-                            for dy in [-4.0, 0.0, 4.0] {
-                                ui.painter().circle_filled(egui::pos2(cx, cy + dy), 1.5, egui::Color32::from_rgb(150, 150, 165));
-                            }
-                        }
-
-                        // Start drag — only on initial press (not while held)
-                        if is_hovering_handle && pointer_pressed && app.dragging_track_reorder.is_none() {
+                        if is_hovering_header && pointer_pressed && app.dragging_track_reorder.is_none() {
                             let start_y = header_rect.center().y;
                             app.dragging_track_reorder = Some((i, start_y, start_y, false));
                         }
@@ -665,7 +651,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         if is_selected {
                             let glow_rect = egui::Rect::from_min_size(
                                 egui::pos2(header_rect.min.x + bar_offset_x, header_rect.min.y),
-                                egui::vec2(16.0, header_rect.height()),
+                                egui::vec2(12.0, header_rect.height()),
                             );
                             ui.painter().rect_filled(glow_rect, 0.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 12));
                         }
