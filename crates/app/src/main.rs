@@ -4584,7 +4584,6 @@ impl eframe::App for DawApp {
             else if i.modifiers.command && i.key_pressed(egui::Key::B) { actions.push("bounce".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::C) { actions.push("version_quick_commit".into()); }
             else if i.modifiers.command && i.key_pressed(egui::Key::C) { actions.push("copy".into()); }
-            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::V) { actions.push("version_panel".into()); }
             else if i.modifiers.command && i.key_pressed(egui::Key::V) { actions.push("paste".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::M) { actions.push("add_marker".into()); }
             else if i.modifiers.command && i.key_pressed(egui::Key::M) { actions.push("toggle_mute_selected".into()); }
@@ -5177,7 +5176,7 @@ impl eframe::App for DawApp {
                     self.consolidate_selected_clips();
                 }
                 "version_panel" => {
-                    self.version_panel.show = !self.version_panel.show;
+                    // removed — versioning is now via Remote Push/Pull
                 }
                 "version_quick_commit" => {
                     self.version_quick_commit();
@@ -5578,34 +5577,6 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Versions", |ui| {
-                    if ui.button("Version Control...   Cmd+Shift+V").clicked() {
-                        self.version_panel.show = !self.version_panel.show;
-                        ui.close_menu();
-                    }
-                    if ui.button("Quick Commit         Cmd+Shift+C").clicked() {
-                        self.version_quick_commit();
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    let branch = self.project.current_branch.clone();
-                    let branch_color = if branch == "main" {
-                        egui::Color32::from_rgb(100, 200, 140)
-                    } else {
-                        egui::Color32::from_rgb(180, 140, 255)
-                    };
-                    ui.label(
-                        egui::RichText::new(format!("Current: {branch}"))
-                            .small()
-                            .color(branch_color),
-                    );
-                    let version_count = self.project.version_history.len();
-                    ui.label(
-                        egui::RichText::new(format!("{version_count} version(s)"))
-                            .small()
-                            .color(egui::Color32::GRAY),
-                    );
-                });
                 ui.menu_button("AI", |ui| {
                     if ui.button("Stem Separation...").clicked() {
                         self.stem_sep.show = true;
@@ -5862,7 +5833,7 @@ impl eframe::App for DawApp {
         midi_mapping::show_mapping_manager(self, ctx);
         stem_separator::show(self, ctx);
         analysis_tools::show(self, ctx);
-        version_control::show(self, ctx);
+        // version_control panel removed — versioning via Remote Push/Pull
 
         // Template & preset dialogs
         templates::show_template_name_dialog(self, ctx);
