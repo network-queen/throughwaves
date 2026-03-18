@@ -10,7 +10,7 @@ const HEADER_WIDTH: f32 = 200.0;
 const RULER_HEIGHT: f32 = 34.0;
 const PIXELS_PER_SECOND_BASE: f32 = 100.0;
 const GROUP_HEADER_HEIGHT: f32 = 24.0;
-const GROUP_INDENT: f32 = 12.0;
+const GROUP_INDENT: f32 = 18.0;
 const MINIMAP_HEIGHT: f32 = 28.0;
 
 /// Compute the height of a track, scaled by vertical zoom.
@@ -1043,13 +1043,24 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     app.dragging_track_reorder = None;
 
                     if target < app.project.tracks.len() && src_idx < app.project.tracks.len() {
-                        // Check if dropped ON a folder — assign as child
+                        // Check if dropped ON a folder — assign as child and move below it
                         if app.project.tracks[target].kind == TrackKind::Folder && target != src_idx {
                             let folder_id = app.project.tracks[target].id;
+                            let folder_name = app.project.tracks[target].name.clone();
                             app.push_undo("Move to folder");
-                            app.project.tracks[src_idx].group_id = Some(folder_id);
+                            // Remove track from current position
+                            let mut track = app.project.tracks.remove(src_idx);
+                            track.group_id = Some(folder_id);
+                            // Find insertion point: right after the folder and its existing children
+                            let folder_idx = app.project.tracks.iter().position(|t| t.id == folder_id).unwrap_or(0);
+                            let mut insert_at = folder_idx + 1;
+                            while insert_at < app.project.tracks.len() && app.project.tracks[insert_at].group_id == Some(folder_id) {
+                                insert_at += 1;
+                            }
+                            app.project.tracks.insert(insert_at, track);
+                            app.selected_track = Some(insert_at);
                             app.sync_project();
-                            app.set_status(&format!("Track moved into {}", app.project.tracks[target].name));
+                            app.set_status(&format!("Track moved into {folder_name}"));
                         } else if target != src_idx {
                             // Normal reorder
                             app.push_undo("Reorder tracks");
@@ -1277,7 +1288,16 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                     TrackAction::MoveToFolder(track_idx, folder_id) => {
                         app.push_undo("Move to folder");
-                        app.project.tracks[track_idx].group_id = Some(folder_id);
+                        let mut track = app.project.tracks.remove(track_idx);
+                        track.group_id = Some(folder_id);
+                        // Insert after folder and its existing children
+                        let folder_pos = app.project.tracks.iter().position(|t| t.id == folder_id).unwrap_or(0);
+                        let mut insert_at = folder_pos + 1;
+                        while insert_at < app.project.tracks.len() && app.project.tracks[insert_at].group_id == Some(folder_id) {
+                            insert_at += 1;
+                        }
+                        app.project.tracks.insert(insert_at, track);
+                        app.selected_track = Some(insert_at);
                         app.sync_project();
                     }
                 }
