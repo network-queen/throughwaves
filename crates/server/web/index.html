@@ -1038,30 +1038,82 @@ function drawWaveform(canvas, data, progress = 0) {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
   canvas.width = w * dpr;
   canvas.height = h * dpr;
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
 
-  const barCount = data.length;
-  const gap = 2;
-  const barWidth = (w - (barCount - 1) * gap) / barCount;
   const midY = h / 2;
+  const barCount = data.length;
 
-  for (let i = 0; i < barCount; i++) {
-    const x = i * (barWidth + gap);
-    const barH = data[i] * (h * 0.8);
-    const y = midY - barH / 2;
-    const pct = x / w;
-
-    if (pct <= progress) {
-      ctx.fillStyle = '#EBB43C';
-    } else {
-      ctx.fillStyle = 'rgba(255,255,255,0.12)';
-    }
+  if (barCount > 100) {
+    // SoundCloud-style: filled waveform path for dense data
+    // Top half
     ctx.beginPath();
-    ctx.roundRect(x, y, Math.max(barWidth, 1), barH, 1);
-    ctx.fill();
+    ctx.moveTo(0, midY);
+    for (let i = 0; i < barCount; i++) {
+      const x = (i / barCount) * w;
+      const amp = data[i] * (h * 0.42);
+      ctx.lineTo(x, midY - amp);
+    }
+    ctx.lineTo(w, midY);
+    ctx.closePath();
+    // Draw played portion
+    const playX = progress * w;
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = '#EBB43C';
+    ctx.fillRect(0, 0, playX, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(playX, 0, w - playX, h);
+    ctx.restore();
+
+    // Bottom half (mirrored, dimmer)
+    ctx.beginPath();
+    ctx.moveTo(0, midY);
+    for (let i = 0; i < barCount; i++) {
+      const x = (i / barCount) * w;
+      const amp = data[i] * (h * 0.35);
+      ctx.lineTo(x, midY + amp);
+    }
+    ctx.lineTo(w, midY);
+    ctx.closePath();
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = 'rgba(235,180,60,0.4)';
+    ctx.fillRect(0, 0, playX, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(playX, 0, w - playX, h);
+    ctx.restore();
+
+    // Center line
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, midY);
+    ctx.lineTo(w, midY);
+    ctx.stroke();
+  } else {
+    // Bar style for sparse data
+    const gap = Math.max(1, Math.floor(w / barCount * 0.15));
+    const barWidth = Math.max(1, (w - (barCount - 1) * gap) / barCount);
+
+    for (let i = 0; i < barCount; i++) {
+      const x = i * (barWidth + gap);
+      const barH = Math.max(1, data[i] * (h * 0.8));
+      const y = midY - barH / 2;
+      const pct = x / w;
+
+      if (pct <= progress) {
+        ctx.fillStyle = '#EBB43C';
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      }
+      ctx.beginPath();
+      ctx.roundRect(x, y, barWidth, barH, 1);
+      ctx.fill();
+    }
   }
 }
 
