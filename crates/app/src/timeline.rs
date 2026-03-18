@@ -383,22 +383,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     ui.allocate_ui_at_rect(header_rect, |ui| {
                         let header_rect = header_rect;
 
-                        // Click area for entire header — selection, context menu, and drag-to-reorder
-                        let bg_response = ui.interact(header_rect, ui.id().with("tbg").with(i), egui::Sense::click_and_drag());
+                        // Click area for entire header — selection & context menu
+                        let bg_response = ui.interact(header_rect, ui.id().with("tbg").with(i), egui::Sense::click());
                         if bg_response.clicked() { track_actions.push(TrackAction::Select(i)); }
-                        // Drag-to-reorder
-                        if bg_response.drag_started() {
-                            app.dragging_track_reorder = Some((i, header_rect.center().y));
-                        }
-                        if bg_response.dragged() {
-                            if let Some((src, ref mut y)) = app.dragging_track_reorder {
-                                *y += bg_response.drag_delta().y;
-                            }
-                        }
-                        if bg_response.drag_stopped() {
-                            // Defer reorder to after the loop (avoid borrow conflict)
-                            track_actions.push(TrackAction::Select(i)); // will be overridden below
-                        }
 
                         // Track header tooltip — detailed info on hover
                         bg_response.clone().on_hover_ui(|ui| {
@@ -555,30 +542,58 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             }
                         }
 
-                        // 5px left accent stripe with rounded top/bottom — vibrant saturated color
-                        // Selected track: gold stripe with left glow; otherwise: vibrant track color
+                        // Left drag handle + accent stripe
                         let bar_offset_x = if is_grouped { GROUP_INDENT } else { 0.0 };
-                        let bar_w = 5.0;
+                        let handle_w = 12.0; // wider drag handle area
                         let bar_color = if is_selected {
-                            egui::Color32::from_rgb(240, 192, 64) // gold for selected
+                            egui::Color32::from_rgb(240, 192, 64)
                         } else {
                             vibrant_color
                         };
+
+                        // Drag handle area (invisible, wider than the color bar)
+                        let handle_rect = egui::Rect::from_min_size(
+                            egui::pos2(header_rect.min.x + bar_offset_x, header_rect.min.y),
+                            egui::vec2(handle_w, header_rect.height()),
+                        );
+                        let handle_resp = ui.interact(handle_rect, ui.id().with("drag_handle").with(i), egui::Sense::drag());
+
+                        if handle_resp.drag_started() {
+                            app.dragging_track_reorder = Some((i, header_rect.center().y));
+                            track_actions.push(TrackAction::Select(i));
+                        }
+                        if handle_resp.dragged() {
+                            if let Some((_src, ref mut y)) = app.dragging_track_reorder {
+                                *y += handle_resp.drag_delta().y;
+                            }
+                        }
+                        if handle_resp.hovered() && app.dragging_track_reorder.is_none() {
+                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+                        }
+
+                        // Draw the 5px accent stripe
                         let bar_rect = egui::Rect::from_min_size(
                             egui::pos2(header_rect.min.x + bar_offset_x, header_rect.min.y + 2.0),
-                            egui::vec2(bar_w, header_rect.height() - 4.0),
+                            egui::vec2(5.0, header_rect.height() - 4.0),
                         );
                         ui.painter().rect_filled(bar_rect, 3.0, bar_color);
-                        // Selected track: subtle left glow
+                        // Drag handle dots (visual indicator)
+                        if handle_resp.hovered() || app.dragging_track_reorder.map_or(false, |(s, _)| s == i) {
+                            let cx = header_rect.min.x + bar_offset_x + 8.0;
+                            let cy = header_rect.center().y;
+                            for dy in [-4.0, 0.0, 4.0] {
+                                ui.painter().circle_filled(egui::pos2(cx, cy + dy), 1.5, egui::Color32::from_rgb(140, 140, 155));
+                            }
+                        }
                         if is_selected {
                             let glow_rect = egui::Rect::from_min_size(
                                 egui::pos2(header_rect.min.x + bar_offset_x, header_rect.min.y),
-                                egui::vec2(12.0, header_rect.height()),
+                                egui::vec2(handle_w, header_rect.height()),
                             );
                             ui.painter().rect_filled(glow_rect, 0.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 12));
                         }
 
-                        ui.add_space(if is_grouped { GROUP_INDENT + bar_w + 4.0 } else { bar_w + 4.0 });
+                        ui.add_space(if is_grouped { GROUP_INDENT + 14.0 } else { 14.0 });
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 2.0;
 
@@ -819,8 +834,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                                 // Volume & Pan rotary knobs — right-aligned, Reaper-style
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    ui.spacing_mut().item_spacing.x = 3.0;
-                                    let knob_r = 9.0;
+                                    ui.spacing_mut().item_spacing.x = 2.0;
+                                    let knob_r = 8.0;
                                     let knob_size = egui::vec2(knob_r * 2.0 + 2.0, knob_r * 2.0 + 2.0);
 
                                     // Pan knob
