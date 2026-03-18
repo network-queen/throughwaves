@@ -2210,7 +2210,7 @@ async function renderCloudProject(el, projectId) {
               '<div class="track-card-bottom">' +
                 '<button class="play-btn" data-track-id="' + verId + '" onclick="onPlayClick(\'' + verId + '\')">&#9654;</button>' +
                 '<span class="track-duration">' + formatTime(v.duration_seconds || project.duration_seconds || 0) + '</span>' +
-                '<code style="margin-left:auto; background:var(--bg-base); padding:2px 6px; border-radius:4px; font-size:0.7rem; color:var(--green); user-select:all; cursor:text;" onclick="event.stopPropagation()" title="DAW pull ID">' + v.id.substring(0,8) + '...</code>' +
+                '<button style="margin-left:auto; background:var(--bg-base); padding:3px 8px; border-radius:4px; font-size:0.72rem; color:var(--green); border:1px solid var(--border); cursor:pointer;" onclick="event.stopPropagation(); navigator.clipboard.writeText(\'' + v.id + '\'); this.textContent=\'Copied!\'; setTimeout(()=>this.textContent=\'Copy ID\',1500)" title="' + v.id + '">Copy ID</button>' +
               '</div>' +
             '</div>';
           }).join('')}
