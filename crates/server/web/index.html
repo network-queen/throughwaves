@@ -2598,14 +2598,69 @@ async function renderBand(el, bandId) {
   requestAnimationFrame(initWaveforms);
 }
 
-function editBand(bandId) {
+async function editBand(bandId) {
+  let band = {};
+  try { const r = await fetch('/api/bands/' + bandId); band = (await r.json()).band || {}; } catch(e) {}
   showModal({
     icon: '&#127928;',
     title: 'Edit Band',
-    message: '<p style="color:var(--text-muted);">Edit band details on the band page settings.</p>',
-    confirmText: 'OK',
-    cancelText: false,
-    onConfirm: () => {},
+    message: `
+      <div style="text-align:left;display:flex;flex-direction:column;gap:0.5rem;">
+        <div><label style="display:block;color:var(--text-muted);font-size:0.85rem;">Name</label>
+          <input type="text" id="editBandName" value="${esc(band.name || '')}" style="width:100%;"></div>
+        <div><label style="display:block;color:var(--text-muted);font-size:0.85rem;">Genre</label>
+          <input type="text" id="editBandGenre" value="${esc(band.genre || '')}" style="width:100%;"></div>
+        <div><label style="display:block;color:var(--text-muted);font-size:0.85rem;">Location</label>
+          <input type="text" id="editBandLocation" value="${esc(band.location || '')}" style="width:100%;"></div>
+        <div><label style="display:block;color:var(--text-muted);font-size:0.85rem;">Website</label>
+          <input type="text" id="editBandWebsite" value="${esc(band.website || '')}" style="width:100%;"></div>
+        <div><label style="display:block;color:var(--text-muted);font-size:0.85rem;">Description</label>
+          <textarea id="editBandDesc" rows="3" style="width:100%;">${esc(band.description || '')}</textarea></div>
+        <div style="margin-top:0.5rem;">
+          <label style="display:block;color:var(--text-muted);font-size:0.85rem;">Avatar Image</label>
+          <input type="file" id="editBandAvatar" accept="image/*" style="width:100%;">
+        </div>
+        <div>
+          <label style="display:block;color:var(--text-muted);font-size:0.85rem;">Banner Image</label>
+          <input type="file" id="editBandBanner" accept="image/*" style="width:100%;">
+        </div>
+      </div>`,
+    confirmText: 'Save',
+    onConfirm: async () => {
+      // Update text fields
+      const resp = await fetch('/api/bands/' + bandId, {
+        method: 'PUT',
+        headers: { 'Authorization': 'Bearer ' + state.token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('editBandName')?.value || '',
+          genre: document.getElementById('editBandGenre')?.value || '',
+          location: document.getElementById('editBandLocation')?.value || '',
+          website: document.getElementById('editBandWebsite')?.value || '',
+          description: document.getElementById('editBandDesc')?.value || '',
+        }),
+      });
+
+      // Upload images if selected
+      const avatarFile = document.getElementById('editBandAvatar')?.files?.[0];
+      const bannerFile = document.getElementById('editBandBanner')?.files?.[0];
+      if (avatarFile || bannerFile) {
+        const fd = new FormData();
+        if (avatarFile) fd.append('avatar', avatarFile);
+        if (bannerFile) fd.append('banner', bannerFile);
+        await fetch('/api/bands/' + bandId + '/images', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + state.token },
+          body: fd,
+        });
+      }
+
+      if (resp.ok) {
+        showToast('Band updated!');
+        renderPage();
+      } else {
+        showToast('Update failed', true);
+      }
+    },
   });
 }
 
