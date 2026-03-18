@@ -96,30 +96,55 @@ fn is_track_collapsed(app: &DawApp, track_idx: usize) -> bool {
     }
 }
 
-/// Compute the Y offset of each track (cumulative heights),
-/// accounting for group headers and collapsed groups.
-/// Returns (offsets_per_track, group_header_positions).
-/// group_header_positions: Vec<(group_id, y_position)>
-fn track_y_offsets_with_groups(app: &DawApp) -> (Vec<f32>, Vec<(Uuid, f32)>) {
-    let vz = app.track_height_zoom;
-    let _groups = group_order(app);
-    let mut offsets = Vec::with_capacity(app.project.tracks.len());
-    let mut group_headers: Vec<(Uuid, f32)> = Vec::new();
-    let mut y = 0.0;
-    let mut rendered_groups = std::collections::HashSet::new();
+/// Compute display order: top-level tracks first, folder children right after their folder.
+/// Returns indices into app.project.tracks in the order they should be displayed.
+fn display_order(app: &DawApp) -> Vec<usize> {
+    let tracks = &app.project.tracks;
+    let mut order = Vec::with_capacity(tracks.len());
+    let mut used = vec![false; tracks.len()];
 
-    for (i, track) in app.project.tracks.iter().enumerate() {
-        // If this track belongs to a legacy group (not a folder), add group header space
-        if let Some(gid) = track.group_id {
-            let is_folder_group = app.project.tracks.iter().any(|t| t.id == gid && t.kind == jamhub_model::TrackKind::Folder);
-            if !is_folder_group && rendered_groups.insert(gid) {
-                group_headers.push((gid, y));
-                y += GROUP_HEADER_HEIGHT;
+    // First pass: add top-level tracks (no group_id, or group_id doesn't point to a folder)
+    for (i, track) in tracks.iter().enumerate() {
+        let is_folder_child = track.group_id.map_or(false, |gid| {
+            tracks.iter().any(|t| t.id == gid && t.kind == jamhub_model::TrackKind::Folder)
+        });
+        if !is_folder_child {
+            order.push(i);
+            used[i] = true;
+            // If this is a folder, add its children right after
+            if track.kind == jamhub_model::TrackKind::Folder {
+                for (j, child) in tracks.iter().enumerate() {
+                    if !used[j] && child.group_id == Some(track.id) {
+                        order.push(j);
+                        used[j] = true;
+                    }
+                }
             }
         }
+    }
+    // Add any remaining tracks (shouldn't happen, but safety)
+    for i in 0..tracks.len() {
+        if !used[i] {
+            order.push(i);
+        }
+    }
+    order
+}
 
-        offsets.push(y);
-        if !is_track_collapsed(app, i) {
+/// Compute the Y offset of each track (cumulative heights),
+/// accounting for group headers, collapsed groups, and folder hierarchy.
+/// Returns (offsets_per_track, group_header_positions).
+fn track_y_offsets_with_groups(app: &DawApp) -> (Vec<f32>, Vec<(Uuid, f32)>) {
+    let vz = app.track_height_zoom;
+    let order = display_order(app);
+    let mut offsets = vec![0.0; app.project.tracks.len()];
+    let group_headers: Vec<(Uuid, f32)> = Vec::new();
+    let mut y = 0.0;
+
+    for &idx in &order {
+        let track = &app.project.tracks[idx];
+        offsets[idx] = y;
+        if !is_track_collapsed(app, idx) {
             y += track_height(track, vz);
         }
     }
@@ -279,13 +304,15 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     .unwrap_or((0.0, 0.0))
             }).collect();
 
-            // Track which group headers we've already drawn
+            // Render tracks in tree order (folders first, then children)
+            let disp_order = display_order(app);
             let mut rendered_group_headers = std::collections::HashSet::new();
 
-            for (i, track) in app.project.tracks.iter().enumerate() {
+            for &i in &disp_order {
+                let track = &app.project.tracks[i];
+
                 // Draw legacy group header (only for non-folder groups)
                 if let Some(gid) = track.group_id {
-                    // Skip if this group is a folder track (folders render as regular tracks)
                     let is_folder_group = app.project.tracks.iter().any(|t| t.id == gid && t.kind == TrackKind::Folder);
                     if !is_folder_group && rendered_group_headers.insert(gid) {
                         // Find the group metadata
