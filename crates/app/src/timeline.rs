@@ -1262,7 +1262,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let add_btn_size = egui::vec2(70.0, 24.0);
                 if ui.add_sized(add_btn_size, egui::Button::new(
-                    egui::RichText::new("u{1F3A4}").size(11.0).color(egui::Color32::from_rgb(80, 200, 190))
+                    egui::RichText::new("\u{1F3A4}").size(11.0).color(egui::Color32::from_rgb(80, 200, 190))
                 ).fill(egui::Color32::from_rgb(28, 42, 40)).corner_radius(12.0))
                     .on_hover_text("Add a new audio track").clicked() {
                     app.push_undo("Add track");
@@ -1273,7 +1273,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     app.sync_project();
                 }
                 if ui.add_sized(add_btn_size, egui::Button::new(
-                    egui::RichText::new("u{266B}").size(11.0).color(egui::Color32::from_rgb(160, 128, 224))
+                    egui::RichText::new("\u{266B}").size(11.0).color(egui::Color32::from_rgb(160, 128, 224))
                 ).fill(egui::Color32::from_rgb(36, 28, 48)).corner_radius(12.0))
                     .on_hover_text("Add a new MIDI track").clicked() {
                     app.push_undo("Add track");
@@ -1284,7 +1284,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     app.sync_project();
                 }
                 if ui.add_sized(add_btn_size, egui::Button::new(
-                    egui::RichText::new("u{1F4C1}").size(11.0).color(egui::Color32::from_rgb(220, 180, 100))
+                    egui::RichText::new("\u{1F4C1}").size(11.0).color(egui::Color32::from_rgb(220, 180, 100))
                 ).fill(egui::Color32::from_rgb(44, 38, 24)).corner_radius(12.0))
                     .on_hover_text("Add a folder to organize tracks").clicked() {
                     app.push_undo("Add folder");
