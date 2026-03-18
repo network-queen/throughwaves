@@ -1043,6 +1043,30 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                 if activated {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+
+                    // Highlight folder if cursor is over one
+                    let offsets = track_y_offsets(app);
+                    let vz = app.track_height_zoom;
+                    let rel_y = current_y - panel_rect.top();
+                    let d_order = display_order(app);
+                    for &di in &d_order {
+                        if di >= app.project.tracks.len() || is_track_collapsed(app, di) { continue; }
+                        let off = offsets[di];
+                        let th = track_height(&app.project.tracks[di], vz);
+                        if rel_y >= off && rel_y < off + th {
+                            if app.project.tracks[di].kind == TrackKind::Folder && di != src_idx {
+                                let hl = egui::Rect::from_min_size(
+                                    egui::pos2(panel_rect.left(), panel_rect.top() + off),
+                                    egui::vec2(panel_rect.width(), th),
+                                );
+                                ui.painter().rect_filled(hl, 0.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 25));
+                                ui.painter().rect_stroke(hl, 0.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(240, 192, 64)), egui::StrokeKind::Inside);
+                            }
+                            break;
+                        }
+                    }
+
+                    // Gold drop indicator line
                     ui.painter().line_segment(
                         [egui::pos2(panel_rect.left(), current_y), egui::pos2(panel_rect.right(), current_y)],
                         egui::Stroke::new(2.0, egui::Color32::from_rgb(240, 192, 64)),
