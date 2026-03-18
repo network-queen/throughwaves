@@ -542,53 +542,49 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             }
                         }
 
-                        // Left drag handle + accent stripe
+                        // Left accent stripe + drag handle
                         let bar_offset_x = if is_grouped { GROUP_INDENT } else { 0.0 };
-                        let handle_w = 12.0; // wider drag handle area
                         let bar_color = if is_selected {
                             egui::Color32::from_rgb(240, 192, 64)
                         } else {
                             vibrant_color
                         };
 
-                        // Drag handle area (invisible, wider than the color bar)
-                        let handle_rect = egui::Rect::from_min_size(
-                            egui::pos2(header_rect.min.x + bar_offset_x, header_rect.min.y),
-                            egui::vec2(handle_w, header_rect.height()),
-                        );
-                        let handle_resp = ui.interact(handle_rect, ui.id().with("drag_handle").with(i), egui::Sense::drag());
-
-                        if handle_resp.drag_started() {
-                            app.dragging_track_reorder = Some((i, header_rect.center().y));
-                            track_actions.push(TrackAction::Select(i));
-                        }
-                        if handle_resp.dragged() {
-                            if let Some((_src, ref mut y)) = app.dragging_track_reorder {
-                                *y += handle_resp.drag_delta().y;
-                            }
-                        }
-                        if handle_resp.hovered() && app.dragging_track_reorder.is_none() {
-                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
-                        }
-
-                        // Draw the 5px accent stripe
+                        // Draw accent stripe
                         let bar_rect = egui::Rect::from_min_size(
                             egui::pos2(header_rect.min.x + bar_offset_x, header_rect.min.y + 2.0),
                             egui::vec2(5.0, header_rect.height() - 4.0),
                         );
                         ui.painter().rect_filled(bar_rect, 3.0, bar_color);
-                        // Drag handle dots (visual indicator)
-                        if handle_resp.hovered() || app.dragging_track_reorder.map_or(false, |(s, _)| s == i) {
-                            let cx = header_rect.min.x + bar_offset_x + 8.0;
+
+                        // Drag handle — detect via global pointer on the left 16px of header
+                        let handle_zone = egui::Rect::from_min_size(
+                            header_rect.min,
+                            egui::vec2(16.0, header_rect.height()),
+                        );
+                        let pointer_pos = ui.input(|i| i.pointer.interact_pos());
+                        let pointer_down = ui.input(|i| i.pointer.primary_down());
+                        let is_hovering_handle = pointer_pos.map_or(false, |p| handle_zone.contains(p));
+
+                        if is_hovering_handle && app.dragging_track_reorder.is_none() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                            // Draw grip dots
+                            let cx = header_rect.min.x + bar_offset_x + 9.0;
                             let cy = header_rect.center().y;
                             for dy in [-4.0, 0.0, 4.0] {
-                                ui.painter().circle_filled(egui::pos2(cx, cy + dy), 1.5, egui::Color32::from_rgb(140, 140, 155));
+                                ui.painter().circle_filled(egui::pos2(cx, cy + dy), 1.5, egui::Color32::from_rgb(150, 150, 165));
                             }
                         }
+
+                        // Start drag
+                        if is_hovering_handle && pointer_down && app.dragging_track_reorder.is_none() {
+                            app.dragging_track_reorder = Some((i, header_rect.center().y));
+                        }
+
                         if is_selected {
                             let glow_rect = egui::Rect::from_min_size(
                                 egui::pos2(header_rect.min.x + bar_offset_x, header_rect.min.y),
-                                egui::vec2(handle_w, header_rect.height()),
+                                egui::vec2(16.0, header_rect.height()),
                             );
                             ui.painter().rect_filled(glow_rect, 0.0, egui::Color32::from_rgba_premultiplied(240, 192, 64, 12));
                         }
@@ -832,10 +828,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     }
                                 }
 
-                                // Volume & Pan rotary knobs — right-aligned, Reaper-style
+                                // Volume & Pan rotary knobs — right-aligned, compact
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    ui.spacing_mut().item_spacing.x = 2.0;
-                                    let knob_r = 8.0;
+                                    ui.spacing_mut().item_spacing.x = 1.0;
+                                    ui.add_space(2.0); // margin from right edge
+                                    let knob_r = 7.0;
                                     let knob_size = egui::vec2(knob_r * 2.0 + 2.0, knob_r * 2.0 + 2.0);
 
                                     // Pan knob
@@ -948,66 +945,48 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 });
             }
 
-            // Handle drag-to-reorder drop
-            if !ui.input(|i| i.pointer.any_down()) {
-                if let Some((src, mouse_y)) = app.dragging_track_reorder.take() {
-                    // Find target based on Y
-                    let offsets = track_y_offsets(app);
-                    let vz = app.track_height_zoom;
-                    let panel_top = ui.min_rect().top();
-                    let rel_y = mouse_y - panel_top;
-                    let mut target = src;
-                    for (ti, &off) in offsets.iter().enumerate() {
-                        if ti >= app.project.tracks.len() { break; }
-                        let th = track_height(&app.project.tracks[ti], vz);
-                        if rel_y >= off && rel_y < off + th {
-                            target = ti;
-                            break;
-                        }
-                    }
-                    if target != src && target < app.project.tracks.len() {
-                        app.push_undo("Reorder tracks");
-                        let track = app.project.tracks.remove(src);
-                        app.project.tracks.insert(target, track);
-                        app.selected_track = Some(target);
-                        app.sync_project();
-                    }
-                }
-            }
+            // Drag-to-reorder: update position, draw indicator, handle drop
+            if let Some((src, ref mut mouse_y)) = app.dragging_track_reorder {
+                // Update Y from pointer delta
+                let delta = ui.input(|i| i.pointer.delta());
+                *mouse_y += delta.y;
+                let current_y = *mouse_y;
+                let src_idx = src;
 
-            // Drag-to-reorder: draw indicator and handle drop
-            if let Some((src, mouse_y)) = app.dragging_track_reorder {
-                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+
+                // Draw gold drop indicator line
                 let panel_rect = ui.max_rect();
                 ui.painter().line_segment(
-                    [egui::pos2(panel_rect.left(), mouse_y), egui::pos2(panel_rect.right(), mouse_y)],
-                    egui::Stroke::new(2.0, egui::Color32::from_rgb(240, 192, 64)),
+                    [egui::pos2(panel_rect.left(), current_y), egui::pos2(panel_rect.right(), current_y)],
+                    egui::Stroke::new(2.5, egui::Color32::from_rgb(240, 192, 64)),
                 );
 
                 // Drop when mouse released
-                if !ui.input(|i| i.pointer.any_down()) {
-                    app.dragging_track_reorder = None;
-                    // Find target track based on Y
+                if !ui.input(|i| i.pointer.primary_down()) {
                     let offsets = track_y_offsets(app);
                     let vz = app.track_height_zoom;
                     let panel_top = panel_rect.top();
-                    let rel_y = mouse_y - panel_top;
-                    let mut target = src;
+                    let rel_y = current_y - panel_top;
+
+                    // Find target by Y
+                    let mut target = src_idx;
                     for (ti, &off) in offsets.iter().enumerate() {
                         if ti >= app.project.tracks.len() { break; }
                         let th = track_height(&app.project.tracks[ti], vz);
-                        if rel_y >= off && rel_y < off + th {
+                        let mid = off + th / 2.0;
+                        if rel_y < mid {
                             target = ti;
                             break;
                         }
+                        target = ti;
                     }
-                    // Also handle dragging below all tracks
-                    if rel_y > offsets.last().copied().unwrap_or(0.0) + if app.project.tracks.is_empty() { 0.0 } else { track_height(app.project.tracks.last().unwrap(), vz) } {
-                        target = app.project.tracks.len().saturating_sub(1);
-                    }
-                    if target != src && src < app.project.tracks.len() && target < app.project.tracks.len() {
+
+                    app.dragging_track_reorder = None;
+
+                    if target != src_idx && src_idx < app.project.tracks.len() && target < app.project.tracks.len() {
                         app.push_undo("Reorder tracks");
-                        let track = app.project.tracks.remove(src);
+                        let track = app.project.tracks.remove(src_idx);
                         app.project.tracks.insert(target, track);
                         app.selected_track = Some(target);
                         app.sync_project();
