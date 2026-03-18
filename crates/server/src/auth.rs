@@ -193,9 +193,87 @@ async fn me(
     Ok(Json(UserPublic::from(user)))
 }
 
+/// Update user profile (username, bio, avatar_url)
+async fn update_profile(
+    State(pool): State<PgPool>,
+    auth: AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<UserPublic>, (StatusCode, Json<ErrorResponse>)> {
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
+        .bind(auth.0)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
+
+    let username = body.get("username").and_then(|v| v.as_str()).unwrap_or(&user.username);
+    let bio = body.get("bio").and_then(|v| v.as_str()).unwrap_or(user.bio.as_deref().unwrap_or(""));
+    let avatar_url = body.get("avatar_url").and_then(|v| v.as_str()).or(user.avatar_url.as_deref());
+
+    let _ = sqlx::query("UPDATE users SET username = $1, bio = $2, avatar_url = $3 WHERE id = $4")
+        .bind(username)
+        .bind(bio)
+        .bind(avatar_url)
+        .bind(auth.0)
+        .execute(&pool)
+        .await;
+
+    let updated = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
+        .bind(auth.0)
+        .fetch_one(&pool)
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+    Ok(Json(UserPublic::from(updated)))
+}
+
+/// Upload avatar image
+async fn upload_avatar(
+    State(pool): State<PgPool>,
+    auth: AuthUser,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let mut image_data: Option<Vec<u8>> = None;
+    let mut ext = "jpg".to_string();
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() == Some("avatar") {
+            if let Some(ct) = field.content_type() {
+                if ct.contains("png") { ext = "png".into(); }
+                else if ct.contains("gif") { ext = "gif".into(); }
+                else if ct.contains("webp") { ext = "webp".into(); }
+            }
+            if let Ok(data) = field.bytes().await {
+                image_data = Some(data.to_vec());
+            }
+        }
+    }
+
+    let data = image_data.ok_or_else(|| err(StatusCode::BAD_REQUEST, "No avatar image provided"))?;
+
+    let file_id = uuid::Uuid::new_v4();
+    let path = format!("uploads/{file_id}.{ext}");
+    tokio::fs::write(&path, &data).await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Save failed: {e}")))?;
+
+    let url = format!("/{path}");
+    let _ = sqlx::query("UPDATE users SET avatar_url = $1 WHERE id = $2")
+        .bind(&url)
+        .bind(auth.0)
+        .execute(&pool)
+        .await;
+
+    Ok(Json(serde_json::json!({ "avatar_url": url })))
+}
+
 pub fn router() -> Router<PgPool> {
+    use axum::routing::put;
+    use axum::extract::DefaultBodyLimit;
     Router::new()
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/me", get(me))
+        .route("/auth/profile", put(update_profile))
+        .route("/auth/avatar", post(upload_avatar))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB for avatars
 }
