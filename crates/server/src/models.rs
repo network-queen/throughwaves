@@ -279,3 +279,33 @@ pub struct TrackFile {
     pub audio_url: String,
     pub status: String,
 }
+
+// ── Cloud Projects ──
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CloudProject {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub title: String,
+    pub description: Option<String>,
+    pub mixdown_url: String,
+    pub project_data: Option<serde_json::Value>,
+    pub waveform_data: Option<serde_json::Value>,
+    pub duration_seconds: Option<f64>,
+    pub genre: Option<String>,
+    pub bpm: Option<i32>,
+    pub plays: Option<i64>,
+    pub is_public: Option<bool>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CloudProjectStem {
+    pub id: Uuid,
+    pub cloud_project_id: Uuid,
+    pub name: String,
+    pub audio_url: String,
+    pub track_index: i32,
+    pub kind: Option<String>,
+    pub created_at: DateTime<Utc>,
+}

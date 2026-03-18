@@ -125,3 +125,35 @@ CREATE TABLE IF NOT EXISTS reposts (
 
 CREATE INDEX idx_reposts_user ON reposts(user_id);
 CREATE INDEX idx_reposts_track ON reposts(track_id);
+
+-- Cloud Projects (full DAW project with stems)
+CREATE TABLE IF NOT EXISTS cloud_projects (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title            VARCHAR(255) NOT NULL,
+    description      TEXT DEFAULT '',
+    mixdown_url      TEXT NOT NULL,
+    project_data     JSONB,
+    waveform_data    JSONB,
+    duration_seconds DOUBLE PRECISION DEFAULT 0,
+    genre            VARCHAR(64) DEFAULT '',
+    bpm              INTEGER,
+    plays            BIGINT DEFAULT 0,
+    is_public        BOOLEAN DEFAULT TRUE,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_cloud_projects_user ON cloud_projects(user_id);
+
+-- Cloud Project Stems (individual tracks within a cloud project)
+CREATE TABLE IF NOT EXISTS cloud_project_stems (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cloud_project_id  UUID NOT NULL REFERENCES cloud_projects(id) ON DELETE CASCADE,
+    name              VARCHAR(255) NOT NULL,
+    audio_url         TEXT NOT NULL,
+    track_index       INTEGER NOT NULL DEFAULT 0,
+    kind              VARCHAR(16) DEFAULT 'audio',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_cloud_stems_project ON cloud_project_stems(cloud_project_id);

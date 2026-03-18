@@ -549,3 +549,13 @@ pub fn router() -> Router<PgPool> {
         .route("/tracks/{id}/comments", post(post_comment))
         .route("/tracks/{id}/repost", post(repost_track))
 }
+
+/// Public wrapper for waveform generation (used by cloud.rs)
+pub fn generate_waveform_public(data: &[u8]) -> Option<serde_json::Value> {
+    generate_waveform_from_wav(data, 200).map(|(peaks, _)| serde_json::json!(peaks))
+}
+
+/// Estimate WAV duration from raw bytes
+pub fn estimate_wav_duration(data: &[u8]) -> Option<f64> {
+    generate_waveform_from_wav(data, 200).map(|(_, dur)| dur)
+}

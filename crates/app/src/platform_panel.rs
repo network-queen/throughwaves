@@ -44,6 +44,11 @@ pub struct PlatformPanel {
     pub import_track_id: String,
     pub import_track_status: Option<String>,
 
+    // Cloud project
+    pub cloud_upload_status: Option<String>,
+    pub cloud_download_id: String,
+    pub cloud_download_status: Option<String>,
+
     // My tracks list
     pub my_tracks: Vec<PlatformTrack>,
     pub tracks_loaded: bool,
@@ -71,6 +76,9 @@ impl Default for PlatformPanel {
             checkout_status: None,
             import_track_id: String::new(),
             import_track_status: None,
+            cloud_upload_status: None,
+            cloud_download_id: String::new(),
+            cloud_download_status: None,
             my_tracks: Vec::new(),
             tracks_loaded: false,
         }
@@ -571,6 +579,40 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
 
     ui.separator();
 
+    ui.separator();
+
+    // ── Cloud Project (Upload/Download full project) ──
+    egui::CollapsingHeader::new("Cloud Project")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("Upload your full project with all tracks as stems. Others hear the mixdown; you can re-download all stems.").size(10.0).weak());
+            ui.add_space(4.0);
+
+            if let Some(ref status) = app.platform.cloud_upload_status {
+                ui.label(status.as_str());
+            }
+
+            if ui.button("Upload Project to Cloud").clicked() {
+                do_upload_cloud_project(app);
+            }
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.label("Cloud Project ID:");
+                ui.text_edit_singleline(&mut app.platform.cloud_download_id);
+            });
+
+            if let Some(ref status) = app.platform.cloud_download_status {
+                ui.label(status.as_str());
+            }
+
+            if ui.button("Download Project from Cloud").clicked() {
+                do_download_cloud_project(app);
+            }
+        });
+
+    ui.separator();
+
     // ── My Tracks ──
     egui::CollapsingHeader::new("My Tracks")
         .default_open(false)
@@ -716,6 +758,227 @@ fn do_checkout_project(app: &mut DawApp) {
 }
 
 /// Import a single track from the platform into the DAW as a new audio track.
+/// Upload the full project to the cloud: renders a mixdown + exports each track as a stem
+fn do_upload_cloud_project(app: &mut DawApp) {
+    let jwt = match &app.platform.jwt_token {
+        Some(t) => t.clone(),
+        None => {
+            app.platform.cloud_upload_status = Some("Error: not logged in".into());
+            return;
+        }
+    };
+
+    if app.project.tracks.is_empty() {
+        app.platform.cloud_upload_status = Some("No tracks to upload".into());
+        return;
+    }
+
+    app.platform.cloud_upload_status = Some("Rendering mixdown + stems...".into());
+
+    let sr = app.sample_rate();
+
+    // Render each track as a stem, then mix for the mixdown
+    let mut stems: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut all_bounced: Vec<Vec<f32>> = Vec::new();
+    for i in 0..app.project.tracks.len() {
+        let name = app.project.tracks[i].name.clone();
+        let stem = match jamhub_engine::bounce_track(
+            &app.project, i, &app.audio_buffers, sr,
+        ) {
+            Ok(samples) => samples,
+            Err(_) => continue,
+        };
+        all_bounced.push(stem.clone());
+        let stem_bytes = encode_wav_bytes(&stem, sr);
+        stems.push((name, stem_bytes));
+    }
+
+    // Create mixdown by summing all stems
+    let max_len = all_bounced.iter().map(|s| s.len()).max().unwrap_or(0);
+    let mut mixdown = vec![0.0f32; max_len];
+    for stem in &all_bounced {
+        for (i, &s) in stem.iter().enumerate() {
+            mixdown[i] += s;
+        }
+    }
+    // Soft clip
+    for s in &mut mixdown {
+        *s = s.clamp(-1.0, 1.0);
+    }
+    let mixdown_bytes = encode_wav_bytes(&mixdown, sr);
+
+    app.platform.cloud_upload_status = Some(format!("Uploading {} stems...", stems.len()));
+
+    // Build multipart body
+    let boundary = format!("----TW_Cloud_{}", uuid::Uuid::new_v4().simple());
+    let mut body = Vec::new();
+
+    // Title field
+    append_multipart_field_bytes(&mut body, &boundary, "title", app.project.name.as_bytes());
+    // Genre
+    append_multipart_field_bytes(&mut body, &boundary, "genre", b"");
+    // BPM
+    let bpm_str = format!("{}", app.project.tempo.bpm as i32);
+    append_multipart_field_bytes(&mut body, &boundary, "bpm", bpm_str.as_bytes());
+    // Mixdown file
+    append_multipart_file(&mut body, &boundary, "mixdown", "mixdown.wav", &mixdown_bytes);
+    // Stems
+    for (name, data) in &stems {
+        let field_name = format!("stem_{}", name.replace(' ', "_"));
+        append_multipart_file(&mut body, &boundary, &field_name, &format!("{name}.wav"), data);
+    }
+    // Final boundary
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let url = format!("{}/api/cloud", app.platform.server_url.trim_end_matches('/'));
+    let content_type = format!("multipart/form-data; boundary={boundary}");
+
+    let agent = ureq::Agent::new_with_defaults();
+
+    match agent.post(&url)
+        .header("Authorization", &format!("Bearer {jwt}"))
+        .header("Content-Type", &content_type)
+        .send(&body[..])
+    {
+        Ok(resp) => {
+            let body_str = resp.into_body().read_to_string().unwrap_or_default();
+            let id = extract_json_string(&body_str, "id").unwrap_or_default();
+            app.platform.cloud_upload_status = Some(format!("Uploaded! Project ID: {id}"));
+            app.set_status(&format!("Project uploaded to cloud: {id}"));
+        }
+        Err(e) => {
+            app.platform.cloud_upload_status = Some(format!("Upload failed: {e}"));
+        }
+    }
+}
+
+/// Download a cloud project and import all stems as tracks
+fn do_download_cloud_project(app: &mut DawApp) {
+    let input = app.platform.cloud_download_id.trim().to_string();
+    if input.is_empty() {
+        app.platform.cloud_download_status = Some("Enter a cloud project ID".into());
+        return;
+    }
+
+    let jwt = match &app.platform.jwt_token {
+        Some(t) => t.clone(),
+        None => {
+            app.platform.cloud_download_status = Some("Error: not logged in".into());
+            return;
+        }
+    };
+
+    // Extract ID from URL if needed
+    let project_id = if input.contains("/cloud/") {
+        input.rsplit("/cloud/").next().unwrap_or(&input).to_string()
+    } else {
+        input.clone()
+    };
+
+    app.platform.cloud_download_status = Some("Downloading project...".into());
+
+    let path = format!("/api/cloud/{}/download", project_id);
+    match platform_request("POST", &app.platform.server_url, &path, Some(&jwt), None) {
+        Ok(resp) => {
+            // Parse stems from response
+            let title = extract_json_string(&resp, "title").unwrap_or("Cloud Project".into());
+
+            // Find all stem audio_urls and names
+            let mut stem_count = 0;
+            let mut idx = 0;
+            while let Some(pos) = resp[idx..].find("\"audio_url\"") {
+                let abs = idx + pos;
+                if let Some(url) = extract_json_string(&resp[abs..], "audio_url") {
+                    // Find the corresponding name (should be before audio_url in the JSON)
+                    let name_search_start = if abs > 200 { abs - 200 } else { 0 };
+                    let name = extract_json_string(&resp[name_search_start..abs], "name")
+                        .unwrap_or_else(|| format!("Stem {}", stem_count + 1));
+
+                    // Download stem audio
+                    let full_url = format!("{}{}", app.platform.server_url.trim_end_matches('/'), url);
+                    let agent = ureq::Agent::new_with_defaults();
+                    if let Ok(audio_resp) = agent.get(&full_url).call() {
+                        if let Ok(audio_bytes) = audio_resp.into_body().with_config().limit(500 * 1024 * 1024).read_to_vec() {
+                            if let Ok(samples) = jamhub_engine::load_audio_buffer(&audio_bytes) {
+                                let buffer_id = uuid::Uuid::new_v4();
+                                let duration = samples.len() as u64;
+                                app.audio_buffers.insert(buffer_id, samples);
+
+                                let track_id = app.project.add_track(&name, jamhub_model::TrackKind::Audio);
+                                if let Some(track) = app.project.tracks.iter_mut().find(|t| t.id == track_id) {
+                                    track.clips.push(jamhub_model::Clip {
+                                        id: uuid::Uuid::new_v4(),
+                                        name: name.clone(),
+                                        start_sample: 0,
+                                        duration_samples: duration,
+                                        source: jamhub_model::ClipSource::AudioBuffer { buffer_id },
+                                        muted: false,
+                                        fade_in_samples: 0, fade_out_samples: 0,
+                                        fade_in_curve: Default::default(), fade_out_curve: Default::default(),
+                                        color: None, playback_rate: 1.0, preserve_pitch: false,
+                                        loop_count: 1, gain_db: 0.0, take_index: 0,
+                                        content_offset: 0, transpose_semitones: 0, reversed: false,
+                                    });
+                                }
+                                stem_count += 1;
+                            }
+                        }
+                    }
+                }
+                idx = abs + 11;
+            }
+
+            app.project.name = title.clone();
+            app.sync_project();
+            app.platform.cloud_download_status = Some(format!("Downloaded: {title} ({stem_count} tracks)"));
+            app.set_status(&format!("Cloud project loaded: {title}"));
+        }
+        Err(e) => {
+            app.platform.cloud_download_status = Some(format!("Download failed: {e}"));
+        }
+    }
+}
+
+fn encode_wav_bytes(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let data_size = samples.len() * 4;
+    let file_size = 36 + data_size;
+    // RIFF header
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&(file_size as u32).to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+    // fmt chunk
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&3u16.to_le_bytes()); // float
+    buf.extend_from_slice(&1u16.to_le_bytes()); // mono
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&(sample_rate * 4).to_le_bytes()); // byte rate
+    buf.extend_from_slice(&4u16.to_le_bytes()); // block align
+    buf.extend_from_slice(&32u16.to_le_bytes()); // bits per sample
+    // data chunk
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&(data_size as u32).to_le_bytes());
+    for &s in samples {
+        buf.extend_from_slice(&s.to_le_bytes());
+    }
+    buf
+}
+
+fn append_multipart_field_bytes(body: &mut Vec<u8>, boundary: &str, name: &str, value: &[u8]) {
+    body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes());
+    body.extend_from_slice(value);
+    body.extend_from_slice(b"\r\n");
+}
+
+fn append_multipart_file(body: &mut Vec<u8>, boundary: &str, name: &str, filename: &str, data: &[u8]) {
+    body.extend_from_slice(format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: audio/wav\r\n\r\n"
+    ).as_bytes());
+    body.extend_from_slice(data);
+    body.extend_from_slice(b"\r\n");
+}
+
 fn do_import_track(app: &mut DawApp) {
     // Extract track ID from input — could be a UUID or a URL like http://localhost:3000/#/track/<uuid>
     let input = app.platform.import_track_id.trim().to_string();
