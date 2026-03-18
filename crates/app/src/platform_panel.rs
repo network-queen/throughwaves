@@ -477,11 +477,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
 }
 
 fn show_login_form(app: &mut DawApp, ui: &mut egui::Ui) {
-    ui.heading(if app.platform.is_registering {
-        "Register"
-    } else {
-        "Login"
-    });
+    ui.heading("Login");
 
     ui.horizontal(|ui| {
         ui.label("Email:");
@@ -490,13 +486,8 @@ fn show_login_form(app: &mut DawApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label("Password:");
         let response = ui.add(egui::TextEdit::singleline(&mut app.platform.password).password(true));
-        // Submit on Enter
         if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            if app.platform.is_registering {
-                app.platform.register();
-            } else {
-                app.platform.login();
-            }
+            app.platform.login();
         }
     });
 
@@ -505,22 +496,12 @@ fn show_login_form(app: &mut DawApp, ui: &mut egui::Ui) {
     }
 
     ui.horizontal(|ui| {
-        if app.platform.is_registering {
-            if ui.button("Register").clicked() {
-                app.platform.register();
-            }
-            if ui.button("Back to Login").clicked() {
-                app.platform.is_registering = false;
-                app.platform.login_error = None;
-            }
-        } else {
-            if ui.button("Login").clicked() {
-                app.platform.login();
-            }
-            if ui.button("Create Account").clicked() {
-                app.platform.is_registering = true;
-                app.platform.login_error = None;
-            }
+        if ui.button("Login").clicked() {
+            app.platform.login();
+        }
+        if ui.button("Create Account on Website").clicked() {
+            let url = format!("{}", app.platform.server_url.trim_end_matches('/'));
+            let _ = open::that(&url);
         }
     });
 }
@@ -587,7 +568,7 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                     ui.horizontal(|ui| {
                         ui.label("Band:");
                         let selected_name = if app.platform.selected_band_idx == 0 {
-                            "No band (personal)".to_string()
+                            "Select a band...".to_string()
                         } else {
                             app.platform.bands.get(app.platform.selected_band_idx - 1)
                                 .map(|b| b.name.clone())
@@ -596,9 +577,6 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                         egui::ComboBox::from_id_salt("band_select")
                             .selected_text(&selected_name)
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(app.platform.selected_band_idx == 0, "No band (personal)").clicked() {
-                                    app.platform.selected_band_idx = 0;
-                                }
                                 for (i, band) in app.platform.bands.iter().enumerate() {
                                     if ui.selectable_label(app.platform.selected_band_idx == i + 1, &band.name).clicked() {
                                         app.platform.selected_band_idx = i + 1;
@@ -606,8 +584,16 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                                 }
                             });
                     });
+                    if app.platform.selected_band_idx == 0 {
+                        ui.label(egui::RichText::new("You must select a band to push a project").size(10.0).color(egui::Color32::from_rgb(220, 160, 60)));
+                    }
                 } else {
-                    ui.label(egui::RichText::new("No bands yet — create one on the website").size(10.0).weak());
+                    ui.label(egui::RichText::new("You need a band to push projects.").size(10.0).color(egui::Color32::from_rgb(220, 160, 60)));
+                    if ui.button("Create Band on Website").clicked() {
+                        let url = format!("{}/#/bands", app.platform.server_url.trim_end_matches('/'));
+                        let _ = open::that(&url);
+                        app.platform.bands_loaded = false; // reload on next frame
+                    }
                 }
 
                 ui.add_space(4.0);
@@ -626,12 +612,11 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                 }
 
                 ui.add_space(4.0);
-                if ui.button("Push Project to Cloud").clicked() {
-                    // Validate required fields
+                let has_band = app.platform.selected_band_idx > 0;
+                if ui.add_enabled(has_band, egui::Button::new("Push Project to Cloud")).clicked() {
                     if app.platform.upload_title.trim().is_empty() {
                         app.platform.cloud_upload_status = Some("Project name is required".into());
                     } else {
-                        // Use the form title instead of the project name
                         let original_name = app.project.name.clone();
                         app.project.name = app.platform.upload_title.trim().to_string();
                         do_upload_cloud_project(app);
