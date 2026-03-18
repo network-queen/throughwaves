@@ -32,6 +32,7 @@ async fn upload_cloud_project(
     let mut description = String::new();
     let mut genre = String::new();
     let mut bpm: Option<i32> = None;
+    let mut band_id: Option<Uuid> = None;
     let mut mixdown_data: Option<Vec<u8>> = None;
     let mut stems: Vec<(String, Vec<u8>)> = Vec::new();
 
@@ -42,6 +43,7 @@ async fn upload_cloud_project(
             "description" => description = field.text().await.unwrap_or_default(),
             "genre" => genre = field.text().await.unwrap_or_default(),
             "bpm" => bpm = field.text().await.ok().and_then(|s| s.parse().ok()),
+            "band_id" => band_id = field.text().await.ok().and_then(|s| s.parse().ok()),
             "mixdown" => {
                 if let Ok(data) = field.bytes().await {
                     mixdown_data = Some(data.to_vec());
@@ -217,13 +219,14 @@ async fn upload_cloud_project(
 
         // Update the project's current mixdown
         let _ = sqlx::query(
-            "UPDATE cloud_projects SET mixdown_url = $1, waveform_data = $2, duration_seconds = $3, bpm = $4 WHERE id = $5"
+            "UPDATE cloud_projects SET mixdown_url = $1, waveform_data = $2, duration_seconds = $3, bpm = $4, band_id = COALESCE($6, band_id) WHERE id = $5"
         )
         .bind(&mixdown_url)
         .bind(&waveform)
         .bind(duration)
         .bind(bpm)
         .bind(project_id)
+        .bind(band_id)
         .execute(&pool)
         .await;
 
@@ -239,8 +242,8 @@ async fn upload_cloud_project(
     } else {
         // ── FIRST UPLOAD — create new project ──
         let project_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO cloud_projects (user_id, title, description, mixdown_url, waveform_data, duration_seconds, genre, bpm)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id"
+            "INSERT INTO cloud_projects (user_id, title, description, mixdown_url, waveform_data, duration_seconds, genre, bpm, band_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id"
         )
         .bind(user_id)
         .bind(&title)
@@ -250,6 +253,7 @@ async fn upload_cloud_project(
         .bind(duration)
         .bind(&genre)
         .bind(bpm)
+        .bind(band_id)
         .fetch_one(&pool)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("DB: {e}") })))?;

@@ -5,6 +5,12 @@ use jamhub_engine::{ExportFormat, ExportOptions};
 
 /// Track metadata returned by the platform API.
 #[derive(Default, Clone)]
+pub struct PlatformBand {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Default, Clone)]
 pub struct PlatformTrack {
     pub id: String,
     pub title: String,
@@ -49,6 +55,11 @@ pub struct PlatformPanel {
     pub cloud_download_id: String,
     pub cloud_download_status: Option<String>,
 
+    // Bands
+    pub bands: Vec<PlatformBand>,
+    pub bands_loaded: bool,
+    pub selected_band_idx: usize, // 0 = none, 1+ = band index
+
     // My tracks list
     pub my_tracks: Vec<PlatformTrack>,
     pub tracks_loaded: bool,
@@ -79,6 +90,9 @@ impl Default for PlatformPanel {
             cloud_upload_status: None,
             cloud_download_id: String::new(),
             cloud_download_status: None,
+            bands: Vec::new(),
+            bands_loaded: false,
+            selected_band_idx: 0,
             my_tracks: Vec::new(),
             tracks_loaded: false,
         }
@@ -537,6 +551,54 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                     ui.text_edit_singleline(&mut app.platform.upload_genre);
                 });
 
+                // Band selector
+                if !app.platform.bands_loaded {
+                    if let Some(ref jwt) = app.platform.jwt_token {
+                        if let Ok(resp) = platform_request("GET", &app.platform.server_url, "/api/bands", Some(jwt), None) {
+                            app.platform.bands.clear();
+                            // Parse bands from JSON array
+                            let mut idx = 0;
+                            while let Some(pos) = resp[idx..].find("\"id\"") {
+                                let abs = idx + pos;
+                                if let Some(id) = extract_json_string(&resp[abs..], "id") {
+                                    if let Some(name) = extract_json_string(&resp[abs..], "name") {
+                                        app.platform.bands.push(PlatformBand { id, name });
+                                    }
+                                }
+                                idx = abs + 4;
+                            }
+                        }
+                        app.platform.bands_loaded = true;
+                    }
+                }
+
+                if !app.platform.bands.is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.label("Band:");
+                        let selected_name = if app.platform.selected_band_idx == 0 {
+                            "No band (personal)".to_string()
+                        } else {
+                            app.platform.bands.get(app.platform.selected_band_idx - 1)
+                                .map(|b| b.name.clone())
+                                .unwrap_or("Select...".into())
+                        };
+                        egui::ComboBox::from_id_salt("band_select")
+                            .selected_text(&selected_name)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(app.platform.selected_band_idx == 0, "No band (personal)").clicked() {
+                                    app.platform.selected_band_idx = 0;
+                                }
+                                for (i, band) in app.platform.bands.iter().enumerate() {
+                                    if ui.selectable_label(app.platform.selected_band_idx == i + 1, &band.name).clicked() {
+                                        app.platform.selected_band_idx = i + 1;
+                                    }
+                                }
+                            });
+                    });
+                } else {
+                    ui.label(egui::RichText::new("No bands yet — create one on the website").size(10.0).weak());
+                }
+
                 if let Some(ref status) = app.platform.cloud_upload_status {
                     ui.add_space(2.0);
                     ui.label(status.as_str());
@@ -794,10 +856,16 @@ fn do_upload_cloud_project(app: &mut DawApp) {
     // Title field
     append_multipart_field_bytes(&mut body, &boundary, "title", app.project.name.as_bytes());
     // Genre
-    append_multipart_field_bytes(&mut body, &boundary, "genre", b"");
+    append_multipart_field_bytes(&mut body, &boundary, "genre", app.platform.upload_genre.as_bytes());
     // BPM
     let bpm_str = format!("{}", app.project.tempo.bpm as i32);
     append_multipart_field_bytes(&mut body, &boundary, "bpm", bpm_str.as_bytes());
+    // Band ID
+    if app.platform.selected_band_idx > 0 {
+        if let Some(band) = app.platform.bands.get(app.platform.selected_band_idx - 1) {
+            append_multipart_field_bytes(&mut body, &boundary, "band_id", band.id.as_bytes());
+        }
+    }
     // Mixdown file
     append_multipart_file(&mut body, &boundary, "mixdown", "mixdown.wav", &mixdown_bytes);
     // Stems
