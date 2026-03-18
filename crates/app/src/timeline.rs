@@ -575,55 +575,33 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         };
                         ui.painter().rect_filled(header_rect, 0.0, bg);
 
-                        // Folder child indent — visual hierarchy line
+                        // Folder child indent — clean file-system tree lines
                         let is_folder_child = track.group_id.map_or(false, |gid| {
                             app.project.tracks.iter().any(|t| t.id == gid && t.kind == TrackKind::Folder)
                         });
                         if is_folder_child {
-                            // Left indent background tint
-                            let indent_rect = egui::Rect::from_min_size(
-                                header_rect.min,
-                                egui::vec2(GROUP_INDENT, header_rect.height()),
-                            );
-                            ui.painter().rect_filled(indent_rect, 0.0, egui::Color32::from_rgba_premultiplied(220, 180, 100, 10));
-                            // Vertical line
+                            let line_color = egui::Color32::from_rgb(55, 56, 68);
+                            let line_x = header_rect.min.x + 6.0;
+                            // Thin vertical tree line
                             ui.painter().line_segment(
-                                [egui::pos2(header_rect.min.x + 3.0, header_rect.min.y),
-                                 egui::pos2(header_rect.min.x + 3.0, header_rect.max.y)],
-                                egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 100, 60)),
+                                [egui::pos2(line_x, header_rect.min.y),
+                                 egui::pos2(line_x, header_rect.center().y)],
+                                egui::Stroke::new(1.0, line_color),
                             );
-                            // Horizontal connector to the track
+                            // Horizontal connector
                             ui.painter().line_segment(
-                                [egui::pos2(header_rect.min.x + 3.0, header_rect.center().y),
+                                [egui::pos2(line_x, header_rect.center().y),
                                  egui::pos2(header_rect.min.x + GROUP_INDENT - 2.0, header_rect.center().y)],
-                                egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 100, 60)),
+                                egui::Stroke::new(1.0, line_color),
                             );
                         }
 
-                        // Hover highlight: subtle top edge glow
+                        // Hover highlight
                         if bg_response_hovered && !is_selected {
                             ui.painter().line_segment(
                                 [header_rect.left_top(), header_rect.right_top()],
                                 egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(255, 255, 255, 6)),
                             );
-                        }
-
-                        // Group color bar on left for grouped tracks
-                        if is_grouped {
-                            if let Some(gid) = track.group_id {
-                                let group_color = app.project.groups.iter()
-                                    .find(|g| g.id == gid)
-                                    .map(|g| egui::Color32::from_rgb(g.color[0], g.color[1], g.color[2]))
-                                    .unwrap_or(egui::Color32::from_rgb(120, 120, 180));
-                                let gbar = egui::Rect::from_min_size(header_rect.min, egui::vec2(GROUP_INDENT - 4.0, header_rect.height()));
-                                ui.painter().rect_filled(gbar, 0.0, group_color.gamma_multiply(0.15));
-                                // Vertical accent line
-                                let line_x = header_rect.min.x + 1.5;
-                                ui.painter().line_segment(
-                                    [egui::pos2(line_x, header_rect.min.y), egui::pos2(line_x, header_rect.max.y)],
-                                    egui::Stroke::new(2.0, group_color.gamma_multiply(0.6)),
-                                );
-                            }
                         }
 
                         // Left accent stripe + drag handle
