@@ -567,6 +567,11 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                 if !app.platform.bands.is_empty() {
                     ui.horizontal(|ui| {
                         ui.label("Band:");
+                        // Refresh button to reload bands after creating on website
+                        if ui.small_button("\u{21BB}").on_hover_text("Refresh bands list").clicked() {
+                            app.platform.bands_loaded = false;
+                            app.platform.bands.clear();
+                        }
                         let selected_name = if app.platform.selected_band_idx == 0 {
                             "Select a band...".to_string()
                         } else {
@@ -589,11 +594,16 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                 } else {
                     ui.label(egui::RichText::new("You need a band to push projects.").size(10.0).color(egui::Color32::from_rgb(220, 160, 60)));
-                    if ui.button("Create Band").clicked() {
-                        let url = format!("{}/#/bands", app.platform.server_url.trim_end_matches('/'));
-                        let _ = open::that(&url);
-                        app.platform.bands_loaded = false; // reload on next frame
-                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Create Band").clicked() {
+                            let url = format!("{}/#/bands", app.platform.server_url.trim_end_matches('/'));
+                            let _ = open::that(&url);
+                        }
+                        if ui.button("Refresh").on_hover_text("Reload bands after creating one").clicked() {
+                            app.platform.bands_loaded = false;
+                            app.platform.bands.clear();
+                        }
+                    });
                 }
 
                 ui.add_space(4.0);
