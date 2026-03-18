@@ -2139,8 +2139,7 @@ impl DawApp {
 
     pub fn delete_selected_track(&mut self) {
         if let Some(track_idx) = self.selected_track {
-            if track_idx < self.project.tracks.len() && self.project.tracks.len() > 1 {
-                // Show confirmation dialog instead of deleting immediately
+            if track_idx < self.project.tracks.len() {
                 let name = self.project.tracks[track_idx].name.clone();
                 self.confirm_delete_track = Some((track_idx, name));
             }
@@ -2149,10 +2148,14 @@ impl DawApp {
 
     /// Actually perform track deletion (called after user confirms)
     fn do_delete_track(&mut self, track_idx: usize) {
-        if track_idx < self.project.tracks.len() && self.project.tracks.len() > 1 {
+        if track_idx < self.project.tracks.len() {
             self.push_undo("Delete track");
             self.project.tracks.remove(track_idx);
-            self.selected_track = Some(track_idx.min(self.project.tracks.len() - 1));
+            if self.project.tracks.is_empty() {
+                self.selected_track = None;
+            } else {
+                self.selected_track = Some(track_idx.min(self.project.tracks.len() - 1));
+            }
             self.selected_clips.clear();
             self.sync_project();
             self.set_status("Track deleted");
