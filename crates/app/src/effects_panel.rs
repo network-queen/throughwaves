@@ -211,6 +211,15 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                     egui::RichText::new(&name_text).size(12.0).color(name_color)
                                 };
                                 let resp = ui.add(egui::Button::new(name_rt).frame(false));
+                                // Hover highlight: underline + brighten to show it's clickable
+                                if resp.hovered() {
+                                    let r = resp.rect;
+                                    ui.painter().line_segment(
+                                        [egui::pos2(r.min.x, r.max.y - 1.0), egui::pos2(r.max.x, r.max.y - 1.0)],
+                                        egui::Stroke::new(1.0, name_color.gamma_multiply(0.6)),
+                                    );
+                                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                                }
                                 if resp.on_hover_text(if is_vst {
                                     if is_open { "Close plugin editor" } else { "Open plugin editor" }
                                 } else { "Edit parameters" }).clicked() {
