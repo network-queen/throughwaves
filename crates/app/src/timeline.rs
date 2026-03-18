@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::DawApp;
 
-const BASE_LANE_HEIGHT: f32 = 48.0;
-const TAKE_LANE_HEIGHT: f32 = 48.0;
+const BASE_LANE_HEIGHT: f32 = 54.0;
+const TAKE_LANE_HEIGHT: f32 = 54.0;
 const HEADER_WIDTH: f32 = 200.0;
 const RULER_HEIGHT: f32 = 34.0;
 const PIXELS_PER_SECOND_BASE: f32 = 100.0;
@@ -402,7 +402,6 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                     let (header_rect, _) = ui.allocate_exact_size(egui::vec2(HEADER_WIDTH, h), egui::Sense::hover());
                     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(header_rect), |ui| {
-                        ui.set_clip_rect(header_rect); // prevent content overflow
                         let header_rect = header_rect;
 
                         // Click area for entire header — selection & context menu
@@ -648,7 +647,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                         ui.add_space(if is_grouped { GROUP_INDENT + 14.0 } else { 14.0 });
                         ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.spacing_mut().item_spacing.y = 1.0;
 
                             // Row 1: Track number + type badge + name
                             ui.horizontal(|ui| {
@@ -789,8 +788,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             // Row 2: M/S/R/FX buttons — 24px circles with gradient fills
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
-                                let circ_size = egui::vec2(24.0, 24.0);
-                                let btn_text_size = 10.0;
+                                let circ_size = egui::vec2(20.0, 20.0);
+                                let btn_text_size = 9.0;
 
                                 // Mute — warm amber gradient when active
                                 let m_active = track.muted;
