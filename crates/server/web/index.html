@@ -1933,6 +1933,7 @@ async function renderCloudProject(el, projectId) {
     project = json.project;
     stems = json.stems || [];
     isOwner = json.is_owner || false;
+    var versions = json.versions || [];
     username = json.username || 'Unknown';
   } catch(e) {
     el.innerHTML = '<h1 class="page-title">Cloud Project Not Found</h1>';
@@ -2047,6 +2048,30 @@ async function renderCloudProject(el, projectId) {
             Publish Mixdown as Track
           </button>
         </div>
+
+        <!-- Version History -->
+        ${versions.length > 1 ? `
+        <div class="card" style="padding:1rem; margin-bottom:1rem;">
+          <h4 style="margin-bottom:0.8rem;">Version History (${versions.length} versions)</h4>
+          <div style="display:flex; flex-direction:column; gap:0.4rem;">
+            ${versions.map(v => {
+              const date = new Date(v.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+              const stemInfo = JSON.parse(typeof v.stem_refs === 'string' ? v.stem_refs : JSON.stringify(v.stem_refs));
+              const newCount = stemInfo.filter(s => s.is_new).length;
+              const reusedCount = stemInfo.filter(s => !s.is_new).length;
+              return '<div style="display:flex; align-items:center; gap:0.8rem; padding:0.5rem; border-radius:6px; background:var(--bg-base);">' +
+                '<span style="font-weight:600; color:var(--accent); min-width:24px;">v' + v.version_number + '</span>' +
+                '<span style="flex:1; font-size:0.9rem;">' + esc(v.message || '') + '</span>' +
+                '<span style="color:var(--text-muted); font-size:0.8rem;">' +
+                  (newCount > 0 ? newCount + ' new' : '') +
+                  (reusedCount > 0 ? (newCount > 0 ? ', ' : '') + reusedCount + ' reused' : '') +
+                '</span>' +
+                '<span style="color:var(--text-muted); font-size:0.8rem;">' + date + '</span>' +
+              '</div>';
+            }).join('')}
+          </div>
+        </div>
+        ` : ''}
 
         <!-- Import to DAW instructions -->
         <div class="card" style="padding:1rem;">

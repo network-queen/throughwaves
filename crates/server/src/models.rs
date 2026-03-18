@@ -308,4 +308,18 @@ pub struct CloudProjectStem {
     pub track_index: i32,
     pub kind: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub content_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CloudProjectVersion {
+    pub id: Uuid,
+    pub cloud_project_id: Uuid,
+    pub version_number: i32,
+    pub message: Option<String>,
+    pub mixdown_url: String,
+    pub waveform_data: Option<serde_json::Value>,
+    pub duration_seconds: Option<f64>,
+    pub stem_refs: serde_json::Value,
+    pub created_at: DateTime<Utc>,
 }

@@ -843,8 +843,16 @@ fn do_upload_cloud_project(app: &mut DawApp) {
         Ok(resp) => {
             let body_str = resp.into_body().read_to_string().unwrap_or_default();
             let id = extract_json_string(&body_str, "id").unwrap_or_default();
-            app.platform.cloud_upload_status = Some(format!("Uploaded! Project ID: {id}"));
-            app.set_status(&format!("Project uploaded to cloud: {id}"));
+            let version = extract_json_string(&body_str, "version").unwrap_or("1".into());
+            let new_stems = extract_json_string(&body_str, "new_stems").unwrap_or("?".into());
+            let reused = extract_json_string(&body_str, "reused_stems").unwrap_or("0".into());
+            let ver_msg = if version == "1" {
+                format!("Uploaded! ID: {id}")
+            } else {
+                format!("Updated to v{version}! ({new_stems} new, {reused} reused stems) ID: {id}")
+            };
+            app.platform.cloud_upload_status = Some(ver_msg.clone());
+            app.set_status(&ver_msg);
         }
         Err(e) => {
             app.platform.cloud_upload_status = Some(format!("Upload failed: {e}"));

@@ -157,3 +157,22 @@ CREATE TABLE IF NOT EXISTS cloud_project_stems (
 );
 
 CREATE INDEX idx_cloud_stems_project ON cloud_project_stems(cloud_project_id);
+
+-- Add content hash to stems for delta detection
+ALTER TABLE cloud_project_stems ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) DEFAULT '';
+
+-- Cloud Project Versions (git-like history)
+CREATE TABLE IF NOT EXISTS cloud_project_versions (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cloud_project_id  UUID NOT NULL REFERENCES cloud_projects(id) ON DELETE CASCADE,
+    version_number    INTEGER NOT NULL DEFAULT 1,
+    message           TEXT DEFAULT '',
+    mixdown_url       TEXT NOT NULL,
+    waveform_data     JSONB,
+    duration_seconds  DOUBLE PRECISION DEFAULT 0,
+    -- JSON array of stem references: [{stem_id, name, track_index, is_new}]
+    stem_refs         JSONB NOT NULL DEFAULT '[]',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_cloud_versions_project ON cloud_project_versions(cloud_project_id);
