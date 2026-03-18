@@ -857,22 +857,23 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     }
                                 }
 
-                                // Record arm — ruby red gradient with glow
-                                let r_active = track.armed;
-                                let r_bg = if r_active { egui::Color32::from_rgb(210, 55, 65) } else { egui::Color32::from_rgb(34, 35, 44) };
-                                let r_tc = if r_active { egui::Color32::WHITE } else { egui::Color32::from_rgb(128, 126, 135) };
-                                let r_resp = ui.add_sized(circ_size, egui::Button::new(
-                                    egui::RichText::new("R").size(btn_text_size).strong().color(r_tc)
-                                ).fill(r_bg).corner_radius(12.0));
-                                if r_resp.hovered() && !r_active {
-                                    ui.painter().circle_stroke(r_resp.rect.center(), 11.5, egui::Stroke::new(1.0, egui::Color32::from_rgb(210, 55, 65).gamma_multiply(0.45)));
+                                // Record arm — only for audio tracks
+                                if track.kind == TrackKind::Audio {
+                                    let r_active = track.armed;
+                                    let r_bg = if r_active { egui::Color32::from_rgb(210, 55, 65) } else { egui::Color32::from_rgb(34, 35, 44) };
+                                    let r_tc = if r_active { egui::Color32::WHITE } else { egui::Color32::from_rgb(128, 126, 135) };
+                                    let r_resp = ui.add_sized(circ_size, egui::Button::new(
+                                        egui::RichText::new("R").size(btn_text_size).strong().color(r_tc)
+                                    ).fill(r_bg).corner_radius(12.0));
+                                    if r_resp.hovered() && !r_active {
+                                        ui.painter().circle_stroke(r_resp.rect.center(), 11.5, egui::Stroke::new(1.0, egui::Color32::from_rgb(210, 55, 65).gamma_multiply(0.45)));
+                                    }
+                                    if r_active {
+                                        ui.painter().circle_filled(r_resp.rect.center(), 14.0, egui::Color32::from_rgba_premultiplied(210, 55, 65, 22));
+                                        ui.painter().circle_filled(r_resp.rect.center(), 16.0, egui::Color32::from_rgba_premultiplied(210, 55, 65, 10));
+                                    }
+                                    if r_resp.on_hover_text("Arm for recording [R to record]").clicked() { track_actions.push(TrackAction::ToggleArm(i)); }
                                 }
-                                if r_active {
-                                    // Ruby red glow behind armed button
-                                    ui.painter().circle_filled(r_resp.rect.center(), 14.0, egui::Color32::from_rgba_premultiplied(210, 55, 65, 22));
-                                    ui.painter().circle_filled(r_resp.rect.center(), 16.0, egui::Color32::from_rgba_premultiplied(210, 55, 65, 10));
-                                }
-                                if r_resp.on_hover_text("Arm for recording [R to record]").clicked() { track_actions.push(TrackAction::ToggleArm(i)); }
 
                                 // FX — purple when active, with count badge
                                 let fx_count = track.effects.len();
