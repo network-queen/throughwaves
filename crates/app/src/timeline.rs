@@ -383,9 +383,22 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     ui.allocate_ui_at_rect(header_rect, |ui| {
                         let header_rect = header_rect;
 
-                        // Click area for entire header — only handles selection & context menu
-                        let bg_response = ui.interact(header_rect, ui.id().with("tbg").with(i), egui::Sense::click());
+                        // Click area for entire header — selection, context menu, and drag-to-reorder
+                        let bg_response = ui.interact(header_rect, ui.id().with("tbg").with(i), egui::Sense::click_and_drag());
                         if bg_response.clicked() { track_actions.push(TrackAction::Select(i)); }
+                        // Drag-to-reorder
+                        if bg_response.drag_started() {
+                            app.dragging_track_reorder = Some((i, header_rect.center().y));
+                        }
+                        if bg_response.dragged() {
+                            if let Some((src, ref mut y)) = app.dragging_track_reorder {
+                                *y += bg_response.drag_delta().y;
+                            }
+                        }
+                        if bg_response.drag_stopped() {
+                            // Defer reorder to after the loop (avoid borrow conflict)
+                            track_actions.push(TrackAction::Select(i)); // will be overridden below
+                        }
 
                         // Track header tooltip — detailed info on hover
                         bg_response.clone().on_hover_ui(|ui| {
@@ -600,6 +613,19 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     egui::vec2(30.0, 14.0),
                                     egui::Button::new(badge_text).fill(type_bg).corner_radius(7.0).sense(egui::Sense::hover()),
                                 );
+
+                                // Piano icon for MIDI tracks — click to open piano roll
+                                if track.kind == TrackKind::Midi {
+                                    if ui.add_sized(
+                                        egui::vec2(18.0, 14.0),
+                                        egui::Button::new(egui::RichText::new("\u{1F3B9}").size(10.0))
+                                            .fill(egui::Color32::from_rgb(38, 30, 52))
+                                            .corner_radius(7.0),
+                                    ).on_hover_text("Open Piano Roll").clicked() {
+                                        track_actions.push(TrackAction::Select(i));
+                                        track_actions.push(TrackAction::OpenPianoRoll);
+                                    }
+                                }
 
                                 // Pulsing red circle when track is armed for recording
                                 if track.armed {
@@ -906,6 +932,43 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 });
             }
 
+            // Handle drag-to-reorder drop
+            if !ui.input(|i| i.pointer.any_down()) {
+                if let Some((src, mouse_y)) = app.dragging_track_reorder.take() {
+                    // Find target based on Y
+                    let offsets = track_y_offsets(app);
+                    let vz = app.track_height_zoom;
+                    let panel_top = ui.min_rect().top();
+                    let rel_y = mouse_y - panel_top;
+                    let mut target = src;
+                    for (ti, &off) in offsets.iter().enumerate() {
+                        if ti >= app.project.tracks.len() { break; }
+                        let th = track_height(&app.project.tracks[ti], vz);
+                        if rel_y >= off && rel_y < off + th {
+                            target = ti;
+                            break;
+                        }
+                    }
+                    if target != src && target < app.project.tracks.len() {
+                        app.push_undo("Reorder tracks");
+                        let track = app.project.tracks.remove(src);
+                        app.project.tracks.insert(target, track);
+                        app.selected_track = Some(target);
+                        app.sync_project();
+                    }
+                }
+            }
+
+            // Draw drag-to-reorder indicator
+            if let Some((_src, mouse_y)) = app.dragging_track_reorder {
+                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                let panel_rect = ui.max_rect();
+                ui.painter().line_segment(
+                    [egui::pos2(panel_rect.left(), mouse_y), egui::pos2(panel_rect.right(), mouse_y)],
+                    egui::Stroke::new(2.0, egui::Color32::from_rgb(240, 192, 64)),
+                );
+            }
+
             // Apply track actions
             for action in track_actions {
                 match action {
@@ -1114,6 +1177,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     }
                     TrackAction::OpenColorPalette(i) => {
                         app.color_palette_track = Some(i);
+                    }
+                    TrackAction::OpenPianoRoll => {
+                        app.show_piano_roll = true;
                     }
                 }
             }
@@ -4773,4 +4839,6 @@ enum TrackAction {
     AddFromTemplate,
     /// Open the color palette picker for a track
     OpenColorPalette(usize),
+    /// Open the piano roll for a MIDI track
+    OpenPianoRoll,
 }
