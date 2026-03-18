@@ -1877,6 +1877,7 @@ async function renderProjects(el) {
                   <div class="track-meta">
                     <span>${p.genre || ''}</span>
                     <span>${(p.plays || 0)} plays</span>
+                    <span style="color:var(--text-muted);">${estimateLUFS(p)} LUFS</span>
                   </div>
                 </div>
               </div>
@@ -1927,13 +1928,12 @@ async function updateCloudProject(projectId) {
   if (!state.token || state.token === 'demo_token') { openAuthModal(); return; }
   const title = document.getElementById('cpEditTitle')?.value || '';
   const genre = document.getElementById('cpEditGenre')?.value || '';
-  const bpm = parseInt(document.getElementById('cpEditBpm')?.value) || null;
   const desc = document.getElementById('cpEditDesc')?.value || '';
   try {
     const resp = await fetch('/api/cloud/' + projectId, {
       method: 'PUT',
       headers: { 'Authorization': 'Bearer ' + state.token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, genre, bpm, description: desc }),
+      body: JSON.stringify({ title, genre, description: desc }),
     });
     if (resp.ok) {
       showToast('Project updated!');
@@ -2266,7 +2266,7 @@ async function renderCloudProject(el, projectId) {
             <div class="track-artist">Full Mix</div>
             <div class="track-meta">
               ${project.genre ? '<span>' + esc(project.genre) + '</span>' : ''}
-              ${project.bpm ? '<span>' + project.bpm + ' BPM</span>' : ''}
+              <span style="color:var(--text-muted);">${estimateLUFS(project)} LUFS</span>
             </div>
           </div>
         </div>
@@ -2317,10 +2317,6 @@ async function renderCloudProject(el, projectId) {
             <div style="display:flex; align-items:center; gap:0.5rem;">
               <label style="min-width:80px; color:var(--text-muted); font-size:0.9rem;">Genre</label>
               <input type="text" id="cpEditGenre" value="${esc(project.genre || '')}" style="flex:1;">
-            </div>
-            <div style="display:flex; align-items:center; gap:0.5rem;">
-              <label style="min-width:80px; color:var(--text-muted); font-size:0.9rem;">BPM</label>
-              <input type="number" id="cpEditBpm" value="${project.bpm || ''}" style="width:80px;">
             </div>
             <div style="display:flex; align-items:center; gap:0.5rem;">
               <label style="min-width:80px; color:var(--text-muted); font-size:0.9rem;">Description</label>
