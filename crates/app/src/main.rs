@@ -485,7 +485,9 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             setup_theme(&cc.egui_ctx);
-            let app = DawApp::new();
+            let mut app = DawApp::new();
+            // Load saved platform credentials
+            platform_panel::load_saved_credentials(&mut app.platform);
             // Apply saved preferences on startup
             apply_theme(&cc.egui_ctx, app.preferences.theme);
             cc.egui_ctx.set_pixels_per_point(app.preferences.ui_scale);

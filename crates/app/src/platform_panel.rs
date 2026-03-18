@@ -1,7 +1,48 @@
 use eframe::egui;
+use std::path::PathBuf;
 
 use crate::DawApp;
 use jamhub_engine::{ExportFormat, ExportOptions};
+
+/// Path to saved platform credentials
+fn credentials_path() -> PathBuf {
+    crate::config_dir().join("platform_creds.json")
+}
+
+/// Save login credentials for persistence across restarts
+fn save_credentials(server_url: &str, email: &str, jwt: &str, username: &str) {
+    let data = serde_json::json!({
+        "server_url": server_url,
+        "email": email,
+        "jwt": jwt,
+        "username": username,
+    });
+    let _ = std::fs::write(credentials_path(), data.to_string());
+}
+
+/// Load saved credentials and auto-login
+pub fn load_saved_credentials(panel: &mut super::platform_panel::PlatformPanel) {
+    if let Ok(data) = std::fs::read_to_string(credentials_path()) {
+        if let Some(server) = extract_json_string(&data, "server_url") {
+            panel.server_url = server;
+        }
+        if let Some(email) = extract_json_string(&data, "email") {
+            panel.email = email;
+        }
+        if let Some(jwt) = extract_json_string(&data, "jwt") {
+            if let Some(username) = extract_json_string(&data, "username") {
+                panel.jwt_token = Some(jwt);
+                panel.username = Some(username);
+                panel.logged_in = true;
+            }
+        }
+    }
+}
+
+/// Clear saved credentials on logout
+fn clear_credentials() {
+    let _ = std::fs::remove_file(credentials_path());
+}
 
 /// Track metadata returned by the platform API.
 #[derive(Default, Clone)]
@@ -263,10 +304,11 @@ impl PlatformPanel {
                         .or_else(|| extract_json_string(&resp, "name"))
                         .or_else(|| extract_json_string(&resp, "email"))
                         .unwrap_or_else(|| self.email.clone());
-                    self.jwt_token = Some(token);
-                    self.username = Some(username);
+                    self.jwt_token = Some(token.clone());
+                    self.username = Some(username.clone());
                     self.logged_in = true;
                     self.login_error = None;
+                    save_credentials(&self.server_url, &self.email, &token, &username);
                     self.password.clear();
                 } else {
                     let msg = extract_json_string(&resp, "message")
@@ -299,10 +341,11 @@ impl PlatformPanel {
                         .or_else(|| extract_json_string(&resp, "name"))
                         .or_else(|| extract_json_string(&resp, "email"))
                         .unwrap_or_else(|| self.email.clone());
-                    self.jwt_token = Some(token);
-                    self.username = Some(username);
+                    self.jwt_token = Some(token.clone());
+                    self.username = Some(username.clone());
                     self.logged_in = true;
                     self.login_error = None;
+                    save_credentials(&self.server_url, &self.email, &token, &username);
                     self.password.clear();
                 } else {
                     let msg = extract_json_string(&resp, "message")
@@ -323,6 +366,9 @@ impl PlatformPanel {
         self.logged_in = false;
         self.my_tracks.clear();
         self.tracks_loaded = false;
+        self.bands.clear();
+        self.bands_loaded = false;
+        clear_credentials();
     }
 
     pub fn fetch_my_tracks(&mut self) {
@@ -499,28 +545,6 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
 
     ui.separator();
 
-    // ── Import Track into DAW ──
-    egui::CollapsingHeader::new("Import Track into DAW")
-        .default_open(true)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Track ID or URL:");
-                ui.text_edit_singleline(&mut app.platform.import_track_id);
-            });
-
-            if let Some(ref status) = app.platform.import_track_status {
-                ui.label(status.as_str());
-            }
-
-            if ui.button("Import Track").clicked() {
-                do_import_track(app);
-            }
-        });
-
-    ui.separator();
-
-    ui.separator();
-
     // Auto-fill upload title from project name if empty
     if app.platform.upload_title.is_empty() && !app.project.name.is_empty() && app.project.name != "Untitled Session" {
         app.platform.upload_title = app.project.name.clone();
@@ -538,20 +562,7 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                 ui.label(egui::RichText::new("Push to Cloud").size(12.0).strong());
                 ui.add_space(4.0);
 
-                ui.horizontal(|ui| {
-                    ui.label("Project Name:");
-                    ui.text_edit_singleline(&mut app.platform.upload_title);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Artist / Author:");
-                    ui.text_edit_singleline(&mut app.platform.upload_description);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Genre:");
-                    ui.text_edit_singleline(&mut app.platform.upload_genre);
-                });
-
-                // Band selector
+                // Band selector (load bands first)
                 if !app.platform.bands_loaded {
                     if let Some(ref jwt) = app.platform.jwt_token {
                         if let Ok(resp) = platform_request("GET", &app.platform.server_url, "/api/bands", Some(jwt), None) {
@@ -599,6 +610,16 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                     ui.label(egui::RichText::new("No bands yet — create one on the website").size(10.0).weak());
                 }
 
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Project Name:");
+                    ui.text_edit_singleline(&mut app.platform.upload_title);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Genre:");
+                    ui.text_edit_singleline(&mut app.platform.upload_genre);
+                });
+
                 if let Some(ref status) = app.platform.cloud_upload_status {
                     ui.add_space(2.0);
                     ui.label(status.as_str());
@@ -640,6 +661,26 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                     do_download_cloud_project(app);
                 }
             });
+        });
+
+    ui.separator();
+
+    // ── Import Track into DAW ──
+    egui::CollapsingHeader::new("Import Track into DAW")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Track ID or URL:");
+                ui.text_edit_singleline(&mut app.platform.import_track_id);
+            });
+
+            if let Some(ref status) = app.platform.import_track_status {
+                ui.label(status.as_str());
+            }
+
+            if ui.button("Import Track").clicked() {
+                do_import_track(app);
+            }
         });
 
     ui.separator();
