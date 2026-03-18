@@ -499,7 +499,7 @@ fn show_login_form(app: &mut DawApp, ui: &mut egui::Ui) {
         if ui.button("Login").clicked() {
             app.platform.login();
         }
-        if ui.button("Create Account on Website").clicked() {
+        if ui.button("Create Account").clicked() {
             let url = format!("{}", app.platform.server_url.trim_end_matches('/'));
             let _ = open::that(&url);
         }
