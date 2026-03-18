@@ -1287,18 +1287,28 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.show_piano_roll = true;
                     }
                     TrackAction::MoveToFolder(track_idx, folder_id) => {
-                        app.push_undo("Move to folder");
-                        let mut track = app.project.tracks.remove(track_idx);
-                        track.group_id = Some(folder_id);
-                        // Insert after folder and its existing children
-                        let folder_pos = app.project.tracks.iter().position(|t| t.id == folder_id).unwrap_or(0);
-                        let mut insert_at = folder_pos + 1;
-                        while insert_at < app.project.tracks.len() && app.project.tracks[insert_at].group_id == Some(folder_id) {
-                            insert_at += 1;
+                        if track_idx < app.project.tracks.len() {
+                            app.push_undo("Move to folder");
+                            let track_name = app.project.tracks[track_idx].name.clone();
+                            let mut track = app.project.tracks.remove(track_idx);
+                            track.group_id = Some(folder_id);
+                            // Find folder position (may have shifted after remove)
+                            if let Some(folder_pos) = app.project.tracks.iter().position(|t| t.id == folder_id) {
+                                let mut insert_at = folder_pos + 1;
+                                while insert_at < app.project.tracks.len() && app.project.tracks[insert_at].group_id == Some(folder_id) {
+                                    insert_at += 1;
+                                }
+                                app.project.tracks.insert(insert_at, track);
+                                app.selected_track = Some(insert_at);
+                                let folder_name = app.project.tracks[folder_pos].name.clone();
+                                app.set_status(&format!("{track_name} → {folder_name}"));
+                            } else {
+                                // Folder not found, just append
+                                app.project.tracks.push(track);
+                                app.selected_track = Some(app.project.tracks.len() - 1);
+                            }
+                            app.sync_project();
                         }
-                        app.project.tracks.insert(insert_at, track);
-                        app.selected_track = Some(insert_at);
-                        app.sync_project();
                     }
                 }
             }
