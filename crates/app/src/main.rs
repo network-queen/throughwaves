@@ -719,8 +719,8 @@ pub struct DawApp {
     pub layout_loaded: bool,
     /// Track separator drag state: index of the track whose bottom edge is being dragged
     pub dragging_separator: Option<usize>,
-    /// Track header drag-to-reorder: (source track index, current mouse Y)
-    pub dragging_track_reorder: Option<(usize, f32)>,
+    /// Track header drag-to-reorder: (source track index, current mouse Y, start Y, activated)
+    pub dragging_track_reorder: Option<(usize, f32, f32, bool)>,
     /// Timer for periodic layout persistence
     pub last_layout_save: std::time::Instant,
     /// Insert Silence dialog state

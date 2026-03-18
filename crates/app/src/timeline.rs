@@ -642,8 +642,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             header_rect.min,
                             egui::vec2(16.0, header_rect.height()),
                         );
-                        let pointer_pos = ui.input(|i| i.pointer.interact_pos());
-                        let pointer_down = ui.input(|i| i.pointer.primary_down());
+                        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+                        let pointer_pressed = ui.input(|i| i.pointer.primary_pressed()); // only on initial press
                         let is_hovering_handle = pointer_pos.map_or(false, |p| handle_zone.contains(p));
 
                         if is_hovering_handle && app.dragging_track_reorder.is_none() {
@@ -656,9 +656,10 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             }
                         }
 
-                        // Start drag
-                        if is_hovering_handle && pointer_down && app.dragging_track_reorder.is_none() {
-                            app.dragging_track_reorder = Some((i, header_rect.center().y));
+                        // Start drag — only on initial press (not while held)
+                        if is_hovering_handle && pointer_pressed && app.dragging_track_reorder.is_none() {
+                            let start_y = header_rect.center().y;
+                            app.dragging_track_reorder = Some((i, start_y, start_y, false));
                         }
 
                         if is_selected {
@@ -1042,45 +1043,58 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
 
             // Drag-to-reorder: update position, draw indicator, handle drop
-            if let Some((src, ref mut mouse_y)) = app.dragging_track_reorder {
-                // Update Y from pointer delta
+            if let Some((src, ref mut mouse_y, start_y, ref mut activated)) = app.dragging_track_reorder {
                 let delta = ui.input(|i| i.pointer.delta());
                 *mouse_y += delta.y;
                 let current_y = *mouse_y;
                 let src_idx = src;
 
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                // Require minimum 5px drag before activating (prevents accidental clicks)
+                if !*activated && (current_y - start_y).abs() > 5.0 {
+                    *activated = true;
+                }
 
-                // Draw gold drop indicator line
+                if *activated {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    let panel_rect = ui.max_rect();
+                    ui.painter().line_segment(
+                        [egui::pos2(panel_rect.left(), current_y), egui::pos2(panel_rect.right(), current_y)],
+                        egui::Stroke::new(2.5, egui::Color32::from_rgb(240, 192, 64)),
+                    );
+                }
+
                 let panel_rect = ui.max_rect();
-                ui.painter().line_segment(
-                    [egui::pos2(panel_rect.left(), current_y), egui::pos2(panel_rect.right(), current_y)],
-                    egui::Stroke::new(2.5, egui::Color32::from_rgb(240, 192, 64)),
-                );
 
                 // Drop when mouse released
+                let was_activated = *activated;
                 if !ui.input(|i| i.pointer.primary_down()) {
+                    if !was_activated {
+                        app.dragging_track_reorder = None;
+                    }
                     let offsets = track_y_offsets(app);
                     let vz = app.track_height_zoom;
                     let panel_top = panel_rect.top();
                     let rel_y = current_y - panel_top;
+                    let d_order = display_order(app);
 
-                    // Find target by Y
+                    // Find target by Y using display order
                     let mut target = src_idx;
-                    for (ti, &off) in offsets.iter().enumerate() {
-                        if ti >= app.project.tracks.len() { break; }
-                        let th = track_height(&app.project.tracks[ti], vz);
+                    for &di in &d_order {
+                        if di >= app.project.tracks.len() { continue; }
+                        if is_track_collapsed(app, di) { continue; }
+                        let off = offsets[di];
+                        let th = track_height(&app.project.tracks[di], vz);
                         let mid = off + th / 2.0;
                         if rel_y < mid {
-                            target = ti;
+                            target = di;
                             break;
                         }
-                        target = ti;
+                        target = di;
                     }
 
                     app.dragging_track_reorder = None;
 
-                    if target < app.project.tracks.len() && src_idx < app.project.tracks.len() {
+                    if was_activated && target < app.project.tracks.len() && src_idx < app.project.tracks.len() {
                         // Check if dropped ON a folder — assign as child and move below it
                         if app.project.tracks[target].kind == TrackKind::Folder && target != src_idx {
                             let folder_id = app.project.tracks[target].id;
