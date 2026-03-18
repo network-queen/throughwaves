@@ -4,11 +4,13 @@ mod audio_settings;
 mod effects_panel;
 mod fx_browser;
 mod jam_session;
+#[allow(dead_code)]
 mod media_browser;
 mod midi_mapping;
 mod midi_panel;
 mod mixer_view;
 mod piano_roll;
+#[allow(dead_code)]
 mod platform_panel;
 mod session_panel;
 mod session_view;
@@ -21,6 +23,7 @@ mod plugin_window;
 mod undo_panel;
 mod project_info;
 mod stem_separator;
+#[allow(dead_code)]
 mod version_control;
 pub mod templates;
 
@@ -203,9 +206,9 @@ fn apply_theme(ctx: &egui::Context, theme: ThemeChoice) {
     visuals.window_fill = win_fill;
     visuals.extreme_bg_color = bg;
     visuals.faint_bg_color = egui::Color32::from_rgb(
-        (panel_bg.r() as u16 + bg.r() as u16 / 2) as u8,
-        (panel_bg.g() as u16 + bg.g() as u16 / 2) as u8,
-        (panel_bg.b() as u16 + bg.b() as u16 / 2) as u8,
+        ((panel_bg.r() as u16 + bg.r() as u16) / 2) as u8,
+        ((panel_bg.g() as u16 + bg.g() as u16) / 2) as u8,
+        ((panel_bg.b() as u16 + bg.b() as u16) / 2) as u8,
     );
 
     visuals.widgets.noninteractive.bg_fill = panel_bg;
@@ -4482,7 +4485,15 @@ impl eframe::App for DawApp {
             && ctx.input(|i| !i.raw.events.is_empty());
         // More reliable: check if any text edit is active
         let any_text_edit = self.renaming_track.is_some()
-            || self.session.chat_input.len() > 0 && self.session.show_panel;
+            || self.renaming_marker.is_some()
+            || self.renaming_clip.is_some()
+            || self.tempo_change_input.is_some()
+            || self.speed_input.is_some()
+            || self.region_name_input.is_some()
+            || self.insert_silence_input.is_some()
+            || self.template_name_input.is_some()
+            || self.fx_preset_name_input.is_some()
+            || (self.session.chat_input.len() > 0 && self.session.show_panel);
         // NOTE: ctx.wants_keyboard_input() must be called OUTSIDE ctx.input() to avoid deadlock
         let wants_kb = ctx.wants_keyboard_input();
 
@@ -4538,7 +4549,7 @@ impl eframe::App for DawApp {
                         actions.push("deselect_clips".into());
                     }
                 }
-                if i.key_pressed(egui::Key::F) && !i.modifiers.command { actions.push("focus_playhead".into()); }
+                if i.key_pressed(egui::Key::F) && !i.modifiers.command && !i.modifiers.shift { actions.push("focus_playhead".into()); }
                 if i.key_pressed(egui::Key::H) && !i.modifiers.command { actions.push("toggle_follow".into()); }
                 if i.key_pressed(egui::Key::OpenBracket) && !i.modifiers.command { actions.push("prev_marker".into()); }
                 if i.key_pressed(egui::Key::CloseBracket) && !i.modifiers.command { actions.push("next_marker".into()); }

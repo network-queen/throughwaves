@@ -72,21 +72,6 @@ fn auto_fit_track_height(track: &jamhub_model::Track) -> f32 {
     }
 }
 
-/// Determine the ordered list of group IDs that appear before each track.
-/// Returns a list of (group_id, first_track_index) for each unique group.
-fn group_order(app: &DawApp) -> Vec<(Uuid, usize)> {
-    let mut seen = std::collections::HashSet::new();
-    let mut result = Vec::new();
-    for (i, track) in app.project.tracks.iter().enumerate() {
-        if let Some(gid) = track.group_id {
-            if seen.insert(gid) {
-                result.push((gid, i));
-            }
-        }
-    }
-    result
-}
-
 /// Check if a track is hidden because its group is collapsed.
 fn is_track_collapsed(app: &DawApp, track_idx: usize) -> bool {
     if let Some(gid) = app.project.tracks[track_idx].group_id {
@@ -412,7 +397,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     let is_selected = app.selected_track == Some(i);
 
                     let (header_rect, _) = ui.allocate_exact_size(egui::vec2(HEADER_WIDTH, h), egui::Sense::hover());
-                    ui.allocate_ui_at_rect(header_rect, |ui| {
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(header_rect), |ui| {
                         let header_rect = header_rect;
 
                         // Click area for entire header — selection & context menu
@@ -601,7 +586,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             if let Some(gid) = track.group_id {
                                 // Find the matching folder line
                                 let folder_idx = app.project.tracks.iter().position(|t| t.id == gid);
-                                if let Some(fidx) = folder_idx {
+                                if folder_idx.is_some() {
                                     // Find the folder_line entry for this folder
                                     for fl in folder_lines.iter_mut().rev() {
                                         // Match by x position (same column)
@@ -909,7 +894,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                                     // Pan knob
                                     let mut pan = track.pan;
-                                    let pan_id = ui.id().with("pan_knob").with(i);
+                                    let _pan_id = ui.id().with("pan_knob").with(i);
                                     let (pan_rect, pan_resp) = ui.allocate_exact_size(knob_size, egui::Sense::click_and_drag());
                                     if pan_resp.dragged() {
                                         pan = (pan - pan_resp.drag_delta().y * 0.008).clamp(-1.0, 1.0);
@@ -1077,7 +1062,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 if !ui.input(|i| i.pointer.primary_down()) {
                     if !activated {
                         app.dragging_track_reorder = None;
-                    }
+                    } else {
                     let offsets = track_y_offsets(app);
                     let vz = app.track_height_zoom;
                     let panel_top = panel_rect.top();
@@ -1144,7 +1129,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         }
                     }
                 }
-            }
+            } // else activated
+            } // if !primary_down
 
             // Apply track actions
             for action in track_actions {
@@ -1230,23 +1216,6 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.project.tracks[i].lanes_expanded =
                             !app.project.tracks[i].lanes_expanded;
                         app.project.tracks[i].custom_height = 0.0;
-                    }
-                    TrackAction::CreateGroupFromTrack(i) => {
-                        app.push_undo("Create group");
-                        let group_id = Uuid::new_v4();
-                        let track_color = app.project.tracks[i].color;
-                        app.project.groups.push(jamhub_model::TrackGroup {
-                            id: group_id,
-                            name: format!("Group {}", app.project.groups.len() + 1),
-                            color: track_color,
-                            collapsed: false,
-                        });
-                        app.project.tracks[i].group_id = Some(group_id);
-                        // Also add the next track to the group if it exists
-                        if i + 1 < app.project.tracks.len() && app.project.tracks[i + 1].group_id.is_none() {
-                            app.project.tracks[i + 1].group_id = Some(group_id);
-                        }
-                        app.sync_project();
                     }
                     TrackAction::RemoveFromGroup(i) => {
                         app.push_undo("Remove from group");
@@ -1417,7 +1386,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     .on_hover_text("Add a folder to organize tracks").clicked() {
                     app.push_undo("Add folder");
                     let n = app.project.tracks.len() + 1;
-                    let folder_id = app.project
+                    app.project
                         .add_track(&format!("Folder {n}"), TrackKind::Folder);
                     app.selected_track = Some(app.project.tracks.len() - 1);
                     app.sync_project();
@@ -4845,7 +4814,6 @@ fn draw_rotary_knob(
     color: egui::Color32,
     hovered: bool,
 ) {
-    use std::f32::consts::PI;
     let v = value.clamp(0.0, 1.0);
 
     // Background circle
@@ -5021,8 +4989,6 @@ enum TrackAction {
     FinishRename(usize, String),
     ToggleLanes(usize),
     OpenFx,
-    /// Create a new group from the selected track
-    CreateGroupFromTrack(usize),
     /// Remove a track from its group
     RemoveFromGroup(usize),
     /// Toggle collapse/expand of a group

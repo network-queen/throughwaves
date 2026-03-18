@@ -118,7 +118,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                         ui.add_space(2.0);
                     }
 
-                    let slot_response = egui::Frame::default()
+                    egui::Frame::default()
                         .inner_margin(egui::Margin::symmetric(8, 6))
                         .fill(row_bg)
                         .corner_radius(8.0)

@@ -382,7 +382,7 @@ impl Mixer {
         }
         let mut output_target_buffers = std::mem::take(&mut self.output_target_bufs);
 
-        for track in &project.tracks {
+        for (ti, track) in project.tracks.iter().enumerate() {
             if track.muted {
                 continue;
             }
@@ -504,7 +504,7 @@ impl Mixer {
                 &jamhub_model::AutomationParam::Volume,
                 position_samples,
                 track.volume,
-            );
+            ) * folder_volume[ti];
             let auto_pan = get_automation_value(
                 &track.automation,
                 &jamhub_model::AutomationParam::Pan,
@@ -1020,7 +1020,7 @@ fn render_clip_ola_impl(
             let visual_offset = (global_sample - clip.start_sample) as usize;
 
             // Map visual offset to source offset (accounting for speed)
-            let source_offset_base = (visual_offset as f64 * speed_rate as f64) as usize;
+            let _source_offset_base = (visual_offset as f64 * speed_rate as f64) as usize;
 
             // Determine which OLA window this output sample falls in
             let window_idx = visual_offset / hop_output;
