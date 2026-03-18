@@ -6353,14 +6353,17 @@ impl eframe::App for DawApp {
                 .min_height(120.0)
                 .max_height(400.0)
                 .frame(egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(22, 22, 28))
-                    .inner_margin(egui::Margin::same(2)))
+                    .fill(egui::Color32::from_rgb(18, 19, 24))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(35, 36, 44)))
+                    .inner_margin(egui::Margin::same(0)))
                 .show(ctx, |ui| {
                     mixer_view::show(self, ui);
                 });
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| match self.view {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::default().fill(egui::Color32::from_rgb(17, 17, 20)))
+            .show(ctx, |ui| match self.view {
             View::Arrange => timeline::show(self, ui),
             View::Mixer => mixer_view::show(self, ui),
             View::Session => session_view::show(self, ui, ctx),
