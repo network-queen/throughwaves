@@ -593,10 +593,25 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                             app.project.name = original_name;
                         }
                     }
-                    if ui.button("\u{2B07} Pull").on_hover_text("Pull latest version from remote").clicked() {
-                        // Use the connected project ID
-                        app.platform.clone_id = proj_id.clone();
+                    if ui.button("\u{2B07} Pull").on_hover_text("Pull from remote (latest or specific version)").clicked() {
+                        if app.platform.clone_id.trim().is_empty() {
+                            // Pull latest — use project ID
+                            app.platform.clone_id = proj_id.clone();
+                        }
+                        // else: clone_id already has a version ID
                         do_download_cloud_project(app);
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Version ID:").size(11.0).color(egui::Color32::from_rgb(110, 110, 125)));
+                    ui.add(egui::TextEdit::singleline(&mut app.platform.clone_id)
+                        .hint_text("leave empty for latest")
+                        .desired_width(220.0));
+                    if !app.platform.clone_id.trim().is_empty() {
+                        if ui.small_button("\u{2715}").on_hover_text("Clear — pull latest instead").clicked() {
+                            app.platform.clone_id.clear();
+                        }
                     }
                 });
 
