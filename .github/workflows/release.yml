@@ -24,27 +24,27 @@ jobs:
 
       # Build for Apple Silicon
       - name: Build (aarch64)
-        run: cargo build --release --bin jamhub-app --target aarch64-apple-darwin
+        run: cargo build --release --bin throughwaves --target aarch64-apple-darwin
 
       # Build for Intel
       - name: Build (x86_64)
-        run: cargo build --release --bin jamhub-app --target x86_64-apple-darwin
+        run: cargo build --release --bin throughwaves --target x86_64-apple-darwin
 
       # Create universal binary
       - name: Create universal binary
         run: |
           mkdir -p target/release-universal
           lipo -create \
-            target/aarch64-apple-darwin/release/jamhub-app \
-            target/x86_64-apple-darwin/release/jamhub-app \
-            -output target/release-universal/jamhub-app
+            target/aarch64-apple-darwin/release/throughwaves \
+            target/x86_64-apple-darwin/release/throughwaves \
+            -output target/release-universal/throughwaves
 
       # Create .app bundle
       - name: Create app bundle
         run: |
           APP="${APP_NAME}.app"
           mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
-          cp target/release-universal/jamhub-app "${APP}/Contents/MacOS/${APP_NAME}"
+          cp target/release-universal/throughwaves "${APP}/Contents/MacOS/${APP_NAME}"
           chmod +x "${APP}/Contents/MacOS/${APP_NAME}"
 
       # Create DMG
@@ -77,14 +77,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --bin jamhub-app
+        run: cargo build --release --bin throughwaves
 
       - name: Package
         shell: bash
         run: |
           VERSION=${GITHUB_REF_NAME:-dev}
           mkdir -p "dist/${APP_NAME}"
-          cp "target/release/jamhub-app.exe" "dist/${APP_NAME}/${APP_NAME}.exe"
+          cp "target/release/throughwaves.exe" "dist/${APP_NAME}/${APP_NAME}.exe"
           cat > "dist/${APP_NAME}/README.txt" << 'EOF'
           ThroughWaves - Professional Digital Audio Workstation
           Double-click ThroughWaves.exe to start.
@@ -115,7 +115,7 @@ jobs:
             libgtk-3-dev libatk1.0-dev
 
       - name: Build
-        run: cargo build --release --bin jamhub-app
+        run: cargo build --release --bin throughwaves
 
       - name: Create .deb package
         run: |
@@ -126,7 +126,7 @@ jobs:
           mkdir -p ${DEB_DIR}/usr/bin
           mkdir -p ${DEB_DIR}/usr/share/applications
           mkdir -p ${DEB_DIR}/usr/share/icons/hicolor/256x256/apps
-          cp target/release/jamhub-app ${DEB_DIR}/usr/bin/jamhub
+          cp target/release/throughwaves ${DEB_DIR}/usr/bin/jamhub
           chmod +x ${DEB_DIR}/usr/bin/jamhub
 
           cat > ${DEB_DIR}/DEBIAN/control << EOF
@@ -162,7 +162,7 @@ jobs:
         run: |
           VERSION=${GITHUB_REF_NAME:-dev}
           mkdir -p dist/tar/ThroughWaves
-          cp target/release/jamhub-app dist/tar/ThroughWaves/jamhub
+          cp target/release/throughwaves dist/tar/ThroughWaves/jamhub
           chmod +x dist/tar/ThroughWaves/jamhub
           (cd dist/tar && tar -czf "../ThroughWaves-${VERSION}-linux-x86_64.tar.gz" ThroughWaves/)
           rm -rf dist/tar

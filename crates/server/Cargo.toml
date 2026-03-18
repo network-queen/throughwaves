@@ -1,5 +1,5 @@
 [package]
-name = "jamhub-server"
+name = "throughwaves-server"
 version.workspace = true
 edition.workspace = true
 

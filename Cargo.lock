@@ -2320,37 +2320,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
-name = "jamhub-app"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "cpal",
- "crossbeam-channel",
- "dirs 6.0.0",
- "eframe",
- "egui",
- "futures-util",
- "jamhub-engine",
- "jamhub-model",
- "jamhub-network",
- "libc",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "open",
- "parking_lot",
- "rfd",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite 0.26.2",
- "ureq",
- "uuid",
- "vst3",
- "whoami",
-]
-
-[[package]]
 name = "jamhub-engine"
 version = "0.1.0"
 dependencies = [
@@ -2390,27 +2359,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.26.2",
- "uuid",
-]
-
-[[package]]
-name = "jamhub-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bcrypt",
- "chrono",
- "futures-util",
- "jamhub-model",
- "jamhub-network",
- "jsonwebtoken",
- "parking_lot",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tokio",
- "tower-http",
  "uuid",
 ]
 
@@ -4862,6 +4810,58 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "throughwaves"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "cpal",
+ "crossbeam-channel",
+ "dirs 6.0.0",
+ "eframe",
+ "egui",
+ "futures-util",
+ "jamhub-engine",
+ "jamhub-model",
+ "jamhub-network",
+ "libc",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "open",
+ "parking_lot",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "ureq",
+ "uuid",
+ "vst3",
+ "whoami",
+]
+
+[[package]]
+name = "throughwaves-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bcrypt",
+ "chrono",
+ "futures-util",
+ "jamhub-model",
+ "jamhub-network",
+ "jsonwebtoken",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "tower-http",
+ "uuid",
 ]
 
 [[package]]

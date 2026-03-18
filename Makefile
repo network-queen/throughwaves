@@ -1,6 +1,6 @@
 APP_NAME = ThroughWaves
 APP_BUNDLE = $(APP_NAME).app
-BINARY_NAME = jamhub-app
+BINARY_NAME = throughwaves
 CARGO_TARGET_DIR = target
 
 .PHONY: all build release bundle run clean

@@ -14,7 +14,7 @@ set -euo pipefail
 
 VERSION="1.0.0"
 APP_NAME="ThroughWaves"
-BINARY="jamhub-app"
+BINARY="throughwaves"
 DIST_DIR="dist"
 
 mkdir -p "$DIST_DIR"
