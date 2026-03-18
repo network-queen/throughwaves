@@ -572,7 +572,8 @@ pub struct DawApp {
     pub midi_panel: midi_panel::MidiPanel,
     pub plugin_windows: plugin_window::PluginWindowManager,
     /// Set of built-in effect slot IDs whose parameter windows are open
-    pub builtin_fx_open: std::collections::HashSet<Uuid>,
+    /// Maps slot_id → open_counter (counter ensures unique egui window ID each time)
+    pub builtin_fx_open: std::collections::HashMap<Uuid, u32>,
     /// FX chain drag state: source index being dragged
     pub fx_drag_source: Option<usize>,
     // Count-in recording
@@ -1346,7 +1347,7 @@ impl DawApp {
             color_picker_track: None,
             midi_panel: midi_panel::MidiPanel::default(),
             plugin_windows: plugin_window::PluginWindowManager::default(),
-            builtin_fx_open: std::collections::HashSet::new(),
+            builtin_fx_open: std::collections::HashMap::new(),
             fx_drag_source: None,
             count_in_enabled: false,
             count_in_beats_remaining: None,

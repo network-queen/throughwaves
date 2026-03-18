@@ -80,7 +80,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                     let is_editor_open = if s.effect.is_vst() {
                         app.plugin_windows.is_open(&s.id)
                     } else {
-                        app.builtin_fx_open.contains(&s.id)
+                        app.builtin_fx_open.contains_key(&s.id)
                     };
                     let is_vst = s.effect.is_vst();
                     let vst_path = if let TrackEffect::Vst3Plugin { ref path, .. } = s.effect {
@@ -312,10 +312,10 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                     // Show as a built-in parameter window instead.
                     app.set_status("Plugin uses egui UI — opening parameter view");
                     // Toggle the built-in popup for this slot
-                    if app.builtin_fx_open.contains(&slot_id) {
+                    if app.builtin_fx_open.contains_key(&slot_id) {
                         app.builtin_fx_open.remove(&slot_id);
                     } else {
-                        app.builtin_fx_open.insert(slot_id);
+                        app.builtin_fx_open.insert(slot_id, app.builtin_fx_open.get(&slot_id).map(|c| c+1).unwrap_or(1));
                     }
                 } else {
                     let mut editor_plugin = jamhub_engine::vst3_host::Vst3Plugin::load(
@@ -340,10 +340,10 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
             }
             if let Some(idx) = toggle_builtin_popup {
                 let sid = app.project.tracks[track_idx].effects[idx].id;
-                if app.builtin_fx_open.contains(&sid) {
+                if app.builtin_fx_open.contains_key(&sid) {
                     app.builtin_fx_open.remove(&sid);
                 } else {
-                    app.builtin_fx_open.insert(sid);
+                    app.builtin_fx_open.insert(sid, app.builtin_fx_open.get(&sid).map(|c| c+1).unwrap_or(1));
                 }
             }
 
@@ -494,11 +494,11 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
         return;
     }
 
-    let open_ids: Vec<uuid::Uuid> = app.builtin_fx_open.iter().copied().collect();
+    let open_ids: Vec<(uuid::Uuid, u32)> = app.builtin_fx_open.iter().map(|(&k, &v)| (k, v)).collect();
     let mut needs_sync = false;
 
     let mut close_ids: Vec<uuid::Uuid> = Vec::new();
-    for slot_id in open_ids {
+    for (slot_id, open_counter) in open_ids {
         let slot_idx = app.project.tracks[track_idx]
             .effects
             .iter()
@@ -564,7 +564,7 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
 
             let plugin_name_for_presets = name.clone();
             egui::Window::new(format!("{name}"))
-                .id(egui::Id::new("fx_popup").with(slot_id))
+                .id(egui::Id::new("fx_popup").with(slot_id).with(open_counter))
                 .title_bar(true)
                 .collapsible(false)
                 .default_width(300.0)
@@ -719,7 +719,7 @@ fn show_builtin_popups(app: &mut DawApp, ctx: &egui::Context, track_idx: usize) 
             );
             let default_w = if is_peq { 520.0 } else { 250.0 };
             egui::Window::new(format!("{name}"))
-                .id(egui::Id::new("fx_builtin").with(slot_id))
+                .id(egui::Id::new("fx_builtin").with(slot_id).with(open_counter))
                 .title_bar(true)
                 .collapsible(false)
                 .default_width(default_w)
