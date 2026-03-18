@@ -10,12 +10,14 @@ fn credentials_path() -> PathBuf {
 }
 
 /// Save login credentials for persistence across restarts
-fn save_credentials(server_url: &str, email: &str, jwt: &str, username: &str) {
+fn save_credentials(server_url: &str, email: &str, jwt: &str, username: &str, remote_project_id: Option<&str>, remote_project_name: Option<&str>) {
     let data = serde_json::json!({
         "server_url": server_url,
         "email": email,
         "jwt": jwt,
         "username": username,
+        "remote_project_id": remote_project_id,
+        "remote_project_name": remote_project_name,
     });
     let _ = std::fs::write(credentials_path(), data.to_string());
 }
@@ -36,6 +38,8 @@ pub fn load_saved_credentials(panel: &mut super::platform_panel::PlatformPanel) 
                 panel.logged_in = true;
             }
         }
+        panel.remote_project_id = extract_json_string(&data, "remote_project_id");
+        panel.remote_project_name = extract_json_string(&data, "remote_project_name");
     }
 }
 
@@ -91,10 +95,11 @@ pub struct PlatformPanel {
     pub import_track_id: String,
     pub import_track_status: Option<String>,
 
-    // Cloud project
-    pub cloud_upload_status: Option<String>,
-    pub cloud_download_id: String,
-    pub cloud_download_status: Option<String>,
+    // Cloud project — git-like state
+    pub remote_project_id: Option<String>,  // connected cloud project ID
+    pub remote_project_name: Option<String>, // name of the connected project
+    pub cloud_status: Option<String>,
+    pub clone_id: String, // for clone dialog
 
     // Bands
     pub bands: Vec<PlatformBand>,
@@ -128,9 +133,10 @@ impl Default for PlatformPanel {
             checkout_status: None,
             import_track_id: String::new(),
             import_track_status: None,
-            cloud_upload_status: None,
-            cloud_download_id: String::new(),
-            cloud_download_status: None,
+            remote_project_id: None,
+            remote_project_name: None,
+            cloud_status: None,
+            clone_id: String::new(),
             bands: Vec::new(),
             bands_loaded: false,
             selected_band_idx: 0,
@@ -308,7 +314,7 @@ impl PlatformPanel {
                     self.username = Some(username.clone());
                     self.logged_in = true;
                     self.login_error = None;
-                    save_credentials(&self.server_url, &self.email, &token, &username);
+                    save_credentials(&self.server_url, &self.email, &token, &username, self.remote_project_id.as_deref(), self.remote_project_name.as_deref());
                     self.password.clear();
                 } else {
                     let msg = extract_json_string(&resp, "message")
@@ -345,7 +351,7 @@ impl PlatformPanel {
                     self.username = Some(username.clone());
                     self.logged_in = true;
                     self.login_error = None;
-                    save_credentials(&self.server_url, &self.email, &token, &username);
+                    save_credentials(&self.server_url, &self.email, &token, &username, self.remote_project_id.as_deref(), self.remote_project_name.as_deref());
                     self.password.clear();
                 } else {
                     let msg = extract_json_string(&resp, "message")
@@ -524,60 +530,95 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
 
     ui.separator();
 
-    ui.separator();
-
-    // Auto-fill upload title from project name if empty
+    // Auto-fill upload title
     if app.platform.upload_title.is_empty() && !app.project.name.is_empty() && app.project.name != "Untitled Session" {
         app.platform.upload_title = app.project.name.clone();
     }
 
-    // ── Cloud Project (Upload/Download full project) ──
-    egui::CollapsingHeader::new("Cloud Project")
+    // Load bands if needed
+    if !app.platform.bands_loaded {
+        if let Some(ref jwt) = app.platform.jwt_token {
+            if let Ok(resp) = platform_request("GET", &app.platform.server_url, "/api/bands", Some(jwt), None) {
+                app.platform.bands.clear();
+                let mut idx = 0;
+                while let Some(pos) = resp[idx..].find("\"id\"") {
+                    let abs = idx + pos;
+                    if let Some(id) = extract_json_string(&resp[abs..], "id") {
+                        if let Some(name) = extract_json_string(&resp[abs..], "name") {
+                            app.platform.bands.push(PlatformBand { id, name });
+                        }
+                    }
+                    idx = abs + 4;
+                }
+            }
+            app.platform.bands_loaded = true;
+        }
+    }
+
+    // ── Remote — git-like project sync ──
+    egui::CollapsingHeader::new("Remote")
         .default_open(true)
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Push your project with all stems. Others hear the mixdown; you can pull all stems back.").size(10.0).weak());
-            ui.add_space(6.0);
+            // Status line
+            if let Some(ref status) = app.platform.cloud_status {
+                ui.label(status.as_str());
+                ui.add_space(2.0);
+            }
 
-            // Upload form
-            ui.group(|ui| {
-                ui.label(egui::RichText::new("Push to Cloud").size(12.0).strong());
-                ui.add_space(4.0);
+            if app.platform.remote_project_id.is_some() {
+                // ── CONNECTED to a remote project ──
+                let proj_name = app.platform.remote_project_name.clone().unwrap_or("Unknown".into());
+                let proj_id = app.platform.remote_project_id.clone().unwrap_or_default();
 
-                // Band selector (load bands first)
-                if !app.platform.bands_loaded {
-                    if let Some(ref jwt) = app.platform.jwt_token {
-                        if let Ok(resp) = platform_request("GET", &app.platform.server_url, "/api/bands", Some(jwt), None) {
-                            app.platform.bands.clear();
-                            // Parse bands from JSON array
-                            let mut idx = 0;
-                            while let Some(pos) = resp[idx..].find("\"id\"") {
-                                let abs = idx + pos;
-                                if let Some(id) = extract_json_string(&resp[abs..], "id") {
-                                    if let Some(name) = extract_json_string(&resp[abs..], "name") {
-                                        app.platform.bands.push(PlatformBand { id, name });
-                                    }
-                                }
-                                idx = abs + 4;
-                            }
-                        }
-                        app.platform.bands_loaded = true;
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("\u{2714}").color(egui::Color32::from_rgb(80, 210, 120)));
+                    ui.label(egui::RichText::new(format!("origin: {proj_name}")).strong());
+                    if ui.small_button("\u{21BB}").on_hover_text("Refresh bands").clicked() {
+                        app.platform.bands_loaded = false;
+                        app.platform.bands.clear();
                     }
-                }
+                });
+                ui.label(egui::RichText::new(&proj_id).size(9.0).color(egui::Color32::from_rgb(100, 100, 115)));
+                ui.add_space(6.0);
 
+                // Push / Pull buttons side by side
+                ui.horizontal(|ui| {
+                    if ui.button("\u{2B06} Push").on_hover_text("Push current project to remote (creates new version)").clicked() {
+                        if app.platform.upload_title.trim().is_empty() {
+                            app.platform.cloud_status = Some("Project name is required".into());
+                        } else {
+                            let original_name = app.project.name.clone();
+                            app.project.name = app.platform.upload_title.trim().to_string();
+                            do_upload_cloud_project(app);
+                            app.project.name = original_name;
+                        }
+                    }
+                    if ui.button("\u{2B07} Pull").on_hover_text("Pull latest version from remote").clicked() {
+                        // Use the connected project ID
+                        app.platform.clone_id = proj_id.clone();
+                        do_download_cloud_project(app);
+                    }
+                });
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut app.platform.upload_title);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Genre:");
+                    ui.text_edit_singleline(&mut app.platform.upload_genre);
+                });
+
+                // Band selector
                 if !app.platform.bands.is_empty() {
                     ui.horizontal(|ui| {
                         ui.label("Band:");
-                        // Refresh button to reload bands after creating on website
-                        if ui.small_button("\u{21BB}").on_hover_text("Refresh bands list").clicked() {
-                            app.platform.bands_loaded = false;
-                            app.platform.bands.clear();
-                        }
                         let selected_name = if app.platform.selected_band_idx == 0 {
-                            "Select a band...".to_string()
+                            "Select...".to_string()
                         } else {
                             app.platform.bands.get(app.platform.selected_band_idx - 1)
-                                .map(|b| b.name.clone())
-                                .unwrap_or("Select...".into())
+                                .map(|b| b.name.clone()).unwrap_or("Select...".into())
                         };
                         egui::ComboBox::from_id_salt("band_select")
                             .selected_text(&selected_name)
@@ -589,73 +630,98 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
                                 }
                             });
                     });
-                    if app.platform.selected_band_idx == 0 {
-                        ui.label(egui::RichText::new("You must select a band to push a project").size(10.0).color(egui::Color32::from_rgb(220, 160, 60)));
-                    }
-                } else {
-                    ui.label(egui::RichText::new("You need a band to push projects.").size(10.0).color(egui::Color32::from_rgb(220, 160, 60)));
-                    ui.horizontal(|ui| {
-                        if ui.button("Create Band").clicked() {
-                            let url = format!("{}/#/bands", app.platform.server_url.trim_end_matches('/'));
-                            let _ = open::that(&url);
-                        }
-                        if ui.button("Refresh").on_hover_text("Reload bands after creating one").clicked() {
-                            app.platform.bands_loaded = false;
-                            app.platform.bands.clear();
-                        }
-                    });
                 }
 
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label("Project Name:");
-                    ui.text_edit_singleline(&mut app.platform.upload_title);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Genre:");
-                    ui.text_edit_singleline(&mut app.platform.upload_genre);
-                });
-
-                if let Some(ref status) = app.platform.cloud_upload_status {
-                    ui.add_space(2.0);
-                    ui.label(status.as_str());
+                if ui.small_button("Disconnect remote").clicked() {
+                    app.platform.remote_project_id = None;
+                    app.platform.remote_project_name = None;
+                    save_credentials(&app.platform.server_url, &app.platform.email,
+                        app.platform.jwt_token.as_deref().unwrap_or(""),
+                        app.platform.username.as_deref().unwrap_or(""), None, None);
+                    app.platform.cloud_status = Some("Disconnected from remote".into());
                 }
+            } else {
+                // ── NOT CONNECTED — need to init or clone ──
+                ui.label(egui::RichText::new("No remote connected").size(11.0).color(egui::Color32::from_rgb(180, 160, 80)));
+                ui.add_space(6.0);
 
-                ui.add_space(4.0);
-                let has_band = app.platform.selected_band_idx > 0;
-                if ui.add_enabled(has_band, egui::Button::new("Push Project to Cloud")).clicked() {
-                    if app.platform.upload_title.trim().is_empty() {
-                        app.platform.cloud_upload_status = Some("Project name is required".into());
+                // Init new project
+                ui.group(|ui| {
+                    ui.label(egui::RichText::new("Init — Create new remote project").size(11.0).strong());
+                    ui.add_space(4.0);
+
+                    // Band selector
+                    if !app.platform.bands.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label("Band:");
+                            if ui.small_button("\u{21BB}").on_hover_text("Refresh").clicked() {
+                                app.platform.bands_loaded = false;
+                                app.platform.bands.clear();
+                            }
+                            let selected_name = if app.platform.selected_band_idx == 0 {
+                                "Select a band...".to_string()
+                            } else {
+                                app.platform.bands.get(app.platform.selected_band_idx - 1)
+                                    .map(|b| b.name.clone()).unwrap_or("Select...".into())
+                            };
+                            egui::ComboBox::from_id_salt("band_select_init")
+                                .selected_text(&selected_name)
+                                .show_ui(ui, |ui| {
+                                    for (i, band) in app.platform.bands.iter().enumerate() {
+                                        if ui.selectable_label(app.platform.selected_band_idx == i + 1, &band.name).clicked() {
+                                            app.platform.selected_band_idx = i + 1;
+                                        }
+                                    }
+                                });
+                        });
                     } else {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("You need a band first.").size(10.0).color(egui::Color32::from_rgb(220, 160, 60)));
+                            if ui.button("Create Band").clicked() {
+                                let url = format!("{}/#/bands", app.platform.server_url.trim_end_matches('/'));
+                                let _ = open::that(&url);
+                            }
+                            if ui.button("Refresh").clicked() {
+                                app.platform.bands_loaded = false;
+                                app.platform.bands.clear();
+                            }
+                        });
+                    }
+
+                    ui.horizontal(|ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut app.platform.upload_title);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Genre:");
+                        ui.text_edit_singleline(&mut app.platform.upload_genre);
+                    });
+
+                    let can_init = app.platform.selected_band_idx > 0 && !app.platform.upload_title.trim().is_empty();
+                    if ui.add_enabled(can_init, egui::Button::new("\u{2B06} Init & Push")).clicked() {
                         let original_name = app.project.name.clone();
                         app.project.name = app.platform.upload_title.trim().to_string();
                         do_upload_cloud_project(app);
                         app.project.name = original_name;
                     }
-                }
-            });
-
-            ui.add_space(8.0);
-
-            // Download form
-            ui.group(|ui| {
-                ui.label(egui::RichText::new("Pull from Cloud").size(12.0).strong());
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label("Project ID:");
-                    ui.text_edit_singleline(&mut app.platform.cloud_download_id);
                 });
 
-                if let Some(ref status) = app.platform.cloud_download_status {
-                    ui.add_space(2.0);
-                    ui.label(status.as_str());
-                }
+                ui.add_space(6.0);
 
-                ui.add_space(4.0);
-                if ui.button("Pull Project from Cloud").clicked() {
-                    do_download_cloud_project(app);
-                }
-            });
+                // Clone existing project
+                ui.group(|ui| {
+                    ui.label(egui::RichText::new("Clone — Pull existing project").size(11.0).strong());
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Project ID:");
+                        ui.text_edit_singleline(&mut app.platform.clone_id);
+                    });
+                    if ui.button("\u{2B07} Clone").clicked() {
+                        do_download_cloud_project(app);
+                    }
+                });
+            }
         });
 
     ui.separator();
@@ -830,17 +896,17 @@ fn do_upload_cloud_project(app: &mut DawApp) {
     let jwt = match &app.platform.jwt_token {
         Some(t) => t.clone(),
         None => {
-            app.platform.cloud_upload_status = Some("Error: not logged in".into());
+            app.platform.cloud_status = Some("Error: not logged in".into());
             return;
         }
     };
 
     if app.project.tracks.is_empty() {
-        app.platform.cloud_upload_status = Some("No tracks to upload".into());
+        app.platform.cloud_status = Some("No tracks to upload".into());
         return;
     }
 
-    app.platform.cloud_upload_status = Some("Rendering mixdown + stems...".into());
+    app.platform.cloud_status = Some("Rendering mixdown + stems...".into());
 
     let sr = app.sample_rate();
 
@@ -883,7 +949,7 @@ fn do_upload_cloud_project(app: &mut DawApp) {
     }
     let mixdown_bytes = encode_wav_bytes(&mixdown, sr);
 
-    app.platform.cloud_upload_status = Some(format!("Uploading {} stems...", stems.len()));
+    app.platform.cloud_status = Some(format!("Uploading {} stems...", stems.len()));
 
     // Build multipart body
     let boundary = format!("----TW_Cloud_{}", uuid::Uuid::new_v4().simple());
@@ -933,27 +999,34 @@ fn do_upload_cloud_project(app: &mut DawApp) {
             } else {
                 format!("Updated to v{version}! ({new_stems} new, {reused} reused stems) ID: {id}")
             };
-            app.platform.cloud_upload_status = Some(ver_msg.clone());
+            app.platform.cloud_status = Some(ver_msg.clone());
+            // Connect to the remote project
+            app.platform.remote_project_id = Some(id.clone());
+            app.platform.remote_project_name = Some(app.project.name.clone());
+            save_credentials(&app.platform.server_url, &app.platform.email,
+                app.platform.jwt_token.as_deref().unwrap_or(""),
+                app.platform.username.as_deref().unwrap_or(""),
+                Some(&id), Some(&app.project.name));
             app.set_status(&ver_msg);
         }
         Err(e) => {
-            app.platform.cloud_upload_status = Some(format!("Upload failed: {e}"));
+            app.platform.cloud_status = Some(format!("Upload failed: {e}"));
         }
     }
 }
 
 /// Download a cloud project and import all stems as tracks
 fn do_download_cloud_project(app: &mut DawApp) {
-    let input = app.platform.cloud_download_id.trim().to_string();
+    let input = app.platform.clone_id.trim().to_string();
     if input.is_empty() {
-        app.platform.cloud_download_status = Some("Enter a cloud project ID".into());
+        app.platform.cloud_status = Some("Enter a project ID to clone/pull".into());
         return;
     }
 
     let jwt = match &app.platform.jwt_token {
         Some(t) => t.clone(),
         None => {
-            app.platform.cloud_download_status = Some("Error: not logged in".into());
+            app.platform.cloud_status = Some("Error: not logged in".into());
             return;
         }
     };
@@ -965,7 +1038,7 @@ fn do_download_cloud_project(app: &mut DawApp) {
         input.clone()
     };
 
-    app.platform.cloud_download_status = Some("Downloading project...".into());
+    app.platform.cloud_status = Some("Downloading project...".into());
 
     // Try as a project ID first, then as a version ID
     let project_path = format!("/api/cloud/{}/download", project_id);
@@ -1036,11 +1109,19 @@ fn do_download_cloud_project(app: &mut DawApp) {
 
             app.project.name = title.clone();
             app.sync_project();
-            app.platform.cloud_download_status = Some(format!("Downloaded: {title} ({stem_count} tracks)"));
-            app.set_status(&format!("Cloud project loaded: {title}"));
+            // Connect to the remote
+            app.platform.remote_project_id = Some(project_id.clone());
+            app.platform.remote_project_name = Some(title.clone());
+            app.platform.upload_title = title.clone();
+            save_credentials(&app.platform.server_url, &app.platform.email,
+                app.platform.jwt_token.as_deref().unwrap_or(""),
+                app.platform.username.as_deref().unwrap_or(""),
+                Some(&project_id), Some(&title));
+            app.platform.cloud_status = Some(format!("Cloned: {title} ({stem_count} tracks)"));
+            app.set_status(&format!("Cloned: {title}"));
         }
         Err(e) => {
-            app.platform.cloud_download_status = Some(format!("Download failed: {e}"));
+            app.platform.cloud_status = Some(format!("Download failed: {e}"));
         }
     }
 }
