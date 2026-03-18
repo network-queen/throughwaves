@@ -1783,22 +1783,64 @@ async function updateCloudProject(projectId) {
   } catch(e) { alert('Update failed: ' + e.message); }
 }
 
-async function deleteCloudProject(projectId, title) {
+function deleteCloudProject(projectId, title) {
   if (!state.token || state.token === 'demo_token') { openAuthModal(); return; }
-  if (!confirm('Delete "' + title + '" and all its versions? This cannot be undone.')) return;
-  try {
-    const resp = await fetch('/api/cloud/' + projectId, {
-      method: 'DELETE',
-      headers: { 'Authorization': 'Bearer ' + state.token },
-    });
-    if (resp.ok) {
-      alert('Project deleted.');
-      navigate('projects');
-    } else {
-      const err = await resp.json().catch(() => ({}));
-      alert('Delete failed: ' + (err.error || resp.status));
+  // Show styled confirmation modal
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+  overlay.innerHTML = `
+    <div style="
+      background:var(--bg-panel); border:1px solid var(--border); border-radius:var(--radius-lg);
+      padding:2rem; max-width:420px; width:90%; box-shadow:var(--shadow-lg);
+      text-align:center;
+    ">
+      <div style="font-size:2.5rem; margin-bottom:0.8rem;">&#9888;</div>
+      <h3 style="margin-bottom:0.5rem; color:var(--text-primary);">Delete Project?</h3>
+      <p style="color:var(--text-secondary); margin-bottom:0.3rem; font-size:0.95rem;">
+        <strong>"${title}"</strong>
+      </p>
+      <p style="color:var(--text-muted); margin-bottom:1.5rem; font-size:0.85rem;">
+        All versions, stems, and the mixdown will be permanently deleted.<br>This cannot be undone.
+      </p>
+      <div style="display:flex; gap:0.8rem; justify-content:center;">
+        <button onclick="this.closest('div[style*=fixed]').remove()"
+          style="padding:0.6rem 1.5rem; border-radius:8px; background:var(--bg-elevated); color:var(--text-primary);
+                 border:1px solid var(--border); cursor:pointer; font-size:0.95rem;">
+          Cancel
+        </button>
+        <button id="confirmDeleteBtn"
+          style="padding:0.6rem 1.5rem; border-radius:8px; background:var(--red); color:white;
+                 border:none; cursor:pointer; font-size:0.95rem; font-weight:600;">
+          Delete Forever
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  // Close on overlay click (outside modal)
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  // Handle delete
+  document.getElementById('confirmDeleteBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('confirmDeleteBtn');
+    btn.textContent = 'Deleting...';
+    btn.disabled = true;
+    try {
+      const resp = await fetch('/api/cloud/' + projectId, {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + state.token },
+      });
+      overlay.remove();
+      if (resp.ok) {
+        navigate('projects');
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        alert('Delete failed: ' + (err.error || resp.status));
+      }
+    } catch(e) {
+      overlay.remove();
+      alert('Delete failed: ' + e.message);
     }
-  } catch(e) { alert('Delete failed: ' + e.message); }
+  });
 }
 
 async function publishCloudProject(projectId, title, mixdownUrl) {
