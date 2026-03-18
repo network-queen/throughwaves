@@ -5431,7 +5431,10 @@ impl eframe::App for DawApp {
                         self.show_effects = true;
                         ui.close_menu();
                     }
-                    if ui.button("Piano Roll...    Cmd+P").clicked() {
+                    let is_midi = self.selected_track
+                        .and_then(|i| self.project.tracks.get(i))
+                        .map_or(false, |t| t.kind == jamhub_model::TrackKind::Midi);
+                    if ui.add_enabled(is_midi, egui::Button::new("Piano Roll...    Cmd+P")).clicked() {
                         self.show_piano_roll = true;
                         ui.close_menu();
                     }
@@ -5525,7 +5528,10 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Piano Roll       Cmd+P").clicked() {
+                    let is_midi_track = self.selected_track
+                        .and_then(|i| self.project.tracks.get(i))
+                        .map_or(false, |t| t.kind == jamhub_model::TrackKind::Midi);
+                    if ui.add_enabled(is_midi_track, egui::Button::new("Piano Roll       Cmd+P")).clicked() {
                         self.show_piano_roll = !self.show_piano_roll;
                         ui.close_menu();
                     }
