@@ -724,54 +724,6 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
             }
         });
 
-    ui.separator();
-
-    // ── Import Track into DAW ──
-    egui::CollapsingHeader::new("Import Track into DAW")
-        .default_open(false)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Track ID or URL:");
-                ui.text_edit_singleline(&mut app.platform.import_track_id);
-            });
-
-            if let Some(ref status) = app.platform.import_track_status {
-                ui.label(status.as_str());
-            }
-
-            if ui.button("Import Track").clicked() {
-                do_import_track(app);
-            }
-        });
-
-    ui.separator();
-
-    // ── My Tracks ──
-    egui::CollapsingHeader::new("My Tracks")
-        .default_open(false)
-        .show(ui, |ui| {
-            if ui.button("Refresh").clicked() || !app.platform.tracks_loaded {
-                app.platform.fetch_my_tracks();
-            }
-
-            if app.platform.my_tracks.is_empty() {
-                ui.label("No tracks uploaded yet.");
-            } else {
-                egui::ScrollArea::vertical()
-                    .max_height(200.0)
-                    .show(ui, |ui| {
-                        for track in &app.platform.my_tracks {
-                            ui.group(|ui| {
-                                ui.strong(&track.title);
-                                ui.horizontal(|ui| {
-                                    ui.label(format!("Plays: {}", track.play_count));
-                                    ui.label(format!("Likes: {}", track.like_count));
-                                });
-                            });
-                        }
-                    });
-            }
-        });
 }
 
 // ---------------------------------------------------------------------------
