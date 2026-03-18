@@ -4511,7 +4511,6 @@ impl eframe::App for DawApp {
                 if i.key_pressed(egui::Key::Z) && !i.modifiers.command { actions.push("zoom_fit".into()); }
                 if i.key_pressed(egui::Key::C) && !i.modifiers.command { actions.push("toggle_count_in".into()); }
                 if i.key_pressed(egui::Key::P) && !i.modifiers.command { actions.push("toggle_punch".into()); }
-                if i.key_pressed(egui::Key::B) && !i.modifiers.command { actions.push("media_browser".into()); }
                 if i.key_pressed(egui::Key::Q) && !i.modifiers.command { actions.push("spectrum".into()); }
                 if i.key_pressed(egui::Key::X) && !i.modifiers.command { actions.push("toggle_mixer_panel".into()); }
                 if i.key_pressed(egui::Key::F) && i.modifiers.shift && !i.modifiers.command { actions.push("flatten_comp".into()); }
@@ -5544,10 +5543,6 @@ impl eframe::App for DawApp {
                         self.spectrum_analyzer.show = !self.spectrum_analyzer.show;
                         ui.close_menu();
                     }
-                    if ui.button("Media Browser        B").clicked() {
-                        self.media_browser.show = !self.media_browser.show;
-                        ui.close_menu();
-                    }
                     ui.separator();
                     ui.label(egui::RichText::new("Snap Mode:").small().color(egui::Color32::GRAY));
                     for mode in SnapMode::all() {
@@ -5832,7 +5827,7 @@ impl eframe::App for DawApp {
         effects_panel::show(self, ctx);
         piano_roll::show(self, ctx);
         fx_browser::show(self, ctx);
-        media_browser::show(self, ctx);
+        // media_browser removed
         audio_settings::show(self, ctx);
         midi_panel::show(self, ctx);
         undo_panel::show(self, ctx);
