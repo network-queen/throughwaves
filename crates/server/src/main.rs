@@ -1,5 +1,6 @@
 mod admin;
 mod auth;
+mod bands;
 mod cloud;
 mod jam;
 mod models;
@@ -57,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(projects::router())
         .merge(social::router())
         .merge(cloud::router())
+        .merge(bands::router())
         .merge(admin::router())
         .route_layer(middleware::from_fn(auth::jwt_auth));
 

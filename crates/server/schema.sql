@@ -180,6 +180,40 @@ CREATE INDEX idx_cloud_versions_project ON cloud_project_versions(cloud_project_
 -- Link cloud projects to their published track
 ALTER TABLE cloud_projects ADD COLUMN IF NOT EXISTS published_track_id UUID REFERENCES tracks(id) ON DELETE SET NULL;
 
+-- Bands
+CREATE TABLE IF NOT EXISTS bands (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        VARCHAR(128) NOT NULL,
+    description TEXT DEFAULT '',
+    genre       VARCHAR(64) DEFAULT '',
+    avatar_url  TEXT,
+    banner_url  TEXT,
+    website     TEXT DEFAULT '',
+    location    TEXT DEFAULT '',
+    created_by  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    is_public   BOOLEAN DEFAULT TRUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_bands_created ON bands(created_at DESC);
+
+-- Band members
+CREATE TABLE IF NOT EXISTS band_members (
+    id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    band_id  UUID NOT NULL REFERENCES bands(id) ON DELETE CASCADE,
+    user_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role     VARCHAR(32) NOT NULL DEFAULT 'member',
+    instrument VARCHAR(64) DEFAULT '',
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(band_id, user_id)
+);
+
+CREATE INDEX idx_band_members_band ON band_members(band_id);
+CREATE INDEX idx_band_members_user ON band_members(user_id);
+
+-- Band projects (link cloud projects to bands)
+ALTER TABLE cloud_projects ADD COLUMN IF NOT EXISTS band_id UUID REFERENCES bands(id) ON DELETE SET NULL;
+
 -- Admin role
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;
 UPDATE users SET is_admin = true WHERE email = 'klymenko.ruslan.dev@gmail.com';

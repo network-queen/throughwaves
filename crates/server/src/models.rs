@@ -285,6 +285,33 @@ pub struct TrackFile {
 
 // ── Cloud Projects ──
 
+// ── Bands ──
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Band {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub genre: Option<String>,
+    pub avatar_url: Option<String>,
+    pub banner_url: Option<String>,
+    pub website: Option<String>,
+    pub location: Option<String>,
+    pub created_by: Uuid,
+    pub is_public: Option<bool>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct BandMember {
+    pub id: Uuid,
+    pub band_id: Uuid,
+    pub user_id: Uuid,
+    pub role: String,
+    pub instrument: Option<String>,
+    pub joined_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct CloudProject {
     pub id: Uuid,
@@ -301,6 +328,7 @@ pub struct CloudProject {
     pub is_public: Option<bool>,
     pub created_at: DateTime<Utc>,
     pub published_track_id: Option<Uuid>,
+    pub band_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
