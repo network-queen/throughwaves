@@ -960,14 +960,45 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                 }
             }
 
-            // Draw drag-to-reorder indicator
-            if let Some((_src, mouse_y)) = app.dragging_track_reorder {
+            // Drag-to-reorder: draw indicator and handle drop
+            if let Some((src, mouse_y)) = app.dragging_track_reorder {
                 ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
                 let panel_rect = ui.max_rect();
                 ui.painter().line_segment(
                     [egui::pos2(panel_rect.left(), mouse_y), egui::pos2(panel_rect.right(), mouse_y)],
                     egui::Stroke::new(2.0, egui::Color32::from_rgb(240, 192, 64)),
                 );
+
+                // Drop when mouse released
+                if !ui.input(|i| i.pointer.any_down()) {
+                    app.dragging_track_reorder = None;
+                    // Find target track based on Y
+                    let offsets = track_y_offsets(app);
+                    let vz = app.track_height_zoom;
+                    let panel_top = panel_rect.top();
+                    let rel_y = mouse_y - panel_top;
+                    let mut target = src;
+                    for (ti, &off) in offsets.iter().enumerate() {
+                        if ti >= app.project.tracks.len() { break; }
+                        let th = track_height(&app.project.tracks[ti], vz);
+                        if rel_y >= off && rel_y < off + th {
+                            target = ti;
+                            break;
+                        }
+                    }
+                    // Also handle dragging below all tracks
+                    if rel_y > offsets.last().copied().unwrap_or(0.0) + if app.project.tracks.is_empty() { 0.0 } else { track_height(app.project.tracks.last().unwrap(), vz) } {
+                        target = app.project.tracks.len().saturating_sub(1);
+                    }
+                    if target != src && src < app.project.tracks.len() && target < app.project.tracks.len() {
+                        app.push_undo("Reorder tracks");
+                        let track = app.project.tracks.remove(src);
+                        app.project.tracks.insert(target, track);
+                        app.selected_track = Some(target);
+                        app.sync_project();
+                        app.set_status(&format!("Track moved to position {}", target + 1));
+                    }
+                }
             }
 
             // Apply track actions
