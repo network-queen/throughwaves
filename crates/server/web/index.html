@@ -1388,24 +1388,45 @@ function onPlayClick(trackId) {
 function handleWaveformClick(e, trackId) {
   const track = findTrackById(trackId) || demoTracks.find(t => t.id === trackId);
   if (!track) return;
+
+  const rect = e.currentTarget.getBoundingClientRect();
+  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  const dur = (track.duration || track.duration_seconds || 200);
+
   if (!state.currentTrack || (state.currentTrack.id !== trackId && state.currentTrack.id != trackId)) {
+    // Load and play this track from the clicked position
     const playable = {
       ...track,
       audioUrl: track.audioUrl || track.audio_url || null,
-      duration: track.duration || track.duration_seconds || 200,
+      duration: dur,
       artist: track.artist || track._username || 'Unknown',
     };
     playTrack(playable);
     if (typeof trackId === 'string') apiPlayTrack(trackId);
+    // Seek after a short delay to let the audio load
+    setTimeout(() => {
+      if (audioEl.duration && !isNaN(audioEl.duration)) {
+        audioEl.currentTime = pct * audioEl.duration;
+      }
+      simTime = pct * dur;
+    }, 100);
+  } else {
+    // Already playing this track — just seek
+    if (audioEl.duration && !isNaN(audioEl.duration)) {
+      audioEl.currentTime = pct * audioEl.duration;
+    }
   }
-  // Seek within waveform
-  const rect = e.currentTarget.getBoundingClientRect();
-  const pct = (e.clientX - rect.left) / rect.width;
-  const dur = (track.duration || track.duration_seconds || 200);
+
   simTime = pct * dur;
   document.getElementById('bpProgressBar').style.width = (pct * 100) + '%';
   document.getElementById('bpTimeCur').textContent = formatTime(simTime);
-  if (track.audioUrl || track.audio_url) audioEl.currentTime = pct * audioEl.duration;
+
+  // Auto-play if paused
+  if (audioEl.paused && audioEl.src) {
+    audioEl.play().catch(() => {});
+    state.isPlaying = true;
+    updatePlayButtons();
+  }
 }
 
 // ===== Styled Modal System =====
