@@ -109,9 +109,10 @@ fn track_y_offsets_with_groups(app: &DawApp) -> (Vec<f32>, Vec<(Uuid, f32)>) {
     let mut rendered_groups = std::collections::HashSet::new();
 
     for (i, track) in app.project.tracks.iter().enumerate() {
-        // If this track belongs to a group and we haven't rendered the group header yet
+        // If this track belongs to a legacy group (not a folder), add group header space
         if let Some(gid) = track.group_id {
-            if rendered_groups.insert(gid) {
+            let is_folder_group = app.project.tracks.iter().any(|t| t.id == gid && t.kind == jamhub_model::TrackKind::Folder);
+            if !is_folder_group && rendered_groups.insert(gid) {
                 group_headers.push((gid, y));
                 y += GROUP_HEADER_HEIGHT;
             }
@@ -282,9 +283,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             let mut rendered_group_headers = std::collections::HashSet::new();
 
             for (i, track) in app.project.tracks.iter().enumerate() {
-                // Draw group folder header if this is the first track of a group
+                // Draw legacy group header (only for non-folder groups)
                 if let Some(gid) = track.group_id {
-                    if rendered_group_headers.insert(gid) {
+                    // Skip if this group is a folder track (folders render as regular tracks)
+                    let is_folder_group = app.project.tracks.iter().any(|t| t.id == gid && t.kind == TrackKind::Folder);
+                    if !is_folder_group && rendered_group_headers.insert(gid) {
                         // Find the group metadata
                         let group_meta = app.project.groups.iter().find(|g| g.id == gid);
                         let group_name = group_meta.map(|g| g.name.as_str()).unwrap_or("Group");
