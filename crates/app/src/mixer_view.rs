@@ -58,6 +58,10 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
     }
     let mut master_fx_actions: Vec<MasterFxAction> = Vec::new();
 
+    // Paint the full background to prevent any white areas
+    let mixer_rect = ui.max_rect();
+    ui.painter().rect_filled(mixer_rect, 0.0, egui::Color32::from_rgb(18, 19, 24));
+
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
             // Build a list of (track_id, track_name) for dropdowns

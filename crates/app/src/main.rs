@@ -5501,13 +5501,6 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                     }
                     if ui
-                        .selectable_label(self.view == View::Mixer, "Mixer (full)")
-                        .clicked()
-                    {
-                        self.view = View::Mixer;
-                        ui.close_menu();
-                    }
-                    if ui
                         .selectable_label(self.show_mixer_panel, "Mixer Panel     X")
                         .on_hover_text("Dock mixer at bottom of arrange view")
                         .clicked()
