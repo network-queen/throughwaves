@@ -453,6 +453,79 @@ async fn download_cloud_version(
     })))
 }
 
+/// Publish or republish a cloud project's mixdown as a track
+async fn publish_cloud_project(
+    State(pool): State<PgPool>,
+    auth: AuthUser,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let project = sqlx::query_as::<_, CloudProject>(
+        "SELECT * FROM cloud_projects WHERE id = $1"
+    )
+    .bind(project_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("DB: {e}") })))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() })))?;
+
+    if project.user_id != auth.0 {
+        return Err((StatusCode::FORBIDDEN, Json(ErrorResponse { error: "Owner only".into() })));
+    }
+
+    // Check if already published — update existing track
+    if let Some(track_id) = project.published_track_id {
+        // Update the existing track's audio and metadata
+        let _ = sqlx::query(
+            "UPDATE tracks SET title = $1, audio_url = $2, waveform_data = $3, duration_seconds = $4, genre = $5, bpm = $6 WHERE id = $7"
+        )
+        .bind(&project.title)
+        .bind(&project.mixdown_url)
+        .bind(&project.waveform_data)
+        .bind(project.duration_seconds)
+        .bind(&project.genre)
+        .bind(project.bpm)
+        .bind(track_id)
+        .execute(&pool)
+        .await;
+
+        println!("[CLOUD] Republished project as track: {} -> {}", project.title, track_id);
+        Ok(Json(serde_json::json!({
+            "track_id": track_id,
+            "action": "updated",
+        })))
+    } else {
+        // Create new track from mixdown
+        let track_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO tracks (user_id, title, description, audio_url, waveform_data, duration_seconds, genre, bpm)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id"
+        )
+        .bind(auth.0)
+        .bind(&project.title)
+        .bind("Published from cloud project")
+        .bind(&project.mixdown_url)
+        .bind(&project.waveform_data)
+        .bind(project.duration_seconds)
+        .bind(&project.genre)
+        .bind(project.bpm)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("DB: {e}") })))?;
+
+        // Link the published track to the cloud project
+        let _ = sqlx::query("UPDATE cloud_projects SET published_track_id = $1 WHERE id = $2")
+            .bind(track_id)
+            .bind(project_id)
+            .execute(&pool)
+            .await;
+
+        println!("[CLOUD] Published project as new track: {} -> {}", project.title, track_id);
+        Ok(Json(serde_json::json!({
+            "track_id": track_id,
+            "action": "created",
+        })))
+    }
+}
+
 /// Delete a cloud project (owner only)
 async fn delete_cloud_project(
     State(pool): State<PgPool>,
@@ -538,6 +611,7 @@ pub fn router() -> Router<PgPool> {
     Router::new()
         .route("/cloud", post(upload_cloud_project).get(list_cloud_projects))
         .route("/cloud/{id}", get(get_cloud_project).delete(delete_cloud_project).put(update_cloud_project))
+        .route("/cloud/{id}/publish", post(publish_cloud_project))
         .route("/cloud/{id}/download", post(download_cloud_project))
         .route("/cloud/version/{id}", post(download_cloud_version))
         // Allow up to 500MB for project uploads (mixdown + all stems)

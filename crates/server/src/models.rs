@@ -300,6 +300,7 @@ pub struct CloudProject {
     pub plays: Option<i64>,
     pub is_public: Option<bool>,
     pub created_at: DateTime<Utc>,
+    pub published_track_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

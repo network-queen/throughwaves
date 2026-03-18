@@ -1356,6 +1356,48 @@ function handleWaveformClick(e, trackId) {
   if (track.audioUrl || track.audio_url) audioEl.currentTime = pct * audioEl.duration;
 }
 
+// ===== Styled Modal System =====
+
+function showModal({ icon, title, message, confirmText, cancelText, onConfirm, dangerous }) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+  const confirmBg = dangerous ? 'var(--red)' : 'var(--accent)';
+  const confirmColor = dangerous ? 'white' : '#000';
+  overlay.innerHTML = `
+    <div style="background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2rem;max-width:420px;width:90%;box-shadow:var(--shadow-lg);text-align:center;">
+      ${icon ? '<div style="font-size:2.5rem;margin-bottom:0.8rem;">' + icon + '</div>' : ''}
+      <h3 style="margin-bottom:0.5rem;color:var(--text-primary);">${title}</h3>
+      <p style="color:var(--text-secondary);margin-bottom:1.5rem;font-size:0.9rem;line-height:1.5;">${message}</p>
+      <div style="display:flex;gap:0.8rem;justify-content:center;">
+        ${cancelText !== false ? '<button class="tw-modal-cancel" style="padding:0.6rem 1.5rem;border-radius:8px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);cursor:pointer;font-size:0.95rem;">' + (cancelText || 'Cancel') + '</button>' : ''}
+        <button class="tw-modal-confirm" style="padding:0.6rem 1.5rem;border-radius:8px;background:${confirmBg};color:${confirmColor};border:none;cursor:pointer;font-size:0.95rem;font-weight:600;">${confirmText || 'OK'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  const cancelBtn = overlay.querySelector('.tw-modal-cancel');
+  if (cancelBtn) cancelBtn.addEventListener('click', () => overlay.remove());
+  overlay.querySelector('.tw-modal-confirm').addEventListener('click', async () => {
+    const btn = overlay.querySelector('.tw-modal-confirm');
+    if (onConfirm) {
+      btn.textContent = 'Working...';
+      btn.disabled = true;
+      try { await onConfirm(); } catch(e) { showToast('Error: ' + e.message, true); }
+    }
+    overlay.remove();
+  });
+  return overlay;
+}
+
+function showToast(message, isError) {
+  const toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:10000;padding:0.7rem 1.5rem;border-radius:8px;font-size:0.9rem;box-shadow:var(--shadow);transition:opacity 0.3s;' +
+    (isError ? 'background:var(--red);color:white;' : 'background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--accent);');
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 2500);
+}
+
 function esc(str) {
   if (!str) return '';
   const d = document.createElement('div');
@@ -1744,7 +1786,7 @@ async function renderProjects(el) {
                 <button class="play-btn" data-track-id="cloud_${p.id}" onclick="onPlayClick('cloud_${p.id}')">&#9654;</button>
                 <span class="track-duration">${formatTime(duration)}</span>
                 <button class="btn btn-sm" style="margin-left:auto; font-size:0.75rem; padding:0.2rem 0.6rem; background:var(--accent); color:#000; border-radius:6px;"
-                  onclick="event.stopPropagation(); publishCloudProject('${p.id}', '${esc(p.title).replace(/'/g, "\\\\'")}', '${p.mixdown_url}')">
+                  onclick="event.stopPropagation(); publishCloudProject('${p.id}', '${esc(p.title).replace(/'/g, "\\\\'")}', ${!!p.published_track_id})">
                   Publish
                 </button>
                 <button class="btn btn-sm" style="font-size:0.75rem; padding:0.2rem 0.6rem; background:var(--bg-elevated); border-radius:6px;"
@@ -1793,13 +1835,13 @@ async function updateCloudProject(projectId) {
       body: JSON.stringify({ title, genre, bpm, description: desc }),
     });
     if (resp.ok) {
-      alert('Project updated!');
+      showToast('Project updated!');
       renderPage();
     } else {
       const err = await resp.json().catch(() => ({}));
-      alert('Update failed: ' + (err.error || resp.status));
+      showToast('Update failed: ' + (err.error || resp.status), true);
     }
-  } catch(e) { alert('Update failed: ' + e.message); }
+  } catch(e) { showToast('Update failed: ' + e.message, true); }
 }
 
 function deleteCloudProject(projectId, title) {
@@ -1853,52 +1895,77 @@ function deleteCloudProject(projectId, title) {
         navigate('projects');
       } else {
         const err = await resp.json().catch(() => ({}));
-        alert('Delete failed: ' + (err.error || resp.status));
+        showToast('Delete failed: ' + (err.error || resp.status));
       }
     } catch(e) {
       overlay.remove();
-      alert('Delete failed: ' + e.message);
+      showToast('Delete failed: ' + e.message);
     }
   });
 }
 
-async function publishCloudProject(projectId, title, mixdownUrl) {
-  if (!state.token || state.token === 'demo_token') {
-    openAuthModal();
-    return;
-  }
-  if (!confirm(`Publish "${title}" as a public track? The mixdown will appear in Explore.`)) return;
-
-  try {
-    // Download the mixdown file
-    const audioResp = await fetch(mixdownUrl);
-    const audioBlob = await audioResp.blob();
-
-    // Upload as a normal track
-    const formData = new FormData();
-    formData.append('title', title);
-    formData.append('description', 'Published from cloud project');
-    formData.append('genre', '');
-    formData.append('audio', audioBlob, 'mixdown.wav');
-
-    const resp = await fetch('/api/tracks', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + state.token },
-      body: formData,
-    });
-
-    if (resp.ok) {
-      const json = await resp.json();
-      alert('Published! Track ID: ' + (json.id || json.track_id || 'success'));
-      renderPage();
-    } else {
-      const err = await resp.json().catch(() => ({}));
-      alert('Publish failed: ' + (err.error || resp.status));
-    }
-  } catch(e) {
-    alert('Publish failed: ' + e.message);
-  }
+function publishCloudProject(projectId, title, isRepublish) {
+  if (!state.token || state.token === 'demo_token') { openAuthModal(); return; }
+  showModal({
+    icon: isRepublish ? '&#128260;' : '&#127911;',
+    title: isRepublish ? 'Republish Track' : 'Publish as Track',
+    message: '<strong>"' + esc(title) + '"</strong><br><br>' +
+      (isRepublish
+        ? 'The existing published track will be updated with the latest mixdown.'
+        : 'The mixdown will appear as a public track in Explore for everyone to hear.'),
+    confirmText: isRepublish ? 'Republish' : 'Publish',
+    onConfirm: async () => {
+      const resp = await fetch('/api/cloud/' + projectId + '/publish', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + state.token },
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        showToast(json.action === 'updated' ? 'Track republished!' : 'Published successfully!');
+        renderPage();
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        showToast('Publish failed: ' + (err.error || resp.status), true);
+      }
+    },
+  });
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 function promptCreateProject() {
   if (!state.user) { openAuthModal(); return; }
@@ -2170,10 +2237,12 @@ async function renderCloudProject(el, projectId) {
         <div class="card" style="padding:1rem; margin-bottom:1rem;">
           <h4 style="margin-bottom:0.5rem;">Publish as Track</h4>
           <p style="color:var(--text-secondary); font-size:0.9rem; margin-bottom:0.8rem;">
-            Make your mixdown visible to everyone as a public track in Explore.
+            ${project.published_track_id
+              ? 'Update the published track with the latest mixdown.'
+              : 'Make your mixdown visible to everyone as a public track in Explore.'}
           </p>
-          <button class="btn btn-primary" onclick="publishCloudProject('${project.id}', document.getElementById('cpEditTitle').value, '${project.mixdown_url}')">
-            Publish Mixdown as Track
+          <button class="btn btn-primary" onclick="publishCloudProject('${project.id}', document.getElementById('cpEditTitle').value, ${!!project.published_track_id})">
+            ${project.published_track_id ? 'Republish Track' : 'Publish Mixdown as Track'}
           </button>
         </div>
 
@@ -2553,8 +2622,8 @@ function handleFileSelect(input) {
 async function handleUpload() {
   if (!state.user) { openAuthModal(); return; }
   const title = document.getElementById('uploadTitle').value;
-  if (!title) { alert('Please enter a title'); return; }
-  if (!selectedFile) { alert('Please select an audio file'); return; }
+  if (!title) { showToast('Please enter a title', true); return; }
+  if (!selectedFile) { showToast('Please select an audio file', true); return; }
 
   const btn = document.getElementById('uploadBtn');
   const progress = document.getElementById('uploadProgress');
@@ -2600,7 +2669,7 @@ async function handleUpload() {
     progress.classList.remove('active');
     btn.textContent = 'Upload';
     btn.disabled = false;
-    alert('Upload failed: ' + uploadError);
+    showToast('Upload failed: ' + uploadError, true);
     return;
   }
 
@@ -3013,7 +3082,7 @@ async function checkStemService() {
 async function openStemSeparation(trackId, audioUrl) {
   const available = await checkStemService();
   if (!available) {
-    alert('Stem separation service not available.\n\nStart it with:\n  cd tools/stem_separator && python server.py');
+    showToast('Stem separation service not available.\n\nStart it with:\n  cd tools/stem_separator && python server.py');
     return;
   }
 
@@ -3177,11 +3246,11 @@ function deleteTrackFromDetail(trackId, title) {
         navigate('explore');
       } else {
         const err = await resp.json().catch(() => ({}));
-        alert('Delete failed: ' + (err.error || resp.status));
+        showToast('Delete failed: ' + (err.error || resp.status));
       }
     } catch(e) {
       overlay.remove();
-      alert('Delete failed: ' + e.message);
+      showToast('Delete failed: ' + e.message);
     }
   });
 }
@@ -3364,11 +3433,11 @@ function adminDeleteConfirm(entityType, entityId, entityName, apiPath) {
         renderAdmin(document.getElementById('mainContent'));
       } else {
         const err = await resp.json().catch(() => ({}));
-        alert('Delete failed: ' + (err.error || resp.status));
+        showToast('Delete failed: ' + (err.error || resp.status));
       }
     } catch(e) {
       overlay.remove();
-      alert('Delete failed: ' + e.message);
+      showToast('Delete failed: ' + e.message);
     }
   });
 }
