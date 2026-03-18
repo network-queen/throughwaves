@@ -1062,6 +1062,10 @@ fn do_download_cloud_project(app: &mut DawApp) {
             // Parse stems from response
             let title = extract_json_string(&resp, "title").unwrap_or("Cloud Project".into());
 
+            // Clear existing tracks before importing (Pull replaces, not appends)
+            app.project.tracks.clear();
+            app.audio_buffers.clear();
+
             // Find all stem audio_urls and names
             let mut stem_count = 0;
             let mut idx = 0;
