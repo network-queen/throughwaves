@@ -208,7 +208,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
         .show_inside(ui, |ui| {
             if app.show_automation {
                 // Automation parameter selector dropdown
-                ui.allocate_ui(egui::vec2(HEADER_WIDTH, RULER_HEIGHT), |ui| {
+                let (auto_rect, _) = ui.allocate_exact_size(egui::vec2(HEADER_WIDTH, RULER_HEIGHT), egui::Sense::hover());
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(auto_rect), |ui| {
                     ui.horizontal_centered(|ui| {
                         ui.label(
                             egui::RichText::new("Auto:")
@@ -398,6 +399,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                     let (header_rect, _) = ui.allocate_exact_size(egui::vec2(HEADER_WIDTH, h), egui::Sense::hover());
                     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(header_rect), |ui| {
+                        ui.set_clip_rect(header_rect); // prevent content overflow
                         let header_rect = header_rect;
 
                         // Click area for entire header — selection & context menu
