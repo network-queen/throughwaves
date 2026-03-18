@@ -507,34 +507,77 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
 
     ui.separator();
 
+    // Auto-fill upload title from project name if empty
+    if app.platform.upload_title.is_empty() && !app.project.name.is_empty() && app.project.name != "Untitled Session" {
+        app.platform.upload_title = app.project.name.clone();
+    }
+
     // ── Cloud Project (Upload/Download full project) ──
     egui::CollapsingHeader::new("Cloud Project")
         .default_open(true)
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Upload your full project with all tracks as stems. Others hear the mixdown; you can re-download all stems.").size(10.0).weak());
-            ui.add_space(4.0);
+            ui.label(egui::RichText::new("Push your project with all stems. Others hear the mixdown; you can pull all stems back.").size(10.0).weak());
+            ui.add_space(6.0);
 
-            if let Some(ref status) = app.platform.cloud_upload_status {
-                ui.label(status.as_str());
-            }
+            // Upload form
+            ui.group(|ui| {
+                ui.label(egui::RichText::new("Push to Cloud").size(12.0).strong());
+                ui.add_space(4.0);
 
-            if ui.button("Upload Project to Cloud").clicked() {
-                do_upload_cloud_project(app);
-            }
+                ui.horizontal(|ui| {
+                    ui.label("Project Name:");
+                    ui.text_edit_singleline(&mut app.platform.upload_title);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Artist / Author:");
+                    ui.text_edit_singleline(&mut app.platform.upload_description);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Genre:");
+                    ui.text_edit_singleline(&mut app.platform.upload_genre);
+                });
 
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label("Cloud Project ID:");
-                ui.text_edit_singleline(&mut app.platform.cloud_download_id);
+                if let Some(ref status) = app.platform.cloud_upload_status {
+                    ui.add_space(2.0);
+                    ui.label(status.as_str());
+                }
+
+                ui.add_space(4.0);
+                if ui.button("Push Project to Cloud").clicked() {
+                    // Validate required fields
+                    if app.platform.upload_title.trim().is_empty() {
+                        app.platform.cloud_upload_status = Some("Project name is required".into());
+                    } else {
+                        // Use the form title instead of the project name
+                        let original_name = app.project.name.clone();
+                        app.project.name = app.platform.upload_title.trim().to_string();
+                        do_upload_cloud_project(app);
+                        app.project.name = original_name;
+                    }
+                }
             });
 
-            if let Some(ref status) = app.platform.cloud_download_status {
-                ui.label(status.as_str());
-            }
+            ui.add_space(8.0);
 
-            if ui.button("Download Project from Cloud").clicked() {
-                do_download_cloud_project(app);
-            }
+            // Download form
+            ui.group(|ui| {
+                ui.label(egui::RichText::new("Pull from Cloud").size(12.0).strong());
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Project ID:");
+                    ui.text_edit_singleline(&mut app.platform.cloud_download_id);
+                });
+
+                if let Some(ref status) = app.platform.cloud_download_status {
+                    ui.add_space(2.0);
+                    ui.label(status.as_str());
+                }
+
+                ui.add_space(4.0);
+                if ui.button("Pull Project from Cloud").clicked() {
+                    do_download_cloud_project(app);
+                }
+            });
         });
 
     ui.separator();
