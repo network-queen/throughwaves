@@ -1081,6 +1081,13 @@ fn do_download_cloud_project(app: &mut DawApp) {
             }
 
             app.project.name = title.clone();
+            // Send all audio buffers to the engine so they can be played
+            for (&buf_id, samples) in &app.audio_buffers {
+                app.send_command(jamhub_engine::EngineCommand::LoadAudioBuffer {
+                    id: buf_id,
+                    samples: samples.clone(),
+                });
+            }
             app.sync_project();
             // Connect to the remote
             app.platform.remote_project_id = Some(project_id.clone());
