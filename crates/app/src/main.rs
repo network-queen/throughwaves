@@ -106,14 +106,27 @@ fn setup_theme(ctx: &egui::Context) {
     visuals.selection.bg_fill = selection.gamma_multiply(0.22);
     visuals.selection.stroke = egui::Stroke::new(1.5, selection);
 
+    // Windows — glass-like with warm glow, matching the web platform
+    visuals.window_fill = egui::Color32::from_rgb(20, 21, 26);
     visuals.window_shadow = egui::epaint::Shadow {
-        offset: [0, 6],
-        blur: 24,
-        spread: 0,
-        color: egui::Color32::from_black_alpha(60),
+        offset: [0, 8],
+        blur: 32,
+        spread: 4,
+        color: egui::Color32::from_black_alpha(80),
     };
-    visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 39, 48));
-    visuals.window_corner_radius = egui::CornerRadius::same(10);
+    visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 46, 56));
+    visuals.window_corner_radius = egui::CornerRadius::same(12);
+
+    // Popup menus
+    visuals.popup_shadow = egui::epaint::Shadow {
+        offset: [0, 4],
+        blur: 16,
+        spread: 2,
+        color: egui::Color32::from_black_alpha(70),
+    };
+
+    // Separator
+    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(0.5, egui::Color32::from_rgb(38, 40, 50));
 
     ctx.set_visuals(visuals);
 
@@ -121,7 +134,7 @@ fn setup_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
     style.spacing.item_spacing = egui::vec2(7.0, 6.0);
     style.spacing.button_padding = egui::vec2(12.0, 6.0);
-    style.spacing.window_margin = egui::Margin::same(14);
+    style.spacing.window_margin = egui::Margin::same(16);
     style.spacing.scroll = egui::style::ScrollStyle {
         bar_width: 3.0,
         handle_min_length: 24.0,
