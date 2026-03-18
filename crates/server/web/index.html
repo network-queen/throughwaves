@@ -2227,18 +2227,6 @@ async function renderCloudProject(el, projectId) {
         </div>
         ` : ''}
 
-        <!-- Import to DAW instructions -->
-        <div class="card" style="padding:1rem;">
-          <h4 style="margin-bottom:0.5rem;">Import to DAW</h4>
-          <p style="color:var(--text-secondary); font-size:0.9rem;">
-            In ThroughWaves DAW, open Platform &rarr; Cloud Project &rarr; paste this ID:
-          </p>
-          <code style="
-            display:block; background:var(--bg-base); padding:0.5rem 0.8rem;
-            border-radius:6px; margin-top:0.5rem; color:var(--green); font-size:0.9rem;
-            user-select:all;
-          ">${project.id}</code>
-        </div>
       ` : `
         <div class="card" style="padding:1rem;">
           <p style="color:var(--text-muted); font-size:0.9rem;">
