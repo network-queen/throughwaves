@@ -879,9 +879,17 @@ pub type ClipBufferId = Uuid;
 /// Predefined palette of 12 evenly-spaced hues for new tracks.
 /// Each call cycles through the palette using a global counter so
 /// consecutive tracks always get distinct, predictable colors.
+/// Reset the track color palette index so the next tracks get consistent colors.
+pub fn reset_track_color_index() {
+    use std::sync::atomic::Ordering;
+    PALETTE_INDEX.store(0, Ordering::Relaxed);
+}
+
+use std::sync::atomic::AtomicUsize;
+static PALETTE_INDEX: AtomicUsize = AtomicUsize::new(0);
+
 fn random_track_color() -> [u8; 3] {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static PALETTE_INDEX: AtomicUsize = AtomicUsize::new(0);
+    use std::sync::atomic::Ordering;
 
     const PALETTE_HUES: [f32; 12] = [
         0.0, 30.0, 60.0, 90.0, 120.0, 150.0,

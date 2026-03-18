@@ -1017,6 +1017,8 @@ fn do_download_cloud_project(app: &mut DawApp) {
             // Clear existing tracks before importing (Pull replaces, not appends)
             app.project.tracks.clear();
             app.audio_buffers.clear();
+            // Reset color palette so tracks get the same colors every pull
+            jamhub_model::reset_track_color_index();
 
             // Find all stem audio_urls and names
             let mut stem_count = 0;
