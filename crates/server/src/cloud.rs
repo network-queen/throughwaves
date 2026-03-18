@@ -401,6 +401,58 @@ async fn download_cloud_project(
     })))
 }
 
+/// Download a specific version's stems by version ID (owner only)
+async fn download_cloud_version(
+    State(pool): State<PgPool>,
+    auth: AuthUser,
+    Path(version_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    // Find the version
+    let version = sqlx::query_as::<_, CloudProjectVersion>(
+        "SELECT * FROM cloud_project_versions WHERE id = $1"
+    )
+    .bind(version_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("DB: {e}") })))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Version not found".into() })))?;
+
+    // Check ownership via the project
+    let project = sqlx::query_as::<_, CloudProject>(
+        "SELECT * FROM cloud_projects WHERE id = $1"
+    )
+    .bind(version.cloud_project_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("DB: {e}") })))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Project not found".into() })))?;
+
+    if project.user_id != auth.0 {
+        return Err((StatusCode::FORBIDDEN, Json(ErrorResponse { error: "Owner only".into() })));
+    }
+
+    // Resolve stem_refs to actual stem records
+    let stem_refs: Vec<serde_json::Value> = serde_json::from_value(version.stem_refs.clone()).unwrap_or_default();
+    let mut stems = Vec::new();
+    for sr in &stem_refs {
+        if let Some(stem_id_str) = sr.get("stem_id").and_then(|v| v.as_str()) {
+            if let Ok(stem_id) = stem_id_str.parse::<Uuid>() {
+                if let Ok(Some(stem)) = sqlx::query_as::<_, CloudProjectStem>(
+                    "SELECT * FROM cloud_project_stems WHERE id = $1"
+                ).bind(stem_id).fetch_optional(&pool).await {
+                    stems.push(stem);
+                }
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "project": { "id": project.id, "title": project.title, "mixdown_url": version.mixdown_url },
+        "version": version.version_number,
+        "stems": stems,
+    })))
+}
+
 /// Delete a cloud project (owner only)
 async fn delete_cloud_project(
     State(pool): State<PgPool>,
@@ -487,6 +539,7 @@ pub fn router() -> Router<PgPool> {
         .route("/cloud", post(upload_cloud_project).get(list_cloud_projects))
         .route("/cloud/{id}", get(get_cloud_project).delete(delete_cloud_project).put(update_cloud_project))
         .route("/cloud/{id}/download", post(download_cloud_project))
+        .route("/cloud/version/{id}", post(download_cloud_version))
         // Allow up to 500MB for project uploads (mixdown + all stems)
         .layer(DefaultBodyLimit::max(500 * 1024 * 1024))
 }

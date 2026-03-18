@@ -2178,23 +2178,33 @@ async function renderCloudProject(el, projectId) {
         </div>
 
         <!-- Version History -->
-        ${versions.length > 1 ? `
+        ${versions.length > 0 ? `
         <div class="card" style="padding:1rem; margin-bottom:1rem;">
           <h4 style="margin-bottom:0.8rem;">Version History (${versions.length} versions)</h4>
-          <div style="display:flex; flex-direction:column; gap:0.4rem;">
+          <div style="display:flex; flex-direction:column; gap:0.5rem;">
             ${versions.map(v => {
               const date = new Date(v.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-              const stemInfo = JSON.parse(typeof v.stem_refs === 'string' ? v.stem_refs : JSON.stringify(v.stem_refs));
-              const newCount = stemInfo.filter(s => s.is_new).length;
-              const reusedCount = stemInfo.filter(s => !s.is_new).length;
-              return '<div style="display:flex; align-items:center; gap:0.8rem; padding:0.5rem; border-radius:6px; background:var(--bg-base);">' +
-                '<span style="font-weight:600; color:var(--accent); min-width:24px;">v' + v.version_number + '</span>' +
-                '<span style="flex:1; font-size:0.9rem;">' + esc(v.message || '') + '</span>' +
-                '<span style="color:var(--text-muted); font-size:0.8rem;">' +
-                  (newCount > 0 ? newCount + ' new' : '') +
-                  (reusedCount > 0 ? (newCount > 0 ? ', ' : '') + reusedCount + ' reused' : '') +
-                '</span>' +
-                '<span style="color:var(--text-muted); font-size:0.8rem;">' + date + '</span>' +
+              const stemInfo = (() => { try { return typeof v.stem_refs === 'string' ? JSON.parse(v.stem_refs) : v.stem_refs; } catch(e) { return []; } })();
+              const newCount = Array.isArray(stemInfo) ? stemInfo.filter(s => s.is_new).length : 0;
+              const reusedCount = Array.isArray(stemInfo) ? stemInfo.filter(s => !s.is_new).length : 0;
+              const isLatest = v.version_number === versions[0].version_number;
+              return '<div style="border-radius:8px; background:var(--bg-base); overflow:hidden; border:1px solid ' + (isLatest ? 'var(--accent)' : 'var(--border)') + ';">' +
+                '<div style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 0.8rem;">' +
+                  '<span style="font-weight:700; color:' + (isLatest ? 'var(--accent)' : 'var(--text-secondary)') + '; min-width:28px; font-size:0.95rem;">v' + v.version_number + '</span>' +
+                  '<span style="flex:1; font-size:0.9rem; color:var(--text-primary);">' + esc(v.message || 'Version ' + v.version_number) + (isLatest ? ' <span style=\\"color:var(--accent); font-size:0.75rem;\\">(latest)</span>' : '') + '</span>' +
+                  '<span style="color:var(--text-muted); font-size:0.78rem;">' +
+                    (newCount > 0 ? newCount + ' new' : '') +
+                    (reusedCount > 0 ? (newCount > 0 ? ', ' : '') + reusedCount + ' reused' : '') +
+                  '</span>' +
+                  '<span style="color:var(--text-muted); font-size:0.78rem;">' + date + '</span>' +
+                '</div>' +
+                '<div style="padding:0 0.8rem 0.6rem; display:flex; align-items:center; gap:0.5rem;">' +
+                  '<audio controls style="height:28px; flex:1;" src="' + v.mixdown_url + '" preload="metadata"></audio>' +
+                '</div>' +
+                '<div style="padding:0 0.8rem 0.6rem; display:flex; gap:0.4rem;">' +
+                  '<code style="background:var(--bg-panel); padding:2px 6px; border-radius:4px; font-size:0.75rem; color:var(--green); user-select:all;" title="Use this ID in DAW to download this version">' + v.id + '</code>' +
+                  '<span style="color:var(--text-muted); font-size:0.72rem; align-self:center;">DAW pull ID</span>' +
+                '</div>' +
               '</div>';
             }).join('')}
           </div>

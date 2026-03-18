@@ -863,10 +863,13 @@ fn do_download_cloud_project(app: &mut DawApp) {
 
     app.platform.cloud_download_status = Some("Downloading project...".into());
 
-    // First fetch project details (title, BPM, genre)
+    // Try as a project ID first, then as a version ID
+    let project_path = format!("/api/cloud/{}/download", project_id);
+    let version_path = format!("/api/cloud/version/{}", project_id);
+
+    // First try project details for BPM
     let info_path = format!("/api/cloud/{}", project_id);
     if let Ok(info_resp) = platform_request("GET", &app.platform.server_url, &info_path, Some(&jwt), None) {
-        // Extract BPM if available
         if let Some(bpm_str) = extract_json_string(&info_resp, "bpm") {
             if let Ok(bpm) = bpm_str.parse::<f64>() {
                 if bpm > 0.0 { app.project.tempo.bpm = bpm; }
@@ -874,8 +877,10 @@ fn do_download_cloud_project(app: &mut DawApp) {
         }
     }
 
-    let path = format!("/api/cloud/{}/download", project_id);
-    match platform_request("POST", &app.platform.server_url, &path, Some(&jwt), None) {
+    // Try project download first, fall back to version download
+    let resp_result = platform_request("POST", &app.platform.server_url, &project_path, Some(&jwt), None)
+        .or_else(|_| platform_request("POST", &app.platform.server_url, &version_path, Some(&jwt), None));
+    match resp_result {
         Ok(resp) => {
             // Parse stems from response
             let title = extract_json_string(&resp, "title").unwrap_or("Cloud Project".into());
