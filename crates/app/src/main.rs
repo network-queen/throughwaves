@@ -4605,6 +4605,10 @@ impl eframe::App for DawApp {
             match action.as_str() {
                 "toggle_play" => {
                     if self.transport_state() == TransportState::Playing {
+                        // Stop recording if active
+                        if self.is_recording {
+                            self.toggle_recording();
+                        }
                         self.send_command(EngineCommand::Stop);
                         // Return playhead to where playback started
                         self.send_command(EngineCommand::SetPosition(self.play_start_position));
