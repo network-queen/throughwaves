@@ -211,6 +211,16 @@ CREATE TABLE IF NOT EXISTS band_members (
 CREATE INDEX idx_band_members_band ON band_members(band_id);
 CREATE INDEX idx_band_members_user ON band_members(user_id);
 
+-- Band likes
+CREATE TABLE IF NOT EXISTS band_likes (
+    user_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    band_id  UUID NOT NULL REFERENCES bands(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, band_id)
+);
+
+-- Band like count
+ALTER TABLE bands ADD COLUMN IF NOT EXISTS likes BIGINT DEFAULT 0;
+
 -- Band projects (link cloud projects to bands)
 ALTER TABLE cloud_projects ADD COLUMN IF NOT EXISTS band_id UUID REFERENCES bands(id) ON DELETE SET NULL;
 

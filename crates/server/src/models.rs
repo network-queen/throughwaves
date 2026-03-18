@@ -300,6 +300,7 @@ pub struct Band {
     pub created_by: Uuid,
     pub is_public: Option<bool>,
     pub created_at: DateTime<Utc>,
+    pub likes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

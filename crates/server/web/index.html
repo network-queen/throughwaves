@@ -2444,6 +2444,7 @@ async function renderBands(el) {
             '</div>' +
             '<div class="track-card-bottom" style="padding:0.5rem 1rem;">' +
               '<span style="color:var(--text-muted);font-size:0.85rem;">' + esc(b.description || '').substring(0,60) + '</span>' +
+              '<span style="margin-left:auto;color:var(--text-muted);font-size:0.85rem;">\u2661 ' + (b.likes || 0) + '</span>' +
             '</div>' +
           '</div>';
         }).join('')}
@@ -2550,10 +2551,16 @@ async function renderBand(el, bandId) {
           ${band.location ? '<span>' + esc(band.location) + '</span>' : ''}
           <span>${members.length} members</span>
           <span>${projects.length} projects</span>
+          <span>${band.likes || 0} likes</span>
           ${band.website ? '<a href="' + esc(band.website) + '" target="_blank">Website</a>' : ''}
         </div>
       </div>
-      ${isAdmin ? '<div style="display:flex;gap:0.5rem;align-self:start;"><button class="btn btn-secondary btn-sm" onclick="editBand(\'' + band.id + '\')">Edit</button><button class="btn btn-sm" style="background:var(--bg-elevated);" onclick="addBandMember(\'' + band.id + '\')">+ Member</button></div>' : ''}
+      <div style="margin-left:auto;align-self:start;display:flex;gap:0.5rem;">
+        ${state.user ? `<button class="like-btn" id="bandLikeBtn" onclick="toggleBandLike('${band.id}')" style="padding:0.4rem 1rem;border-radius:8px;background:var(--bg-elevated);border:1px solid var(--border);cursor:pointer;font-size:0.9rem;">
+          <span class="like-heart">\u2661</span> <span id="bandLikeCount">${band.likes || 0}</span>
+        </button>` : ''}
+        ${isAdmin ? '<button class="btn btn-secondary btn-sm" onclick="editBand(\'' + band.id + '\')">Edit</button><button class="btn btn-sm" style="background:var(--bg-elevated);" onclick="addBandMember(\'' + band.id + '\')">+ Member</button>' : ''}
+      </div>
     </div>
 
     <!-- Members -->
@@ -2695,6 +2702,35 @@ function addBandMember(bandId) {
       else { const e = await resp.json().catch(() => ({})); showToast(e.error || 'Failed', true); }
     },
   });
+}
+
+async function toggleBandLike(bandId) {
+  if (!state.token || state.token === 'demo_token') { openAuthModal(); return; }
+  try {
+    const resp = await fetch('/api/bands/' + bandId + '/like', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + state.token },
+    });
+    if (resp.ok) {
+      const json = await resp.json();
+      const btn = document.getElementById('bandLikeBtn');
+      const count = document.getElementById('bandLikeCount');
+      if (btn && count) {
+        const cur = parseInt(count.textContent) || 0;
+        if (json.liked) {
+          count.textContent = cur + 1;
+          btn.querySelector('.like-heart').textContent = '\u2665';
+          btn.style.borderColor = 'var(--red)';
+          btn.style.color = 'var(--red)';
+        } else {
+          count.textContent = Math.max(0, cur - 1);
+          btn.querySelector('.like-heart').textContent = '\u2661';
+          btn.style.borderColor = 'var(--border)';
+          btn.style.color = 'var(--text-primary)';
+        }
+      }
+    }
+  } catch(e) {}
 }
 
 function removeBandMember(bandId, userId, username) {

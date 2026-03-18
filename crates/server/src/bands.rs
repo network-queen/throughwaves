@@ -113,6 +113,7 @@ async fn get_band(
         "members": members_with_info,
         "projects": projects,
         "tracks": tracks,
+        "likes": band.likes.unwrap_or(0),
     })))
 }
 
@@ -261,12 +262,42 @@ async fn delete_band(
     Ok(Json(serde_json::json!({ "status": "deleted" })))
 }
 
+// ── Like/Unlike Band ──
+
+async fn like_band(
+    State(pool): State<PgPool>,
+    auth: AuthUser,
+    Path(band_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    // Check if already liked
+    let existing: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT user_id FROM band_likes WHERE user_id = $1 AND band_id = $2"
+    ).bind(auth.0).bind(band_id).fetch_optional(&pool).await.ok().flatten();
+
+    if existing.is_some() {
+        // Unlike
+        let _ = sqlx::query("DELETE FROM band_likes WHERE user_id = $1 AND band_id = $2")
+            .bind(auth.0).bind(band_id).execute(&pool).await;
+        let _ = sqlx::query("UPDATE bands SET likes = GREATEST(likes - 1, 0) WHERE id = $1")
+            .bind(band_id).execute(&pool).await;
+        Ok(Json(serde_json::json!({ "liked": false })))
+    } else {
+        // Like
+        let _ = sqlx::query("INSERT INTO band_likes (user_id, band_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+            .bind(auth.0).bind(band_id).execute(&pool).await;
+        let _ = sqlx::query("UPDATE bands SET likes = likes + 1 WHERE id = $1")
+            .bind(band_id).execute(&pool).await;
+        Ok(Json(serde_json::json!({ "liked": true })))
+    }
+}
+
 pub fn router() -> Router<PgPool> {
     Router::new()
         .route("/bands", post(create_band).get(list_bands))
         .route("/bands/{id}", get(get_band).put(update_band).delete(delete_band))
         .route("/bands/{id}/images", post(upload_band_image))
         .route("/bands/{id}/members", post(add_member))
+        .route("/bands/{id}/like", post(like_band))
         .route("/bands/{band_id}/members/{user_id}", delete(remove_member))
         .layer(DefaultBodyLimit::max(20 * 1024 * 1024))
 }
