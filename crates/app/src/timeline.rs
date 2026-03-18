@@ -828,11 +828,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                     }
                                 }
 
-                                // Volume & Pan rotary knobs — right-aligned, compact
+                                // Volume & Pan rotary knobs — right-aligned
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    ui.spacing_mut().item_spacing.x = 1.0;
-                                    ui.add_space(8.0); // margin from right edge
-                                    let knob_r = 7.0;
+                                    ui.spacing_mut().item_spacing.x = 3.0;
+                                    ui.add_space(14.0); // generous margin from right edge
+                                    let knob_r = 9.0;
                                     let knob_size = egui::vec2(knob_r * 2.0 + 2.0, knob_r * 2.0 + 2.0);
 
                                     // Pan knob
