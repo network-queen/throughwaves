@@ -1160,9 +1160,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         app.sync_project();
                     }
                     TrackAction::ToggleArm(i) => {
-                        app.push_undo("Toggle arm");
-                        app.project.tracks[i].armed = !app.project.tracks[i].armed;
-                        app.sync_project();
+                        if app.project.tracks[i].kind == TrackKind::Audio {
+                            app.push_undo("Toggle arm");
+                            app.project.tracks[i].armed = !app.project.tracks[i].armed;
+                            app.sync_project();
+                        }
                     }
                     TrackAction::SetVolume(i, v) => {
                         app.push_undo("Change volume");

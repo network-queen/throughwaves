@@ -1903,10 +1903,12 @@ impl DawApp {
                 return;
             }
 
-            // Arm the selected track if no tracks are armed yet
+            // Arm the selected track if no tracks are armed yet (audio only)
             let track_idx = self.selected_track.unwrap_or(0);
             let any_armed = self.project.tracks.iter().any(|t| t.armed);
-            if !any_armed && track_idx < self.project.tracks.len() {
+            if !any_armed && track_idx < self.project.tracks.len()
+                && self.project.tracks[track_idx].kind == jamhub_model::TrackKind::Audio
+            {
                 self.project.tracks[track_idx].armed = true;
             }
 
