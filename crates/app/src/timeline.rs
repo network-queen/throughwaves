@@ -205,6 +205,9 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
     egui::SidePanel::left("track_headers")
         .exact_width(HEADER_WIDTH)
         .resizable(false)
+        .frame(egui::Frame::default()
+            .fill(egui::Color32::from_rgb(20, 21, 26))
+            .inner_margin(egui::Margin::ZERO))
         .show_inside(ui, |ui| {
             if app.show_automation {
                 // Automation parameter selector dropdown
@@ -995,11 +998,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         });
                     });
 
-                    // Thin separator line at bottom of track header (painted, not allocated)
+                    // Thin dark separator line at bottom (barely visible, no space)
                     ui.painter().line_segment(
-                        [egui::pos2(header_rect.left(), header_rect.bottom() - 0.5),
-                         egui::pos2(header_rect.right(), header_rect.bottom() - 0.5)],
-                        egui::Stroke::new(1.0, egui::Color32::from_rgb(42, 43, 50)),
+                        [egui::pos2(header_rect.left(), header_rect.bottom()),
+                         egui::pos2(header_rect.right(), header_rect.bottom())],
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(30, 31, 38)),
                     );
                 });
             }
