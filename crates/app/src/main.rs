@@ -5426,7 +5426,8 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Effects...").clicked() {
+                    let has_sel = self.selected_track.is_some() && !self.project.tracks.is_empty();
+                    if ui.add_enabled(has_sel, egui::Button::new("Effects...")).clicked() {
                         self.show_effects = true;
                         ui.close_menu();
                     }
