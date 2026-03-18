@@ -52,14 +52,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
             });
             ui.add_space(4.0);
 
-            // Signal flow: IN label
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("IN").size(8.0).color(egui::Color32::from_rgb(80, 200, 140)));
-                let (line_rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width() - 16.0, 1.0), egui::Sense::hover());
-                ui.painter().rect_filled(line_rect, 0.0, egui::Color32::from_rgb(45, 50, 58));
-            });
-            ui.add_space(2.0);
+            ui.add_space(4.0);
 
             let mut needs_sync = false;
             let mut remove_idx: Option<usize> = None;
@@ -120,13 +113,9 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                         egui::Stroke::new(0.5, egui::Color32::from_rgb(44, 46, 58))
                     };
 
-                    // Signal flow connector line before each slot
+                    // Small gap between slots
                     if i > 0 {
-                        ui.horizontal(|ui| {
-                            ui.add_space(18.0);
-                            let (line_rect, _) = ui.allocate_exact_size(egui::vec2(2.0, 6.0), egui::Sense::hover());
-                            ui.painter().rect_filled(line_rect, 0.0, egui::Color32::from_rgb(50, 55, 65));
-                        });
+                        ui.add_space(2.0);
                     }
 
                     let slot_response = egui::Frame::default()
@@ -142,27 +131,39 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                                 ui.label(egui::RichText::new(format!("{}.", i + 1)).size(10.0)
                                     .color(egui::Color32::from_rgb(90, 90, 105)).monospace());
 
-                                // Move up/down
-                                let arrow_active = egui::Color32::from_rgb(150, 150, 165);
-                                let arrow_dim = egui::Color32::from_rgb(50, 50, 58);
-                                if i > 0 {
-                                    if ui.add(egui::Button::new(egui::RichText::new("\u{25B2}").size(7.0).color(arrow_active))
-                                        .frame(false).min_size(egui::vec2(12.0, 16.0))).on_hover_text("Move up").clicked() {
-                                        move_up = Some(i);
+                                // Move up/down — visible buttons with backgrounds
+                                let btn_size = egui::vec2(16.0, 14.0);
+                                let arrow_fg = egui::Color32::from_rgb(200, 200, 215);
+                                let arrow_dim_fg = egui::Color32::from_rgb(55, 55, 62);
+                                let arrow_bg = egui::Color32::from_rgb(40, 42, 52);
+                                let arrow_bg_dim = egui::Color32::from_rgb(28, 28, 34);
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 1.0;
+                                    if i > 0 {
+                                        if ui.add_sized(btn_size, egui::Button::new(
+                                            egui::RichText::new("\u{25B2}").size(8.0).color(arrow_fg))
+                                            .fill(arrow_bg).corner_radius(3.0)
+                                        ).on_hover_text("Move up in chain").clicked() {
+                                            move_up = Some(i);
+                                        }
+                                    } else {
+                                        ui.add_sized(btn_size, egui::Button::new(
+                                            egui::RichText::new("\u{25B2}").size(8.0).color(arrow_dim_fg))
+                                            .fill(arrow_bg_dim).corner_radius(3.0));
                                     }
-                                } else {
-                                    ui.add(egui::Button::new(egui::RichText::new("\u{25B2}").size(7.0).color(arrow_dim))
-                                        .frame(false).min_size(egui::vec2(12.0, 16.0)));
-                                }
-                                if i + 1 < effects_len {
-                                    if ui.add(egui::Button::new(egui::RichText::new("\u{25BC}").size(7.0).color(arrow_active))
-                                        .frame(false).min_size(egui::vec2(12.0, 16.0))).on_hover_text("Move down").clicked() {
-                                        move_down = Some(i);
+                                    if i + 1 < effects_len {
+                                        if ui.add_sized(btn_size, egui::Button::new(
+                                            egui::RichText::new("\u{25BC}").size(8.0).color(arrow_fg))
+                                            .fill(arrow_bg).corner_radius(3.0)
+                                        ).on_hover_text("Move down in chain").clicked() {
+                                            move_down = Some(i);
+                                        }
+                                    } else {
+                                        ui.add_sized(btn_size, egui::Button::new(
+                                            egui::RichText::new("\u{25BC}").size(8.0).color(arrow_dim_fg))
+                                            .fill(arrow_bg_dim).corner_radius(3.0));
                                     }
-                                } else {
-                                    ui.add(egui::Button::new(egui::RichText::new("\u{25BC}").size(7.0).color(arrow_dim))
-                                        .frame(false).min_size(egui::vec2(12.0, 16.0)));
-                                }
+                                });
 
                                 // Bypass toggle — power icon style
                                 let (pwr_rect, pwr_resp) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
@@ -274,21 +275,7 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                 needs_sync = true;
             }
 
-            // Signal flow: OUT label
             ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                if effects_len > 0 {
-                    let (line_rect, _) = ui.allocate_exact_size(egui::vec2(2.0, 6.0), egui::Sense::hover());
-                    ui.painter().rect_filled(line_rect, 0.0, egui::Color32::from_rgb(50, 55, 65));
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("OUT").size(8.0).color(egui::Color32::from_rgb(240, 180, 60)));
-                let (line_rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width() - 16.0, 1.0), egui::Sense::hover());
-                ui.painter().rect_filled(line_rect, 0.0, egui::Color32::from_rgb(45, 50, 58));
-            });
 
             if effects_len == 0 {
                 ui.add_space(16.0);
