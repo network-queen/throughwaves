@@ -129,18 +129,18 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
                         });
                     }
 
-                    egui::Frame::default()
-                        .inner_margin(egui::Margin::symmetric(6, 5))
+                    let slot_response = egui::Frame::default()
+                        .inner_margin(egui::Margin::symmetric(8, 6))
                         .fill(row_bg)
-                        .corner_radius(6.0)
+                        .corner_radius(8.0)
                         .stroke(slot_stroke)
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 3.0;
 
-                                // Slot number
-                                ui.label(egui::RichText::new(format!("{}.", i + 1)).size(9.0)
-                                    .color(egui::Color32::from_rgb(75, 75, 85)));
+                                // Slot number — monospace, slightly brighter
+                                ui.label(egui::RichText::new(format!("{}.", i + 1)).size(10.0)
+                                    .color(egui::Color32::from_rgb(90, 90, 105)).monospace());
 
                                 // Move up/down
                                 let arrow_active = egui::Color32::from_rgb(150, 150, 165);
@@ -223,23 +223,38 @@ pub fn show(app: &mut DawApp, ctx: &egui::Context) {
 
                                 // Right side: mix indicator + remove
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    // Remove button
-                                    if ui.add(egui::Button::new(
-                                        egui::RichText::new("\u{2715}").size(9.0).color(egui::Color32::from_rgb(160, 70, 70)))
-                                        .frame(false)).on_hover_text("Remove effect").clicked() {
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+
+                                    // Remove button — visible red circle with X
+                                    let rm_btn = ui.add_sized(egui::vec2(18.0, 18.0), egui::Button::new(
+                                        egui::RichText::new("\u{2715}").size(9.0).color(egui::Color32::from_rgb(200, 200, 210)))
+                                        .fill(egui::Color32::from_rgb(120, 40, 40))
+                                        .corner_radius(9.0));
+                                    if rm_btn.on_hover_text("Remove effect from chain").clicked() {
                                         remove_idx = Some(i);
                                     }
 
                                     // Mix percentage if available
                                     if let Some(mix) = mix_val {
-                                        ui.label(egui::RichText::new(format!("{:.0}%", mix * 100.0))
-                                            .size(9.0).color(egui::Color32::from_rgb(90, 90, 105)));
+                                        let mix_pct = (mix * 100.0) as u8;
+                                        let mix_color = if mix_pct >= 90 {
+                                            egui::Color32::from_rgb(120, 200, 140)
+                                        } else if mix_pct >= 50 {
+                                            egui::Color32::from_rgb(180, 180, 100)
+                                        } else {
+                                            egui::Color32::from_rgb(100, 100, 115)
+                                        };
+                                        ui.label(egui::RichText::new(format!("{mix_pct}%")).size(9.0).color(mix_color));
                                     }
 
-                                    // VST badge
+                                    // VST badge — pill style
                                     if is_vst {
-                                        ui.label(egui::RichText::new("VST3").size(7.0)
-                                            .color(egui::Color32::from_rgb(100, 180, 100)));
+                                        ui.add_sized(egui::vec2(28.0, 14.0), egui::Button::new(
+                                            egui::RichText::new("VST3").size(7.0).color(egui::Color32::from_rgb(80, 180, 100)))
+                                            .fill(egui::Color32::from_rgb(25, 45, 30))
+                                            .corner_radius(7.0)
+                                            .sense(egui::Sense::hover()),
+                                        );
                                     }
                                 });
                             });
