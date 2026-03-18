@@ -4579,8 +4579,6 @@ impl eframe::App for DawApp {
             else if i.modifiers.command && i.key_pressed(egui::Key::I) { actions.push("import".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::P) { actions.push("audio_pool".into()); }
             else if i.modifiers.command && i.key_pressed(egui::Key::P) { actions.push("piano_roll".into()); }
-            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::B) { actions.push("bounce_selection".into()); }
-            else if i.modifiers.command && i.key_pressed(egui::Key::B) { actions.push("bounce".into()); }
             if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::C) { actions.push("version_quick_commit".into()); }
             else if i.modifiers.command && i.key_pressed(egui::Key::C) { actions.push("copy".into()); }
             else if i.modifiers.command && i.key_pressed(egui::Key::V) { actions.push("paste".into()); }
@@ -5441,30 +5439,6 @@ impl eframe::App for DawApp {
                     if ui.button("MIDI Input...").clicked() {
                         self.midi_panel.show = true;
                         ui.close_menu();
-                    }
-                    if ui.button("Bounce Track     Cmd+B").clicked() {
-                        self.bounce_selected_track();
-                        ui.close_menu();
-                    }
-                    if ui.button("Bounce Selection Range").clicked() {
-                        self.bounce_selection_range();
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if let Some(ti) = self.selected_track {
-                        if ti < self.project.tracks.len() {
-                            if self.project.tracks[ti].frozen {
-                                if ui.button("Unfreeze Track").clicked() {
-                                    self.unfreeze_selected_track();
-                                    ui.close_menu();
-                                }
-                            } else {
-                                if ui.button("Freeze Track").clicked() {
-                                    self.freeze_selected_track();
-                                    ui.close_menu();
-                                }
-                            }
-                        }
                     }
                 });
                 ui.menu_button("Session", |ui| {
