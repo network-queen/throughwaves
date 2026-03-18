@@ -5464,21 +5464,19 @@ impl eframe::App for DawApp {
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Share", |ui| {
+                ui.menu_button("Remote", |ui| {
                     let label = if self.platform.logged_in {
-                        "Platform (connected)"
+                        if self.platform.remote_project_id.is_some() {
+                            "Platform (connected)"
+                        } else {
+                            "Platform (logged in)"
+                        }
                     } else {
                         "Platform"
                     };
                     if ui.button(format!("{label}    Cmd+Shift+U")).clicked() {
                         self.platform.show_panel = !self.platform.show_panel;
                         ui.close_menu();
-                    }
-                    if self.platform.logged_in {
-                        if ui.button("Upload Current Mixdown").clicked() {
-                            self.platform.show_panel = true;
-                            ui.close_menu();
-                        }
                     }
                 });
                 ui.menu_button("View", |ui| {
