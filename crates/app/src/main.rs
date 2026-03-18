@@ -5535,11 +5535,12 @@ impl eframe::App for DawApp {
                         self.show_piano_roll = !self.show_piano_roll;
                         ui.close_menu();
                     }
-                    if ui.button("Effects          Cmd+E").clicked() {
+                    let has_track = self.selected_track.is_some() && !self.project.tracks.is_empty();
+                    if ui.add_enabled(has_track, egui::Button::new("Effects          Cmd+E")).clicked() {
                         self.show_effects = !self.show_effects;
                         ui.close_menu();
                     }
-                    if ui.button("Spectrum Analyzer    Q").clicked() {
+                    if ui.add_enabled(has_track, egui::Button::new("Spectrum Analyzer    Q")).clicked() {
                         self.spectrum_analyzer.show = !self.spectrum_analyzer.show;
                         ui.close_menu();
                     }
