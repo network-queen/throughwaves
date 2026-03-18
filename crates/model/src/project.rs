@@ -192,6 +192,20 @@ impl Project {
         });
         id
     }
+
+    /// Get child track indices for a folder track
+    pub fn folder_children(&self, folder_id: Uuid) -> Vec<usize> {
+        self.tracks.iter().enumerate()
+            .filter(|(_, t)| t.group_id == Some(folder_id))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Get the folder track (if any) that contains the given track
+    pub fn parent_folder(&self, track_idx: usize) -> Option<usize> {
+        let group_id = self.tracks.get(track_idx)?.group_id?;
+        self.tracks.iter().position(|t| t.id == group_id && t.kind == TrackKind::Folder)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -658,8 +672,10 @@ pub enum TrackKind {
     Audio,
     Midi,
     /// Legacy Bus/Aux variant — kept for backward compatibility with saved projects.
-    /// Treated identically to Audio everywhere. Any track can receive sends.
     Bus,
+    /// Folder track — contains child tracks (via group_id), propagates settings.
+    /// Has volume, pan, mute, solo, effects — all applied to children.
+    Folder,
 }
 
 /// Fade curve shape for crossfades.

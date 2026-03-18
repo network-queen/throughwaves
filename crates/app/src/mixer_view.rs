@@ -129,6 +129,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                         jamhub_model::TrackKind::Audio
                                         | jamhub_model::TrackKind::Bus => "AUD",
                                         jamhub_model::TrackKind::Midi => "MID",
+                                        jamhub_model::TrackKind::Folder => "FLD",
                                     };
                                     ui.label(
                                         egui::RichText::new(kind_label)

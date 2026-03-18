@@ -109,7 +109,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 // Track name
                 let name = app.project.tracks[ti].name.clone();
                 let kind_label = match app.project.tracks[ti].kind {
-                    TrackKind::Audio | TrackKind::Bus => "AUD",
+                    TrackKind::Audio | TrackKind::Bus | TrackKind::Folder => "AUD",
                     TrackKind::Midi => "MID",
                 };
                 ui.painter().text(

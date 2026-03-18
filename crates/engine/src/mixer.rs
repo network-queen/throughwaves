@@ -280,6 +280,30 @@ impl Mixer {
 
         let any_solo = project.tracks.iter().any(|t| t.solo);
 
+        // Pre-compute folder-inherited mute status
+        // A track is effectively muted if it or any parent folder is muted
+        let folder_muted: Vec<bool> = project.tracks.iter().map(|t| {
+            if t.muted { return true; }
+            // Check parent folder
+            if let Some(gid) = t.group_id {
+                if let Some(folder) = project.tracks.iter().find(|f| f.id == gid && f.kind == jamhub_model::TrackKind::Folder) {
+                    if folder.muted { return true; }
+                }
+            }
+            false
+        }).collect();
+
+        // Pre-compute folder volume multipliers
+        let folder_volume: Vec<f32> = project.tracks.iter().map(|t| {
+            let mut vol = 1.0;
+            if let Some(gid) = t.group_id {
+                if let Some(folder) = project.tracks.iter().find(|f| f.id == gid && f.kind == jamhub_model::TrackKind::Folder) {
+                    vol *= folder.volume;
+                }
+            }
+            vol
+        }).collect();
+
         // Reuse pre-allocated send buffers — clear values but keep allocations
         for buf in self.send_bufs.values_mut() {
             buf.resize(block_size, 0.0);
@@ -298,8 +322,9 @@ impl Mixer {
         let block_end = position_samples + block_size as u64;
 
         // Collect audio tracks eligible for parallel rendering
-        let audio_tracks: Vec<&jamhub_model::Track> = project.tracks.iter().filter(|track| {
-            if track.muted { return false; }
+        let audio_tracks: Vec<&jamhub_model::Track> = project.tracks.iter().enumerate().filter(|(i, track)| {
+            if track.kind == jamhub_model::TrackKind::Folder { return false; } // folders don't render audio
+            if folder_muted.get(*i).copied().unwrap_or(false) { return false; }
             if any_solo && !track.solo { return false; }
             if track.kind == jamhub_model::TrackKind::Midi { return false; }
             track.clips.iter().any(|clip| {
@@ -307,7 +332,7 @@ impl Mixer {
                 let clip_end = clip.start_sample + clip.visual_duration_samples();
                 clip.start_sample < block_end && clip_end > position_samples
             })
-        }).collect();
+        }).map(|(_, t)| t).collect();
 
         // Parallel render: each audio track's clips are rendered independently
         // using rayon, then results are collected back. We call the free function
@@ -330,8 +355,8 @@ impl Mixer {
         }
 
         // MIDI tracks require &mut self (synths/VSTi), so render sequentially
-        for track in &project.tracks {
-            if track.muted { continue; }
+        for (ti, track) in project.tracks.iter().enumerate() {
+            if folder_muted.get(ti).copied().unwrap_or(false) { continue; }
             if any_solo && !track.solo { continue; }
             if track.kind != jamhub_model::TrackKind::Midi { continue; }
             let has_overlapping_clip = track.clips.iter().any(|clip| {

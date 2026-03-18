@@ -41,7 +41,7 @@ fn auto_fit_track_height(track: &jamhub_model::Track) -> f32 {
     let max_lane = lanes.iter().map(|&(_, l)| l).max().unwrap_or(0);
 
     let base = match track.kind {
-        jamhub_model::TrackKind::Audio | jamhub_model::TrackKind::Bus => 80.0,
+        jamhub_model::TrackKind::Audio | jamhub_model::TrackKind::Bus | jamhub_model::TrackKind::Folder => 80.0,
         jamhub_model::TrackKind::Midi => {
             // Fit MIDI notes: find pitch range, map to height with padding
             let mut min_note = 127u8;
@@ -385,7 +385,18 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                         // Click area for entire header — selection & context menu
                         let bg_response = ui.interact(header_rect, ui.id().with("tbg").with(i), egui::Sense::click());
-                        if bg_response.clicked() { track_actions.push(TrackAction::Select(i)); }
+                        if bg_response.clicked() {
+                            track_actions.push(TrackAction::Select(i));
+                            // Folder tracks: toggle collapse on click
+                            if track.kind == TrackKind::Folder {
+                                let tid = track.id;
+                                if app.collapsed_groups.contains(&tid) {
+                                    app.collapsed_groups.remove(&tid);
+                                } else {
+                                    app.collapsed_groups.insert(tid);
+                                }
+                            }
+                        }
 
                         // Track header tooltip — detailed info on hover
                         bg_response.clone().on_hover_ui(|ui| {
@@ -394,6 +405,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 TrackKind::Audio => "Audio",
                                 TrackKind::Midi => "MIDI",
                                 TrackKind::Bus => "Bus",
+                                TrackKind::Folder => "Folder",
                             };
                             ui.label(egui::RichText::new(&track.name).strong().size(13.0));
                             ui.label(format!("Type: {}", kind_str));
@@ -437,11 +449,27 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 }
                                 ui.separator();
                             }
-                            // Group/ungroup options
+                            // Folder assignment
                             if is_grouped {
-                                if ui.button("Remove from Group").clicked() { track_actions.push(TrackAction::RemoveFromGroup(i)); ui.close_menu(); }
-                            } else {
-                                if ui.button("Create Group").clicked() { track_actions.push(TrackAction::CreateGroupFromTrack(i)); ui.close_menu(); }
+                                if ui.button("Remove from Folder").clicked() { track_actions.push(TrackAction::RemoveFromGroup(i)); ui.close_menu(); }
+                            }
+                            // Show available folders to move into
+                            if track.kind != TrackKind::Folder {
+                                let folders: Vec<(String, uuid::Uuid)> = app.project.tracks.iter()
+                                    .filter(|f| f.kind == TrackKind::Folder && f.id != track.id)
+                                    .map(|f| (f.name.clone(), f.id))
+                                    .collect();
+                                if !folders.is_empty() {
+                                    let track_i = i;
+                                    ui.menu_button("Move to Folder", |ui| {
+                                        for (fname, fid) in &folders {
+                                            if ui.button(fname).clicked() {
+                                                track_actions.push(TrackAction::MoveToFolder(track_i, *fid));
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    });
+                                }
                             }
                             ui.separator();
                             // Freeze / Unfreeze
@@ -602,20 +630,24 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                                 ui.label(num_text);
 
                                 // Track type indicator — pill-shaped badge
+                                let is_folder_collapsed = track.kind == TrackKind::Folder && app.collapsed_groups.contains(&track.id);
                                 let type_label = match track.kind {
                                     TrackKind::Audio => "AUD",
                                     TrackKind::Midi => "MIDI",
                                     TrackKind::Bus => "BUS",
+                                    TrackKind::Folder => if is_folder_collapsed { "\u{25B6}" } else { "\u{25BC}" },
                                 };
                                 let type_color = match track.kind {
                                     TrackKind::Audio => egui::Color32::from_rgb(80, 200, 190),
                                     TrackKind::Midi => egui::Color32::from_rgb(160, 128, 224),
                                     TrackKind::Bus => egui::Color32::from_rgb(240, 192, 64),
+                                    TrackKind::Folder => egui::Color32::from_rgb(220, 180, 100),
                                 };
                                 let type_bg = match track.kind {
                                     TrackKind::Audio => egui::Color32::from_rgb(30, 50, 48),
                                     TrackKind::Midi => egui::Color32::from_rgb(38, 30, 52),
                                     TrackKind::Bus => egui::Color32::from_rgb(44, 38, 24),
+                                    TrackKind::Folder => egui::Color32::from_rgb(44, 38, 24),
                                 };
                                 let badge_text = egui::RichText::new(type_label)
                                     .size(8.0)
@@ -1207,6 +1239,11 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     TrackAction::OpenPianoRoll => {
                         app.show_piano_roll = true;
                     }
+                    TrackAction::MoveToFolder(track_idx, folder_id) => {
+                        app.push_undo("Move to folder");
+                        app.project.tracks[track_idx].group_id = Some(folder_id);
+                        app.sync_project();
+                    }
                 }
             }
 
@@ -1233,6 +1270,17 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                     let n = app.project.tracks.len() + 1;
                     app.project
                         .add_track(&format!("MIDI {n}"), TrackKind::Midi);
+                    app.selected_track = Some(app.project.tracks.len() - 1);
+                    app.sync_project();
+                }
+                if ui.add_sized(add_btn_size, egui::Button::new(
+                    egui::RichText::new("+ Folder").size(11.0).color(egui::Color32::from_rgb(220, 180, 100))
+                ).fill(egui::Color32::from_rgb(44, 38, 24)).corner_radius(12.0))
+                    .on_hover_text("Add a folder to organize tracks").clicked() {
+                    app.push_undo("Add folder");
+                    let n = app.project.tracks.len() + 1;
+                    let folder_id = app.project
+                        .add_track(&format!("Folder {n}"), TrackKind::Folder);
                     app.selected_track = Some(app.project.tracks.len() - 1);
                     app.sync_project();
                 }
@@ -4867,4 +4915,6 @@ enum TrackAction {
     OpenColorPalette(usize),
     /// Open the piano roll for a MIDI track
     OpenPianoRoll,
+    /// Move a track into a folder
+    MoveToFolder(usize, Uuid),
 }

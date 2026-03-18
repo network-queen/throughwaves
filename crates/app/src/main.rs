@@ -3070,6 +3070,7 @@ impl DawApp {
                                 TrackKind::Audio
                                 | TrackKind::Bus => "Audio",
                                 TrackKind::Midi => "MIDI",
+                                TrackKind::Folder => "Folder",
                             };
                             let fx_count = tpl.effects.len();
                             let c = egui::Color32::from_rgb(tpl.color[0], tpl.color[1], tpl.color[2]);
