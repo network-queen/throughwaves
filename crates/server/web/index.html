@@ -1033,6 +1033,21 @@ function generateWaveformData(count = 60) {
   return data;
 }
 
+// Estimate integrated LUFS from waveform peak data
+function estimateLUFS(track) {
+  const data = track.waveform_data;
+  if (!data || !Array.isArray(data) || data.length === 0) return '-∞';
+  // RMS of waveform peaks → approximate LUFS (simplified EBU R128)
+  const nonZero = data.filter(v => v > 0.001);
+  if (nonZero.length === 0) return '-∞';
+  const rms = Math.sqrt(nonZero.reduce((s, v) => s + v * v, 0) / nonZero.length);
+  // Convert to dB, apply K-weighting approximation offset (-0.7 dB typical)
+  const db = 20 * Math.log10(rms) - 0.7;
+  // LUFS is typically 14-23 dB below full scale for mastered audio
+  const lufs = Math.round(db * 10) / 10;
+  return lufs > -100 ? lufs.toFixed(1) : '-∞';
+}
+
 function drawWaveform(canvas, data, progress = 0) {
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
@@ -1356,8 +1371,8 @@ function trackCardHTML(track) {
           <div class="track-artist" style="cursor:pointer;" ${artistClick}>${esc(artistName)}</div>
           <div class="track-meta">
             <span>${track.genre || ''}</span>
-            ${track.bpm ? `<span>${track.bpm} BPM</span>` : ''}
             ${track.key ? `<span>${esc(track.key)}</span>` : ''}
+            <span style="color:var(--text-muted);">${estimateLUFS(track)} LUFS</span>
           </div>
         </div>
       </div>
@@ -1744,7 +1759,7 @@ async function renderHome(el) {
         <div style="padding:1rem 1rem 0.5rem;">
           <h4>${esc(p.title)}</h4>
           <div style="display:flex; gap:0.8rem; color:var(--text-muted); font-size:0.82rem; margin-top:0.2rem;">
-            ${p.bpm ? '<span>' + p.bpm + ' BPM</span>' : ''}
+            
             <span>${Math.round(p.duration_seconds || 0)}s</span>
             <span>${(p.plays || 0)} plays</span>
           </div>
@@ -1858,7 +1873,7 @@ async function renderProjects(el) {
                 <div class="track-cover"><span class="track-cover-art">${icon}</span></div>
                 <div class="track-info">
                   <div class="track-title" style="cursor:pointer;" onclick="navigate('cloud/${p.id}')">${esc(p.title)}</div>
-                  <div class="track-artist">${p.bpm ? p.bpm + ' BPM' : 'Project'}</div>
+                  <div class="track-artist">Project</div>
                   <div class="track-meta">
                     <span>${p.genre || ''}</span>
                     <span>${(p.plays || 0)} plays</span>
@@ -2159,7 +2174,6 @@ async function renderCloudProjects(el) {
               <h4 style="margin-bottom:0.2rem;">${esc(p.title)}</h4>
               <div style="display:flex; gap:0.8rem; color:var(--text-muted); font-size:0.85rem;">
                 <span>${p.genre || 'No genre'}</span>
-                ${p.bpm ? `<span>${p.bpm} BPM</span>` : ''}
                 <span>${p.plays || 0} plays</span>
                 <span>${Math.round(p.duration_seconds || 0)}s</span>
               </div>
@@ -2239,7 +2253,7 @@ async function renderCloudProject(el, projectId) {
       <p style="color:var(--text-secondary); margin-bottom:1rem;">
         by <strong>${esc(username)}</strong>
         ${project.genre ? ` &middot; ${esc(project.genre)}` : ''}
-        ${project.bpm ? ` &middot; ${project.bpm} BPM` : ''}
+        
         &middot; ${project.plays || 0} plays
       </p>
 
@@ -2850,7 +2864,7 @@ async function renderTrackDetail(el, trackId) {
         <div style="color:var(--text-secondary);font-size:0.95rem;cursor:pointer;" onclick="navigate('user/${user.id}')">${esc(user.username)}</div>
         <div class="track-meta" style="margin-top:0.5rem;">
           <span>${track.genre || ''}</span>
-          ${track.bpm ? `<span>${track.bpm} BPM</span>` : ''}
+          
           ${track.key ? `<span>${esc(track.key)}</span>` : ''}
           <span>${formatTime(duration)}</span>
           <span>&#9654; ${track.plays || 0}</span>
