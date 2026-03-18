@@ -1171,7 +1171,14 @@ function simulatePlayback(track) {
 
   simInterval = setInterval(() => {
     if (!state.isPlaying) return;
-    simTime += 0.25;
+
+    // Sync with real audio element if playing
+    if (audioEl.src && !audioEl.paused && audioEl.duration && !isNaN(audioEl.duration)) {
+      simTime = audioEl.currentTime;
+    } else {
+      simTime += 0.25;
+    }
+
     if (simTime >= dur) {
       simTime = 0;
       state.isPlaying = false;
@@ -1179,18 +1186,21 @@ function simulatePlayback(track) {
       clearInterval(simInterval);
       simInterval = null;
       updatePlayButtons();
+      // Reset waveform to unplayed
+      const activeCanvas = document.querySelector(`.waveform-canvas[data-track-id="${track.id}"]`);
+      if (activeCanvas) drawWaveform(activeCanvas, getWaveformData(track.id), 0);
       return;
     }
     const pct = simTime / dur;
     document.getElementById('bpProgressBar').style.width = (pct * 100) + '%';
     document.getElementById('bpTimeCur').textContent = formatTime(simTime);
 
-    // Update waveform progress on visible cards
+    // Update waveform progress on visible cards — SoundCloud-style
     const activeCanvas = document.querySelector(`.waveform-canvas[data-track-id="${track.id}"]`);
     if (activeCanvas) {
       drawWaveform(activeCanvas, getWaveformData(track.id), pct);
     }
-  }, 250);
+  }, 100); // 100ms for smoother waveform progress animation
 }
 
 function playerToggle() {
