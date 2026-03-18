@@ -1043,32 +1043,29 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             }
 
             // Drag-to-reorder: update position, draw indicator, handle drop
-            if let Some((src, ref mut mouse_y, start_y, ref mut activated)) = app.dragging_track_reorder {
+            // Extract drag state to avoid borrow conflicts
+            let drag_info = app.dragging_track_reorder.as_ref().map(|&(s, y, sy, a)| (s, y, sy, a));
+            if let Some((src_idx, mouse_y, start_y, was_activated)) = drag_info {
                 let delta = ui.input(|i| i.pointer.delta());
-                *mouse_y += delta.y;
-                let current_y = *mouse_y;
-                let src_idx = src;
+                let current_y = mouse_y + delta.y;
 
-                // Require minimum 5px drag before activating (prevents accidental clicks)
-                if !*activated && (current_y - start_y).abs() > 5.0 {
-                    *activated = true;
-                }
-
-                if *activated {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                    let panel_rect = ui.max_rect();
-                    ui.painter().line_segment(
-                        [egui::pos2(panel_rect.left(), current_y), egui::pos2(panel_rect.right(), current_y)],
-                        egui::Stroke::new(2.5, egui::Color32::from_rgb(240, 192, 64)),
-                    );
-                }
+                // Update the drag state
+                let activated = was_activated || (current_y - start_y).abs() > 5.0;
+                app.dragging_track_reorder = Some((src_idx, current_y, start_y, activated));
 
                 let panel_rect = ui.max_rect();
 
+                if activated {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    ui.painter().line_segment(
+                        [egui::pos2(panel_rect.left(), current_y), egui::pos2(panel_rect.right(), current_y)],
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(240, 192, 64)),
+                    );
+                }
+
                 // Drop when mouse released
-                let was_activated = *activated;
                 if !ui.input(|i| i.pointer.primary_down()) {
-                    if !was_activated {
+                    if !activated {
                         app.dragging_track_reorder = None;
                     }
                     let offsets = track_y_offsets(app);
@@ -1094,33 +1091,46 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
 
                     app.dragging_track_reorder = None;
 
-                    if was_activated && target < app.project.tracks.len() && src_idx < app.project.tracks.len() {
-                        // Check if dropped ON a folder — assign as child and move below it
-                        if app.project.tracks[target].kind == TrackKind::Folder && target != src_idx {
+                    if activated && target < app.project.tracks.len() && src_idx < app.project.tracks.len() && target != src_idx {
+                        let target_is_folder = app.project.tracks[target].kind == TrackKind::Folder;
+                        let src_was_in_folder = app.project.tracks[src_idx].group_id.is_some();
+                        let src_name = app.project.tracks[src_idx].name.clone();
+
+                        if target_is_folder {
+                            // DROP ON FOLDER → move into folder
                             let folder_id = app.project.tracks[target].id;
                             let folder_name = app.project.tracks[target].name.clone();
                             app.push_undo("Move to folder");
-                            // Remove track from current position
                             let mut track = app.project.tracks.remove(src_idx);
                             track.group_id = Some(folder_id);
-                            // Find insertion point: right after the folder and its existing children
-                            let folder_idx = app.project.tracks.iter().position(|t| t.id == folder_id).unwrap_or(0);
-                            let mut insert_at = folder_idx + 1;
+                            // Insert after folder + its existing children
+                            let folder_pos = app.project.tracks.iter().position(|t| t.id == folder_id).unwrap_or(0);
+                            let mut insert_at = folder_pos + 1;
                             while insert_at < app.project.tracks.len() && app.project.tracks[insert_at].group_id == Some(folder_id) {
                                 insert_at += 1;
                             }
                             app.project.tracks.insert(insert_at, track);
                             app.selected_track = Some(insert_at);
                             app.sync_project();
-                            app.set_status(&format!("Track moved into {folder_name}"));
-                        } else if target != src_idx {
-                            // Normal reorder
-                            app.push_undo("Reorder tracks");
-                            let track = app.project.tracks.remove(src_idx);
-                            app.project.tracks.insert(target, track);
-                            app.selected_track = Some(target);
+                            app.set_status(&format!("{src_name} → {folder_name}"));
+                        } else {
+                            // DROP ON NON-FOLDER → remove from folder (if was in one) and reorder
+                            app.push_undo("Move track");
+                            let mut track = app.project.tracks.remove(src_idx);
+                            // Remove from folder
+                            if src_was_in_folder {
+                                track.group_id = None;
+                            }
+                            let adjusted_target = if src_idx < target { target - 1 } else { target };
+                            let insert_at = adjusted_target.min(app.project.tracks.len());
+                            app.project.tracks.insert(insert_at, track);
+                            app.selected_track = Some(insert_at);
                             app.sync_project();
-                            app.set_status(&format!("Track moved to position {}", target + 1));
+                            if src_was_in_folder {
+                                app.set_status(&format!("{src_name} removed from folder"));
+                            } else {
+                                app.set_status(&format!("{src_name} moved to position {}", insert_at + 1));
+                            }
                         }
                     }
                 }
