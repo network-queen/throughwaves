@@ -396,9 +396,90 @@ async fn download_cloud_project(
     })))
 }
 
+/// Delete a cloud project (owner only)
+async fn delete_cloud_project(
+    State(pool): State<PgPool>,
+    auth: AuthUser,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let project = sqlx::query_as::<_, CloudProject>(
+        "SELECT * FROM cloud_projects WHERE id = $1"
+    )
+    .bind(project_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("DB: {e}") })))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() })))?;
+
+    if project.user_id != auth.0 {
+        return Err((StatusCode::FORBIDDEN, Json(ErrorResponse { error: "Owner only".into() })));
+    }
+
+    // Delete cascades to stems and versions via FK
+    let _ = sqlx::query("DELETE FROM cloud_projects WHERE id = $1")
+        .bind(project_id).execute(&pool).await;
+
+    println!("[CLOUD] Deleted project: {}", project.title);
+    Ok(Json(serde_json::json!({ "status": "deleted" })))
+}
+
+/// Update cloud project details (owner only)
+async fn update_cloud_project(
+    State(pool): State<PgPool>,
+    auth: AuthUser,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let project = sqlx::query_as::<_, CloudProject>(
+        "SELECT * FROM cloud_projects WHERE id = $1"
+    )
+    .bind(project_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("DB: {e}") })))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() })))?;
+
+    if project.user_id != auth.0 {
+        return Err((StatusCode::FORBIDDEN, Json(ErrorResponse { error: "Owner only".into() })));
+    }
+
+    let title = body.get("title").and_then(|v| v.as_str()).unwrap_or(&project.title);
+    let description = body.get("description").and_then(|v| v.as_str())
+        .unwrap_or(project.description.as_deref().unwrap_or(""));
+    let genre = body.get("genre").and_then(|v| v.as_str())
+        .unwrap_or(project.genre.as_deref().unwrap_or(""));
+    let bpm = body.get("bpm").and_then(|v| v.as_i64()).map(|v| v as i32)
+        .or(project.bpm);
+    let is_public = body.get("is_public").and_then(|v| v.as_bool())
+        .unwrap_or(project.is_public.unwrap_or(true));
+
+    let _ = sqlx::query(
+        "UPDATE cloud_projects SET title = $1, description = $2, genre = $3, bpm = $4, is_public = $5 WHERE id = $6"
+    )
+    .bind(title)
+    .bind(description)
+    .bind(genre)
+    .bind(bpm)
+    .bind(is_public)
+    .bind(project_id)
+    .execute(&pool)
+    .await;
+
+    println!("[CLOUD] Updated project: {title}");
+    Ok(Json(serde_json::json!({
+        "id": project_id,
+        "title": title,
+        "description": description,
+        "genre": genre,
+        "bpm": bpm,
+        "is_public": is_public,
+    })))
+}
+
 pub fn router() -> Router<PgPool> {
+    use axum::routing::{delete, put};
     Router::new()
         .route("/cloud", post(upload_cloud_project).get(list_cloud_projects))
-        .route("/cloud/{id}", get(get_cloud_project))
+        .route("/cloud/{id}", get(get_cloud_project).delete(delete_cloud_project).put(update_cloud_project))
         .route("/cloud/{id}/download", post(download_cloud_project))
 }

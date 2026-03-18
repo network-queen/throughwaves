@@ -1761,6 +1761,46 @@ async function renderProjects(el) {
   });
 }
 
+async function updateCloudProject(projectId) {
+  if (!state.token || state.token === 'demo_token') { openAuthModal(); return; }
+  const title = document.getElementById('cpEditTitle')?.value || '';
+  const genre = document.getElementById('cpEditGenre')?.value || '';
+  const bpm = parseInt(document.getElementById('cpEditBpm')?.value) || null;
+  const desc = document.getElementById('cpEditDesc')?.value || '';
+  try {
+    const resp = await fetch('/api/cloud/' + projectId, {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + state.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, genre, bpm, description: desc }),
+    });
+    if (resp.ok) {
+      alert('Project updated!');
+      renderPage();
+    } else {
+      const err = await resp.json().catch(() => ({}));
+      alert('Update failed: ' + (err.error || resp.status));
+    }
+  } catch(e) { alert('Update failed: ' + e.message); }
+}
+
+async function deleteCloudProject(projectId, title) {
+  if (!state.token || state.token === 'demo_token') { openAuthModal(); return; }
+  if (!confirm('Delete "' + title + '" and all its versions? This cannot be undone.')) return;
+  try {
+    const resp = await fetch('/api/cloud/' + projectId, {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + state.token },
+    });
+    if (resp.ok) {
+      alert('Project deleted.');
+      navigate('projects');
+    } else {
+      const err = await resp.json().catch(() => ({}));
+      alert('Delete failed: ' + (err.error || resp.status));
+    }
+  } catch(e) { alert('Delete failed: ' + e.message); }
+}
+
 async function publishCloudProject(projectId, title, mixdownUrl) {
   if (!state.token || state.token === 'demo_token') {
     openAuthModal();
@@ -2038,13 +2078,40 @@ async function renderCloudProject(el, projectId) {
           }).join('')}
         </div>
 
+        <!-- Edit Project Details -->
+        <div class="card" style="padding:1rem; margin-bottom:1rem;">
+          <h4 style="margin-bottom:0.8rem;">Project Settings</h4>
+          <div style="display:grid; gap:0.5rem;">
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <label style="min-width:80px; color:var(--text-muted); font-size:0.9rem;">Title</label>
+              <input type="text" id="cpEditTitle" value="${esc(project.title)}" style="flex:1;">
+            </div>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <label style="min-width:80px; color:var(--text-muted); font-size:0.9rem;">Genre</label>
+              <input type="text" id="cpEditGenre" value="${esc(project.genre || '')}" style="flex:1;">
+            </div>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <label style="min-width:80px; color:var(--text-muted); font-size:0.9rem;">BPM</label>
+              <input type="number" id="cpEditBpm" value="${project.bpm || ''}" style="width:80px;">
+            </div>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <label style="min-width:80px; color:var(--text-muted); font-size:0.9rem;">Description</label>
+              <input type="text" id="cpEditDesc" value="${esc(project.description || '')}" style="flex:1;">
+            </div>
+          </div>
+          <div style="display:flex; gap:0.5rem; margin-top:0.8rem;">
+            <button class="btn btn-primary btn-sm" onclick="updateCloudProject('${project.id}')">Save Changes</button>
+            <button class="btn btn-sm" style="background:var(--red); color:white;" onclick="deleteCloudProject('${project.id}', '${esc(project.title).replace(/'/g, "\\'")}')">Delete Project</button>
+          </div>
+        </div>
+
         <!-- Publish as Track -->
         <div class="card" style="padding:1rem; margin-bottom:1rem;">
           <h4 style="margin-bottom:0.5rem;">Publish as Track</h4>
           <p style="color:var(--text-secondary); font-size:0.9rem; margin-bottom:0.8rem;">
             Make your mixdown visible to everyone as a public track in Explore.
           </p>
-          <button class="btn btn-primary" onclick="publishCloudProject('${project.id}', '${esc(project.title).replace(/'/g, "\\'")}', '${project.mixdown_url}')">
+          <button class="btn btn-primary" onclick="publishCloudProject('${project.id}', document.getElementById('cpEditTitle').value, '${project.mixdown_url}')">
             Publish Mixdown as Track
           </button>
         </div>

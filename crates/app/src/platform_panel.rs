@@ -483,80 +483,6 @@ fn show_logged_in(app: &mut DawApp, ui: &mut egui::Ui) {
 
     ui.separator();
 
-    // ── Upload Current Mixdown ──
-    egui::CollapsingHeader::new("Upload Current Mixdown")
-        .default_open(true)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Title:");
-                ui.text_edit_singleline(&mut app.platform.upload_title);
-            });
-            ui.horizontal(|ui| {
-                ui.label("Genre:");
-                ui.text_edit_singleline(&mut app.platform.upload_genre);
-            });
-            ui.label("Description:");
-            ui.text_edit_multiline(&mut app.platform.upload_description);
-
-            if let Some(ref status) = app.platform.upload_status {
-                ui.label(status.as_str());
-            }
-
-            let can_upload = !app.platform.uploading;
-            if ui
-                .add_enabled(can_upload, egui::Button::new("Upload Mixdown"))
-                .clicked()
-            {
-                do_upload_mixdown(app, None);
-            }
-        });
-
-    ui.separator();
-
-    // ── Upload to Project ──
-    egui::CollapsingHeader::new("Upload to Project")
-        .default_open(false)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Project ID:");
-                ui.text_edit_singleline(&mut app.platform.upload_project_id);
-            });
-            ui.horizontal(|ui| {
-                ui.label("Title:");
-                // Reuse the same title/description fields
-                ui.text_edit_singleline(&mut app.platform.upload_title);
-            });
-
-            let can_upload = !app.platform.uploading && !app.platform.upload_project_id.is_empty();
-            if ui
-                .add_enabled(can_upload, egui::Button::new("Upload to Project"))
-                .clicked()
-            {
-                let pid = app.platform.upload_project_id.clone();
-                do_upload_mixdown(app, Some(&pid));
-            }
-        });
-
-    ui.separator();
-
-    // ── Checkout Project ──
-    egui::CollapsingHeader::new("Open Project from Platform")
-        .default_open(false)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Project ID:");
-                ui.text_edit_singleline(&mut app.platform.checkout_project_id);
-            });
-
-            if let Some(ref status) = app.platform.checkout_status {
-                ui.label(status.as_str());
-            }
-
-            if ui.button("Checkout Project").clicked() {
-                do_checkout_project(app);
-            }
-        });
-
     ui.separator();
 
     // ── Import Track into DAW ──
@@ -884,6 +810,17 @@ fn do_download_cloud_project(app: &mut DawApp) {
     };
 
     app.platform.cloud_download_status = Some("Downloading project...".into());
+
+    // First fetch project details (title, BPM, genre)
+    let info_path = format!("/api/cloud/{}", project_id);
+    if let Ok(info_resp) = platform_request("GET", &app.platform.server_url, &info_path, Some(&jwt), None) {
+        // Extract BPM if available
+        if let Some(bpm_str) = extract_json_string(&info_resp, "bpm") {
+            if let Ok(bpm) = bpm_str.parse::<f64>() {
+                if bpm > 0.0 { app.project.tempo.bpm = bpm; }
+            }
+        }
+    }
 
     let path = format!("/api/cloud/{}/download", project_id);
     match platform_request("POST", &app.platform.server_url, &path, Some(&jwt), None) {
