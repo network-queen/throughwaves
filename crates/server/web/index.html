@@ -1149,13 +1149,13 @@ function playTrack(track) {
   document.getElementById('bpPlayBtn').innerHTML = '&#9646;&#9646;';
   document.getElementById('bpTimeDur').textContent = formatTime(track.duration);
 
-  // For demo: no actual audio src, simulate playback
+  // Start playback — real audio or simulated
   if (track.audioUrl) {
     audioEl.src = track.audioUrl;
     audioEl.play().catch(() => {});
-  } else {
-    simulatePlayback(track);
   }
+  // Always start the progress/waveform update interval
+  simulatePlayback(track);
 
   // Update play buttons in the page
   updatePlayButtons();
@@ -1172,35 +1172,38 @@ function simulatePlayback(track) {
   simInterval = setInterval(() => {
     if (!state.isPlaying) return;
 
-    // Sync with real audio element if playing
-    if (audioEl.src && !audioEl.paused && audioEl.duration && !isNaN(audioEl.duration)) {
+    // Use real audio time when available, otherwise simulate
+    const hasRealAudio = audioEl.src && !audioEl.paused && audioEl.duration > 0 && !isNaN(audioEl.duration);
+    const realDur = hasRealAudio ? audioEl.duration : dur;
+
+    if (hasRealAudio) {
       simTime = audioEl.currentTime;
     } else {
-      simTime += 0.25;
+      simTime += 0.1;
     }
 
-    if (simTime >= dur) {
+    if (simTime >= realDur) {
       simTime = 0;
       state.isPlaying = false;
       document.getElementById('bpPlayBtn').innerHTML = '&#9654;';
       clearInterval(simInterval);
       simInterval = null;
       updatePlayButtons();
-      // Reset waveform to unplayed
-      const activeCanvas = document.querySelector(`.waveform-canvas[data-track-id="${track.id}"]`);
-      if (activeCanvas) drawWaveform(activeCanvas, getWaveformData(track.id), 0);
+      // Reset all waveform canvases for this track
+      document.querySelectorAll(`.waveform-canvas[data-track-id="${track.id}"]`).forEach(c => {
+        drawWaveform(c, getWaveformData(track.id), 0);
+      });
       return;
     }
-    const pct = simTime / dur;
+    const pct = simTime / realDur;
     document.getElementById('bpProgressBar').style.width = (pct * 100) + '%';
     document.getElementById('bpTimeCur').textContent = formatTime(simTime);
 
-    // Update waveform progress on visible cards — SoundCloud-style
-    const activeCanvas = document.querySelector(`.waveform-canvas[data-track-id="${track.id}"]`);
-    if (activeCanvas) {
-      drawWaveform(activeCanvas, getWaveformData(track.id), pct);
-    }
-  }, 100); // 100ms for smoother waveform progress animation
+    // Update ALL waveform canvases for this track (could be multiple on page)
+    document.querySelectorAll(`.waveform-canvas[data-track-id="${track.id}"]`).forEach(canvas => {
+      drawWaveform(canvas, getWaveformData(track.id), pct);
+    });
+  }, 100);
 }
 
 function playerToggle() {
