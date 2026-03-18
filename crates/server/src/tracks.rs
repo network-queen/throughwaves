@@ -441,23 +441,40 @@ async fn play_track(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ── Delete own track ──
+// ── Delete track (owner or admin) ──
 
 async fn delete_track(
     State(pool): State<PgPool>,
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, TrackError> {
-    let result = sqlx::query("DELETE FROM tracks WHERE id = $1 AND user_id = $2")
+    // Check if track exists
+    let track = sqlx::query_as::<_, Track>("SELECT * FROM tracks WHERE id = $1")
         .bind(id)
-        .bind(auth.0)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?
+        .ok_or_else(|| track_err(StatusCode::NOT_FOUND, "Track not found"))?;
+
+    // Check ownership or admin
+    let is_admin: bool = sqlx::query_scalar::<_, Option<bool>>(
+        "SELECT is_admin FROM users WHERE id = $1"
+    )
+    .bind(auth.0)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if track.user_id != auth.0 && !is_admin {
+        return Err(track_err(StatusCode::FORBIDDEN, "You do not have permission to delete this track"));
+    }
+
+    sqlx::query("DELETE FROM tracks WHERE id = $1")
+        .bind(id)
         .execute(&pool)
         .await
         .map_err(|e| track_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error: {e}")))?;
-
-    if result.rows_affected() == 0 {
-        return Err(track_err(StatusCode::NOT_FOUND, "Track not found or not owned by you"));
-    }
 
     Ok(StatusCode::NO_CONTENT)
 }

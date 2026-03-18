@@ -1,3 +1,4 @@
+mod admin;
 mod auth;
 mod cloud;
 mod jam;
@@ -56,6 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(projects::router())
         .merge(social::router())
         .merge(cloud::router())
+        .merge(admin::router())
         .route_layer(middleware::from_fn(auth::jwt_auth));
 
     let app = Router::new()

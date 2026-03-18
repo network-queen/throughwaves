@@ -22,6 +22,7 @@ pub struct User {
     pub avatar_url: Option<String>,
     pub bio: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub is_admin: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -31,6 +32,7 @@ pub struct UserPublic {
     pub avatar_url: Option<String>,
     pub bio: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub is_admin: Option<bool>,
 }
 
 impl From<User> for UserPublic {
@@ -41,6 +43,7 @@ impl From<User> for UserPublic {
             avatar_url: u.avatar_url,
             bio: u.bio,
             created_at: u.created_at,
+            is_admin: u.is_admin,
         }
     }
 }

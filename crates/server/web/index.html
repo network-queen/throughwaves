@@ -707,6 +707,7 @@ select { cursor: pointer; }
 const state = {
   user: null,
   token: localStorage.getItem('jamhub_token'),
+  isAdmin: false,
   currentRoute: 'home',
   currentTrack: null,
   isPlaying: false,
@@ -961,6 +962,7 @@ async function handleAuth(e) {
     if (result && result.token) {
       state.token = result.token;
       state.user = result.user;
+      state.isAdmin = !!(result.user && result.user.is_admin);
       localStorage.setItem('jamhub_token', result.token);
     } else if (result === null) {
       // Server unreachable — demo mode: simulate login
@@ -986,6 +988,7 @@ async function handleAuth(e) {
 function logout() {
   state.user = null;
   state.token = null;
+  state.isAdmin = false;
   localStorage.removeItem('jamhub_token');
   updateAuthUI();
   navigate('home');
@@ -1001,6 +1004,21 @@ function updateAuthUI() {
   } else {
     authBtn.classList.remove('hidden');
     avatar.classList.add('hidden');
+  }
+  // Admin nav link
+  let adminLink = document.querySelector('#navLinks a[data-route="admin"]');
+  if (state.isAdmin) {
+    if (!adminLink) {
+      adminLink = document.createElement('a');
+      adminLink.href = '#/admin';
+      adminLink.dataset.route = 'admin';
+      adminLink.textContent = 'Admin';
+      adminLink.style.color = 'var(--red)';
+      adminLink.style.fontWeight = '600';
+      document.getElementById('navLinks').appendChild(adminLink);
+    }
+  } else {
+    if (adminLink) adminLink.remove();
   }
 }
 
@@ -1363,6 +1381,7 @@ function renderPage() {
   else if (route === 'download') renderDownload(main);
   else if (route === 'profile') renderProfile(main);
   else if (route === 'feed') renderFeed(main);
+  else if (route === 'admin') renderAdmin(main);
   else renderHome(main);
 
   // Draw waveforms after DOM update
@@ -2680,6 +2699,10 @@ async function renderTrackDetail(el, trackId) {
           <button class="btn btn-secondary btn-sm" onclick="openStemSeparation('${track.id}', '${esc(track.audio_url)}')">
             &#9986; Separate Stems
           </button>
+          ${(state.user && (state.user.id === track.user_id || state.isAdmin)) ? `
+          <button class="btn btn-danger btn-sm" onclick="deleteTrackFromDetail('${track.id}', '${esc(track.title).replace(/'/g, "\\'")}')">
+            &#128465; Delete
+          </button>` : ''}
         </div>
       </div>
     </div>
@@ -2950,7 +2973,7 @@ function init() {
   if (state.token && state.token !== 'demo_token') {
     // Try to validate token with API
     fetchAPI('/api/auth/me').then(user => {
-      if (user) { state.user = user; updateAuthUI(); renderPage(); }
+      if (user) { state.user = user; state.isAdmin = !!(user.is_admin); updateAuthUI(); renderPage(); }
     }).catch(() => {});
   } else if (state.token === 'demo_token') {
     state.user = { username: 'DemoUser', email: 'demo@jamhub.io', bio: 'Music creator on ThroughWaves' };
@@ -3090,6 +3113,255 @@ if (localStorage.getItem('tw-theme') === 'light') {
     if (btn) btn.textContent = '\u2600\uFE0F';
   });
 }
+
+// ── Delete Track from Detail Page ──
+function deleteTrackFromDetail(trackId, title) {
+  if (!state.token || state.token === 'demo_token') { openAuthModal(); return; }
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+  overlay.innerHTML = `
+    <div style="
+      background:var(--bg-panel); border:1px solid var(--border); border-radius:var(--radius-lg);
+      padding:2rem; max-width:420px; width:90%; box-shadow:var(--shadow-lg);
+      text-align:center;
+    ">
+      <div style="font-size:2.5rem; margin-bottom:0.8rem;">&#9888;</div>
+      <h3 style="margin-bottom:0.5rem; color:var(--text-primary);">Delete Track?</h3>
+      <p style="color:var(--text-secondary); margin-bottom:0.3rem; font-size:0.95rem;">
+        <strong>"${title}"</strong>
+      </p>
+      <p style="color:var(--text-muted); margin-bottom:1.5rem; font-size:0.85rem;">
+        The track and all its comments will be permanently deleted.<br>This cannot be undone.
+      </p>
+      <div style="display:flex; gap:0.8rem; justify-content:center;">
+        <button onclick="this.closest('div[style*=fixed]').remove()"
+          style="padding:0.6rem 1.5rem; border-radius:8px; background:var(--bg-elevated); color:var(--text-primary);
+                 border:1px solid var(--border); cursor:pointer; font-size:0.95rem;">
+          Cancel
+        </button>
+        <button id="confirmDeleteTrackBtn"
+          style="padding:0.6rem 1.5rem; border-radius:8px; background:var(--red); color:white;
+                 border:none; cursor:pointer; font-size:0.95rem; font-weight:600;">
+          Delete Forever
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById('confirmDeleteTrackBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('confirmDeleteTrackBtn');
+    btn.textContent = 'Deleting...';
+    btn.disabled = true;
+    try {
+      const resp = await fetch('/api/tracks/' + trackId, {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + state.token },
+      });
+      overlay.remove();
+      if (resp.ok) {
+        navigate('explore');
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        alert('Delete failed: ' + (err.error || resp.status));
+      }
+    } catch(e) {
+      overlay.remove();
+      alert('Delete failed: ' + e.message);
+    }
+  });
+}
+
+// ── Admin Panel ──
+async function renderAdmin(el) {
+  if (!state.isAdmin) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128274;</div><div class="empty-state-text">Admin access required</div></div>';
+    return;
+  }
+
+  el.innerHTML = '<div class="empty-state"><div class="empty-state-text">Loading admin panel...</div></div>';
+
+  const headers = { 'Authorization': 'Bearer ' + state.token };
+  let stats, users, tracks, cloud;
+  try {
+    [stats, users, tracks, cloud] = await Promise.all([
+      fetch('/api/admin/stats', { headers }).then(r => r.json()),
+      fetch('/api/admin/users', { headers }).then(r => r.json()),
+      fetch('/api/admin/tracks', { headers }).then(r => r.json()),
+      fetch('/api/admin/cloud', { headers }).then(r => r.json()),
+    ]);
+  } catch(e) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-state-text">Failed to load admin data: ${e.message}</div></div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <h1 class="page-title">Admin Panel</h1>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:1rem; margin-bottom:2rem;">
+      <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-lg); padding:1.5rem; text-align:center;">
+        <div style="font-size:2rem; font-weight:700; color:var(--accent);">${stats.user_count || 0}</div>
+        <div style="color:var(--text-secondary); font-size:0.9rem;">Users</div>
+      </div>
+      <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-lg); padding:1.5rem; text-align:center;">
+        <div style="font-size:2rem; font-weight:700; color:var(--accent);">${stats.track_count || 0}</div>
+        <div style="color:var(--text-secondary); font-size:0.9rem;">Tracks</div>
+      </div>
+      <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-lg); padding:1.5rem; text-align:center;">
+        <div style="font-size:2rem; font-weight:700; color:var(--accent);">${stats.cloud_project_count || 0}</div>
+        <div style="color:var(--text-secondary); font-size:0.9rem;">Cloud Projects</div>
+      </div>
+    </div>
+
+    <h2 style="font-size:1.2rem; font-weight:600; margin-bottom:0.75rem;">Users (${(users || []).length})</h2>
+    <div style="overflow-x:auto; margin-bottom:2rem;">
+      <table style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+        <thead>
+          <tr style="border-bottom:2px solid var(--border);">
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Username</th>
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Email</th>
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Admin</th>
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Joined</th>
+            <th style="text-align:right; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(users || []).map(u => `
+            <tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:0.6rem 0.8rem;"><a href="#/user/${u.id}" style="color:var(--accent);">${esc(u.username)}</a></td>
+              <td style="padding:0.6rem 0.8rem; color:var(--text-secondary);">${esc(u.email)}</td>
+              <td style="padding:0.6rem 0.8rem;">${u.is_admin ? '<span style="color:var(--accent);font-weight:600;">Yes</span>' : 'No'}</td>
+              <td style="padding:0.6rem 0.8rem; color:var(--text-muted);">${new Date(u.created_at).toLocaleDateString()}</td>
+              <td style="padding:0.6rem 0.8rem; text-align:right;">
+                ${u.id !== state.user.id ? `<button class="btn btn-danger btn-sm" onclick="adminDeleteUser('${u.id}', '${esc(u.username).replace(/'/g, "\\'")}')">Delete</button>` : '<span style="color:var(--text-muted); font-size:0.8rem;">You</span>'}
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <h2 style="font-size:1.2rem; font-weight:600; margin-bottom:0.75rem;">Tracks (${(tracks || []).length})</h2>
+    <div style="overflow-x:auto; margin-bottom:2rem;">
+      <table style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+        <thead>
+          <tr style="border-bottom:2px solid var(--border);">
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Title</th>
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Genre</th>
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Plays</th>
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Likes</th>
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Created</th>
+            <th style="text-align:right; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(tracks || []).map(t => `
+            <tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:0.6rem 0.8rem;"><a href="#/track/${t.id}" style="color:var(--accent);">${esc(t.title)}</a></td>
+              <td style="padding:0.6rem 0.8rem; color:var(--text-secondary);">${esc(t.genre) || '-'}</td>
+              <td style="padding:0.6rem 0.8rem;">${t.plays || 0}</td>
+              <td style="padding:0.6rem 0.8rem;">${t.likes || 0}</td>
+              <td style="padding:0.6rem 0.8rem; color:var(--text-muted);">${new Date(t.created_at).toLocaleDateString()}</td>
+              <td style="padding:0.6rem 0.8rem; text-align:right;">
+                <button class="btn btn-danger btn-sm" onclick="adminDeleteTrack('${t.id}', '${esc(t.title).replace(/'/g, "\\'")}')">Delete</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <h2 style="font-size:1.2rem; font-weight:600; margin-bottom:0.75rem;">Cloud Projects (${(cloud || []).length})</h2>
+    <div style="overflow-x:auto; margin-bottom:2rem;">
+      <table style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+        <thead>
+          <tr style="border-bottom:2px solid var(--border);">
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Title</th>
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Genre</th>
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Public</th>
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Plays</th>
+            <th style="text-align:left; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Created</th>
+            <th style="text-align:right; padding:0.6rem 0.8rem; color:var(--text-secondary); font-weight:500;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(cloud || []).map(c => `
+            <tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:0.6rem 0.8rem;"><a href="#/cloud/${c.id}" style="color:var(--accent);">${esc(c.title)}</a></td>
+              <td style="padding:0.6rem 0.8rem; color:var(--text-secondary);">${esc(c.genre) || '-'}</td>
+              <td style="padding:0.6rem 0.8rem;">${c.is_public ? 'Yes' : 'No'}</td>
+              <td style="padding:0.6rem 0.8rem;">${c.plays || 0}</td>
+              <td style="padding:0.6rem 0.8rem; color:var(--text-muted);">${new Date(c.created_at).toLocaleDateString()}</td>
+              <td style="padding:0.6rem 0.8rem; text-align:right;">
+                <button class="btn btn-danger btn-sm" onclick="adminDeleteCloud('${c.id}', '${esc(c.title).replace(/'/g, "\\'")}')">Delete</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function adminDeleteConfirm(entityType, entityId, entityName, apiPath) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+  overlay.innerHTML = `
+    <div style="
+      background:var(--bg-panel); border:1px solid var(--border); border-radius:var(--radius-lg);
+      padding:2rem; max-width:420px; width:90%; box-shadow:var(--shadow-lg);
+      text-align:center;
+    ">
+      <div style="font-size:2.5rem; margin-bottom:0.8rem;">&#9888;</div>
+      <h3 style="margin-bottom:0.5rem; color:var(--text-primary);">Delete ${entityType}?</h3>
+      <p style="color:var(--text-secondary); margin-bottom:0.3rem; font-size:0.95rem;">
+        <strong>"${entityName}"</strong>
+      </p>
+      <p style="color:var(--text-muted); margin-bottom:1.5rem; font-size:0.85rem;">
+        This will be permanently deleted.<br>This cannot be undone.
+      </p>
+      <div style="display:flex; gap:0.8rem; justify-content:center;">
+        <button onclick="this.closest('div[style*=fixed]').remove()"
+          style="padding:0.6rem 1.5rem; border-radius:8px; background:var(--bg-elevated); color:var(--text-primary);
+                 border:1px solid var(--border); cursor:pointer; font-size:0.95rem;">
+          Cancel
+        </button>
+        <button id="confirmAdminDeleteBtn"
+          style="padding:0.6rem 1.5rem; border-radius:8px; background:var(--red); color:white;
+                 border:none; cursor:pointer; font-size:0.95rem; font-weight:600;">
+          Delete Forever
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById('confirmAdminDeleteBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('confirmAdminDeleteBtn');
+    btn.textContent = 'Deleting...';
+    btn.disabled = true;
+    try {
+      const resp = await fetch(apiPath + entityId, {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + state.token },
+      });
+      overlay.remove();
+      if (resp.ok) {
+        renderAdmin(document.getElementById('mainContent'));
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        alert('Delete failed: ' + (err.error || resp.status));
+      }
+    } catch(e) {
+      overlay.remove();
+      alert('Delete failed: ' + e.message);
+    }
+  });
+}
+
+function adminDeleteUser(id, name) { adminDeleteConfirm('User', id, name, '/api/admin/users/'); }
+function adminDeleteTrack(id, name) { adminDeleteConfirm('Track', id, name, '/api/admin/tracks/'); }
+function adminDeleteCloud(id, name) { adminDeleteConfirm('Cloud Project', id, name, '/api/admin/cloud/'); }
 
 init();
 </script>

@@ -176,3 +176,7 @@ CREATE TABLE IF NOT EXISTS cloud_project_versions (
 );
 
 CREATE INDEX idx_cloud_versions_project ON cloud_project_versions(cloud_project_id);
+
+-- Admin role
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;
+UPDATE users SET is_admin = true WHERE email = 'klymenko.ruslan.dev@gmail.com';
