@@ -544,6 +544,32 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                             egui::Color32::from_rgb(24, 25, 32)
                         };
                         ui.painter().rect_filled(header_rect, 0.0, bg);
+
+                        // Folder child indent — visual hierarchy line
+                        let is_folder_child = track.group_id.map_or(false, |gid| {
+                            app.project.tracks.iter().any(|t| t.id == gid && t.kind == TrackKind::Folder)
+                        });
+                        if is_folder_child {
+                            // Left indent background tint
+                            let indent_rect = egui::Rect::from_min_size(
+                                header_rect.min,
+                                egui::vec2(GROUP_INDENT, header_rect.height()),
+                            );
+                            ui.painter().rect_filled(indent_rect, 0.0, egui::Color32::from_rgba_premultiplied(220, 180, 100, 10));
+                            // Vertical line
+                            ui.painter().line_segment(
+                                [egui::pos2(header_rect.min.x + 3.0, header_rect.min.y),
+                                 egui::pos2(header_rect.min.x + 3.0, header_rect.max.y)],
+                                egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 100, 60)),
+                            );
+                            // Horizontal connector to the track
+                            ui.painter().line_segment(
+                                [egui::pos2(header_rect.min.x + 3.0, header_rect.center().y),
+                                 egui::pos2(header_rect.min.x + GROUP_INDENT - 2.0, header_rect.center().y)],
+                                egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 100, 60)),
+                            );
+                        }
+
                         // Hover highlight: subtle top edge glow
                         if bg_response_hovered && !is_selected {
                             ui.painter().line_segment(
@@ -1260,7 +1286,7 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                let add_btn_size = egui::vec2(70.0, 24.0);
+                let add_btn_size = egui::vec2(32.0, 24.0);
                 if ui.add_sized(add_btn_size, egui::Button::new(
                     egui::RichText::new("\u{1F3A4}").size(11.0).color(egui::Color32::from_rgb(80, 200, 190))
                 ).fill(egui::Color32::from_rgb(28, 42, 40)).corner_radius(12.0))
