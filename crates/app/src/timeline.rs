@@ -296,6 +296,8 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.x = 0.0;
 
             let mut track_actions: Vec<TrackAction> = Vec::new();
+            // Collect folder vertical line spans: (x, top_y, bottom_y)
+            let mut folder_lines: Vec<(f32, f32, f32)> = Vec::new();
 
             // Pre-collect track levels to avoid borrow conflict with app inside the loop
             let track_levels: Vec<(f32, f32)> = app.project.tracks.iter().map(|t| {
@@ -575,25 +577,41 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         };
                         ui.painter().rect_filled(header_rect, 0.0, bg);
 
-                        // Folder child indent — clean file-system tree lines
+                        // Folder child: draw horizontal tick mark from the vertical line
                         let is_folder_child = track.group_id.map_or(false, |gid| {
                             app.project.tracks.iter().any(|t| t.id == gid && t.kind == TrackKind::Folder)
                         });
                         if is_folder_child {
-                            let line_color = egui::Color32::from_rgb(55, 56, 68);
+                            let line_color = egui::Color32::from_rgb(50, 52, 62);
                             let line_x = header_rect.min.x + 6.0;
-                            // Thin vertical tree line
-                            ui.painter().line_segment(
-                                [egui::pos2(line_x, header_rect.min.y),
-                                 egui::pos2(line_x, header_rect.center().y)],
-                                egui::Stroke::new(1.0, line_color),
-                            );
-                            // Horizontal connector
+                            // Small horizontal tick from vertical line to content
                             ui.painter().line_segment(
                                 [egui::pos2(line_x, header_rect.center().y),
                                  egui::pos2(header_rect.min.x + GROUP_INDENT - 2.0, header_rect.center().y)],
                                 egui::Stroke::new(1.0, line_color),
                             );
+                        }
+                        // Track folder vertical line spans
+                        if track.kind == TrackKind::Folder {
+                            // Folder: start a new vertical line from the bottom of the folder header
+                            folder_lines.push((header_rect.min.x + 6.0, header_rect.max.y, header_rect.max.y));
+                        }
+                        if is_folder_child {
+                            // Extend the parent folder's vertical line to this child's center
+                            if let Some(gid) = track.group_id {
+                                // Find the matching folder line
+                                let folder_idx = app.project.tracks.iter().position(|t| t.id == gid);
+                                if let Some(fidx) = folder_idx {
+                                    // Find the folder_line entry for this folder
+                                    for fl in folder_lines.iter_mut().rev() {
+                                        // Match by x position (same column)
+                                        if (fl.0 - (header_rect.min.x + 6.0)).abs() < 1.0 {
+                                            fl.2 = header_rect.center().y; // extend bottom
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         // Hover highlight
@@ -1010,6 +1028,17 @@ pub fn show(app: &mut DawApp, ui: &mut egui::Ui) {
                         egui::Stroke::new(1.0, egui::Color32::from_rgb(42, 43, 50)),
                     );
                 });
+            }
+
+            // Draw folder vertical lines (spanning all children)
+            let line_color = egui::Color32::from_rgb(50, 52, 62);
+            for &(x, top, bot) in &folder_lines {
+                if bot > top + 1.0 {
+                    ui.painter().line_segment(
+                        [egui::pos2(x, top), egui::pos2(x, bot)],
+                        egui::Stroke::new(1.0, line_color),
+                    );
+                }
             }
 
             // Drag-to-reorder: update position, draw indicator, handle drop
