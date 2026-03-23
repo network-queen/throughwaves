@@ -152,6 +152,20 @@ throughwaves/
 
 ---
 
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding guidelines, and how to submit pull requests.
+
+For detailed architecture docs, see [CLAUDE.md](CLAUDE.md).
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a full list of features and changes.
+
+---
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE) for details.
